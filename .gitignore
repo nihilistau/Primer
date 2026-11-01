@@ -1,0 +1,15 @@
+# runtime state, generated media, model weights, secrets
+var/
+cache/
+models/
+*.sqlite
+*.sqlite-journal
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# node
+node_modules/
+ui/dist/
