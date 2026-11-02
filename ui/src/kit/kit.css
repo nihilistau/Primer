@@ -1,0 +1,177 @@
+/* adapted from shannon-prime-kairos/ui/src/kit/kit.css */
+/* kit.css — the `ui-` family. Reads only tokens.css roles. */
+
+/* CURSORS. Every one falls back to a system keyword: a browser that refuses the image
+   shows the right system cursor, never the wrong custom one. Hotspots in px at 32px. */
+:root {
+  --cur-arrow: url('./cursors/arrow.svg') 7 5, default;
+  --cur-hand: url('./cursors/hand.svg') 14 7, pointer;
+  --cur-grab: url('./cursors/grab.svg') 16 16, grab;
+  --cur-grabbing: url('./cursors/grabbing.svg') 16 16, grabbing;
+  --cur-text: url('./cursors/text.svg') 16 16, text;
+  --cur-move: url('./cursors/move.svg') 16 16, move;
+  --cur-ns: url('./cursors/ns.svg') 16 16, ns-resize;
+  --cur-ew: url('./cursors/ew.svg') 16 16, ew-resize;
+  --cur-nwse: url('./cursors/nwse.svg') 16 16, nwse-resize;
+  --cur-nesw: url('./cursors/nesw.svg') 16 16, nesw-resize;
+  --cur-no: url('./cursors/no.svg') 16 16, not-allowed;
+  --cur-busy: url('./cursors/busy.svg') 7 5, progress;
+}
+html, body { cursor: var(--cur-arrow); }
+button, a, [role="tab"], summary, label[for], select { cursor: var(--cur-hand); }
+input, textarea, [contenteditable="true"] { cursor: var(--cur-text); }
+button:disabled, [aria-disabled="true"] { cursor: var(--cur-no); }
+html.mood-thinking body { cursor: var(--cur-busy); }
+
+/* SELECTION AND SCROLLBARS — on every window, so they are part of the look. */
+::selection { background: hsl(var(--mood-h) 70% 50% / .32); color: var(--text-1); }
+* { scrollbar-width: thin; scrollbar-color: rgba(var(--accent-rgb), .28) transparent; }
+
+/* ICONS */
+.ui-ic { display: inline-block; flex: none; vertical-align: -3px; }
+.ui-ic-d { stroke: hsl(var(--mood-h) 80% 70%); transition: stroke 2.4s var(--ease-out); }
+.ui-ic-missing { border: 1px dashed var(--text-3); border-radius: 4px; }
+
+/* CHIP */
+.ui-chip { display: inline-flex; align-items: center; gap: 5px; height: 20px;
+  padding: 0 8px; border-radius: var(--r-pill); font: 400 var(--fs-11)/1 var(--font-ui);
+  white-space: nowrap; border: 1px solid var(--hair-strong);
+  background: rgba(var(--hair-rgb), .06); color: var(--text-2); }
+.ui-chip-btn { cursor: var(--cur-hand); }
+.ui-chip-btn:hover { border-color: rgba(var(--accent-rgb), .45); color: var(--text-1); }
+/* a clickable chip shows focus like a button does (stage-2 review, M5) */
+.ui-chip-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 4px hsl(var(--mood-h) 70% 60% / .6); }
+.ui-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+/* a state line's chip may wrap (final review, M6): the sentence runs on, the pill rounds off */
+.ui-chip-wrap { white-space: normal; height: auto; min-height: 20px; padding: 3px 8px;
+  line-height: 1.35; border-radius: var(--r-md); }
+.ui-tone-accent { color: var(--accent); border-color: rgba(var(--accent-rgb), .32);
+  background: rgba(var(--accent-rgb), .10); }
+.ui-tone-ok { color: var(--ok); border-color: rgba(var(--ok-rgb), .32); background: rgba(var(--ok-rgb), .08); }
+.ui-tone-warn { color: var(--warn); border-color: rgba(var(--warn-rgb), .35); background: rgba(var(--warn-rgb), .08); }
+/* the err tint is .06, not .08: at .08 its text measured 4.47:1 over --surface-3 (G-ROOM-TOKENS leg 1) */
+.ui-tone-err { color: var(--err); border-color: rgba(var(--err-rgb), .35); background: rgba(var(--err-rgb), .06); }
+.ui-tone-an { color: var(--an); border-color: rgba(var(--an-rgb), .38); background: rgba(var(--an-rgb), .10); }
+.ui-tone-mood { color: hsl(var(--mood-h) 80% 76%); border-color: hsl(var(--mood-h) 70% 60% / .30);
+  background: hsl(var(--mood-h) 60% 50% / .12); }
+.ui-tone-warm { color: var(--warm); border-color: rgba(var(--warm-rgb), .34); background: rgba(var(--warm-rgb), .08); }
+/* extra tones carried over from the source kit (private, recall, wear, solo), each measured
+   on its tint like the rest. */
+.ui-tone-private { color: var(--private); border-color: rgba(var(--private-rgb), .30); background: rgba(var(--private-rgb), .08); }
+.ui-tone-recall { color: var(--recall); border-color: rgba(var(--recall-rgb), .30); background: rgba(var(--recall-rgb), .08); }
+.ui-tone-wear { color: var(--wear); border-color: rgba(var(--wear-rgb), .34); background: rgba(var(--wear-rgb), .10); }
+.ui-tone-solo { color: var(--solo); border-color: rgba(var(--solo-rgb), .24); background: rgba(var(--solo-rgb), .08); }
+.ui-chip-busy .ui-chip-dot { animation: ui-pulse 1.6s ease-in-out infinite; }
+@keyframes ui-pulse { 50% { opacity: .35; transform: scale(.7); } }
+
+/* KV — key left, value right; the value takes the tone */
+.ui-kv { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 4px 0;
+  border-bottom: 1px solid var(--hair); font: 400 var(--fs-12)/1.45 var(--font-ui); }
+.ui-kv-k { flex: none; color: var(--text-3); }
+.ui-kv-v { min-width: 0; text-align: right; overflow-wrap: anywhere; color: var(--text-1); }
+.ui-kv-ok { color: var(--ok); }
+.ui-kv-off { color: var(--text-3); }
+.ui-kv-warn { color: var(--warn); }
+.ui-kv-err { color: var(--err); }
+
+/* native checkboxes take the accent — the one control the kit does not redraw */
+input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+/* BUTTON */
+.ui-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 30px; padding: 0 12px; border-radius: var(--r-sm); font: 500 var(--fs-12)/1 var(--font-ui);
+  border: 1px solid var(--hair-strong); background: rgba(var(--hair-rgb), .05); color: var(--text-1);
+  transition: background var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast); }
+.ui-btn:hover:not(:disabled) { background: rgba(var(--hair-rgb), .10); border-color: rgba(var(--accent-rgb), .35); }
+.ui-btn:active:not(:disabled) { transform: translateY(1px); }
+.ui-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 4px hsl(var(--mood-h) 70% 60% / .6); }
+.ui-btn:disabled { opacity: .45; }
+.ui-btn-sm { height: 24px; padding: 0 9px; font-size: var(--fs-11); }
+.ui-btn-icon { width: 30px; padding: 0; }
+.ui-btn-sm.ui-btn-icon { width: 24px; }
+.ui-btn-primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+.ui-btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: transparent; }
+.ui-btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.ui-btn-ghost:hover:not(:disabled) { color: var(--text-1); background: rgba(var(--hair-rgb), .07); border-color: transparent; }
+.ui-btn-danger { color: var(--err); border-color: rgba(var(--err-rgb), .35); background: transparent; }
+.ui-btn-danger:hover:not(:disabled) { background: rgba(var(--err-rgb), .12); border-color: rgba(var(--err-rgb), .6); }
+/* PRESSED — a toggle that is on (Decisions' "decided") reads as on: the secondary ground
+ * and border whatever its variant, full ink, and the mood underline the selected tab wears. */
+.ui-btn[aria-pressed="true"] { background: var(--hover-tint); border-color: var(--hair-strong); color: var(--text-1);
+  box-shadow: inset 0 -2px 0 hsl(var(--mood-h) 70% 65%); }
+/* the rule above ties .ui-btn:focus-visible on specificity and comes later, so its
+ * box-shadow ate the focus ring (WCAG 2.4.7): a focused pressed button wears both */
+.ui-btn[aria-pressed="true"]:focus-visible { box-shadow: inset 0 -2px 0 hsl(var(--mood-h) 70% 65%),
+  0 0 0 2px var(--surface-2), 0 0 0 4px hsl(var(--mood-h) 70% 60% / .6); }
+.ui-btn-ghost[aria-pressed="true"]:hover:not(:disabled) { border-color: var(--hair-strong); }
+
+/* FIELD */
+.ui-field { height: 32px; padding: 0 10px; border-radius: var(--r-sm); width: 100%;
+  font: 400 var(--fs-13)/1.4 var(--font-ui); color: var(--text-1);
+  background: var(--surface-1); border: 1px solid var(--hair-strong);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
+.ui-field::placeholder { color: var(--text-3); }
+.ui-field:focus { outline: none; border-color: hsl(var(--mood-h) 60% 60% / .55);
+  box-shadow: 0 0 0 3px hsl(var(--mood-h) 70% 55% / .14); }
+.ui-field-area { height: auto; min-height: 64px; padding: 8px 10px; resize: vertical; }
+.ui-field-select { padding-right: 26px; }
+
+/* TABS */
+/* a strip wider than its box scrolls sideways — wheel, swipe, and the arrow keys (focus
+   scrolls the tab into view) — with no bar drawn; a tab never shrinks or wraps its label
+   (final review, Q3: this lived in Tools' own wrapper) */
+.ui-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--hair);
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ui-tabs::-webkit-scrollbar { display: none; }
+.ui-tab { flex: none; white-space: nowrap;
+  height: 32px; padding: 0 12px; background: none; border: none; color: var(--text-2);
+  font: 500 var(--fs-12)/1 var(--font-ui); box-shadow: inset 0 -2px 0 transparent;
+  transition: color var(--dur-fast), box-shadow var(--dur-base); }
+.ui-tab:hover { color: var(--text-1); }
+.ui-tab-on { color: var(--text-1); box-shadow: inset 0 -2px 0 hsl(var(--mood-h) 70% 65%); }
+/* the ring is INSET: the strip is a scroll box now, and an outer ring would be clipped */
+.ui-tab:focus-visible { outline: none; border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 2px hsl(var(--mood-h) 70% 60% / .7); }
+
+/* ROW */
+.ui-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px;
+  padding: 6px 10px; text-align: left; font: 400 var(--fs-13)/1.4 var(--font-ui);
+  color: var(--text-1); background: none; border: none; border-bottom: 1px solid var(--hair); }
+.ui-row-btn:hover { background: rgba(var(--hair-rgb), .05); }
+/* a clickable row's main button fills the row beside its trail — never around it */
+.ui-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 0; margin: 0; text-align: left; font: inherit; color: inherit;
+  background: none; border: none; border-radius: var(--r-sm); }
+.ui-row-main:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--mood-h) 70% 60% / .6); }
+.ui-row-lead { flex: none; color: var(--text-2); }
+.ui-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ui-row-meta { flex: none; font: 400 var(--fs-11)/1 var(--font-mono); color: var(--text-3); }
+.ui-row-trail { flex: none; display: flex; gap: 4px; }
+
+/* STATE */
+.ui-state { display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: var(--sp-6) var(--sp-4); text-align: center; color: var(--text-2); }
+.ui-state-t { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); }
+.ui-state-b { font-size: var(--fs-12); max-width: 42ch; line-height: 1.55; }
+.ui-state-error .ui-state-t { color: var(--err); }
+.ui-spin { width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--hair-strong); border-top-color: hsl(var(--mood-h) 80% 70%);
+  animation: ui-spin .9s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+
+/* ORB */
+.ui-orb { width: 10px; height: 10px; border-radius: 50%; flex: none;
+  background: radial-gradient(circle at 35% 35%, hsl(var(--mood-h) 90% 82%), hsl(var(--mood-h) 80% 55%));
+  box-shadow: 0 0 calc(6px + 8px * var(--mood-glow)) hsl(var(--mood-h) 90% 60% / .75);
+  animation: ui-breathe 6s ease-in-out infinite; }
+.ui-orb-think { animation-duration: 1.4s; }
+@keyframes ui-breathe { 0%, 100% { transform: scale(.85); opacity: .75; } 50% { transform: scale(1.1); opacity: 1; } }
+
+/* THE MOOD GLIDES — @property makes --mood-h interpolable (tokens.css). */
+html { transition: --mood-h 2.4s var(--ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-orb, .ui-spin, .ui-chip-busy .ui-chip-dot { animation: none; }
+  html { transition: none; }
+  .ui-ic-d, .ui-btn, .ui-field, .ui-tab { transition: none; }
+}

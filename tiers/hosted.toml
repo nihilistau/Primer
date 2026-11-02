@@ -1,0 +1,10 @@
+# Placeholder model names: edit to match what your provider offers.
+name = "hosted"
+fast = "text"
+
+[text]
+kind = "openai"
+base_url = "https://api.x.ai"
+model = "grok-4"
+managed = false
+api_key_file = "var/keys/xai.key"

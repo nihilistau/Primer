@@ -1,0 +1,60 @@
+/* reader — the Reader window. Colours come from the kit's tokens only. */
+.rd { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--surface-1); }
+
+.rd-bar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--hair); flex-wrap: wrap; }
+.rd-title { flex: 1 1 140px; min-width: 0; font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-title-dim { color: var(--text-3); }
+.rd-actions { display: flex; gap: var(--sp-1); }
+
+.rd-body { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--sp-6) var(--sp-6) var(--sp-5); }
+.rd-article { max-width: 66ch; margin: 0 auto; outline: none; }
+.rd-fork { position: absolute; width: 100%; height: 100%; pointer-events: none; z-index: 5; overflow: hidden; contain: paint; }
+.rd-empty { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center;
+  font: 400 var(--fs-22)/1.3 var(--font-voice); color: var(--text-2); padding: var(--sp-6); }
+
+/* the page itself: Source Serif 4 */
+.rd-md { font: 400 var(--fs-18)/1.7 var(--font-voice); color: var(--text-1); }
+.rd-md h1, .rd-md h2, .rd-md h3, .rd-md h4 { font-family: var(--font-voice); font-weight: 600; line-height: 1.25;
+  margin: 1.4em 0 .5em; color: var(--text-1); }
+.rd-md h1 { font-size: 1.7em; margin-top: 0; }
+.rd-md h2 { font-size: 1.3em; }
+.rd-md h3, .rd-md h4 { font-size: 1.1em; }
+.rd-md p { margin: 0 0 1em; }
+.rd-md ul, .rd-md ol { margin: 0 0 1em; padding-left: 1.4em; }
+.rd-md li > p { margin: 0 0 .3em; }
+.rd-md blockquote { margin: 0 0 1em; padding-left: var(--sp-4); border-left: 2px solid var(--hair-strong); color: var(--text-2); }
+.rd-md hr { border: 0; border-top: 1px solid var(--hair-strong); margin: 1.6em 0; }
+.rd-md code { font: 400 .85em var(--font-mono); background: var(--surface-3); padding: .1em .35em; border-radius: var(--r-sm); }
+.rd-md pre { background: var(--surface-2); padding: var(--sp-3); border-radius: var(--r-sm); overflow-x: auto; margin: 0 0 1em; }
+.rd-md pre code { background: none; padding: 0; }
+
+/* a highlighted phrase: a dashed cyan underline */
+.rd-phrase { cursor: pointer; border-bottom: 1px dashed var(--accent); }
+.rd-phrase:hover, .rd-phrase:focus-visible { color: var(--accent-hover); background: rgba(var(--accent-rgb), .08); outline: none; }
+
+.rd-writing { margin-top: var(--sp-3); }
+.rd-article .ui-state { margin-top: var(--sp-4); }
+
+.rd-prompt { display: flex; gap: var(--sp-2); padding: var(--sp-3); border-top: 1px solid var(--hair);
+  background: var(--surface-2); }
+
+/* the page's images: a strip of thumbnails under the article */
+.rd-strip { list-style: none; display: flex; flex-wrap: wrap; gap: var(--sp-3); margin: var(--sp-5) 0 0; padding: 0; }
+.rd-strip li { display: flex; flex-direction: column; gap: 4px; width: 96px; }
+.rd-thumb { width: 96px; height: 96px; padding: 0; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+  background: var(--surface-2); color: var(--text-2); cursor: pointer; overflow: hidden;
+  display: flex; align-items: center; justify-content: center; }
+.rd-thumb:hover, .rd-thumb:focus-visible { border-color: var(--accent); outline: none; }
+.rd-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rd-thumb-glyph { font: 600 var(--fs-18)/1 var(--font-ui); }
+.rd-thumb-busy .rd-thumb-glyph { animation: rd-pulse 1.2s ease-in-out infinite; }
+.rd-thumb-failed { border-color: var(--err); color: var(--err); }
+.rd-thumb-cap { font: 400 var(--fs-12)/1.3 var(--font-ui); color: var(--text-3); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+@keyframes rd-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .rd-thumb-busy .rd-thumb-glyph { animation: none; } }
+
+.rd-imgerr { padding: 0 var(--sp-3); border-top: 1px solid var(--hair); background: var(--surface-2); }
+.rd-media-err { margin-top: var(--sp-2); font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--err); }

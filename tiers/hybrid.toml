@@ -1,0 +1,36 @@
+# Placeholder model names: edit to match what you have installed.
+name = "hybrid"
+
+[text]
+kind = "openai"
+base_url = "http://127.0.0.1:1234"
+model = "gemma-4-26b-a4b"
+managed = true
+gpu = true
+# LM Studio loads the model on first request
+launch = ["lms", "server", "start"]
+# `lms server start` exits once the server is up, so Primer stops it with this command
+stop = ["lms", "server", "stop"]
+# With gpu = true, auto GPU mode runs this while an image is made: it frees the VRAM but keeps
+# LM Studio's server up, and the model loads again on the next page (Just-in-Time loading)
+pause = ["lms", "unload", "--all"]
+# If LM Studio requires an API token (HTTP 401), put the key in this file:
+# api_key_file = "var/keys/lmstudio.key"
+
+# Alternative text engine (Shannon-Prime server):
+# [text]
+# kind = "sp"
+# base_url = "http://127.0.0.1:3000"
+
+[fast]
+kind = "openai"
+base_url = "http://127.0.0.1:8081"
+model = "lfm3"
+managed = true
+launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]
+
+# Image generation (stable-diffusion.cpp). Uncomment and set sd_server to your own
+# sd-server executable; until then image generation shows as unavailable.
+# [images]
+# sd_server = "C:/path/to/stable-diffusion.cpp/sd-server.exe"
+# port = 8820

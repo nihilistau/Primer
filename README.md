@@ -1,33 +1,140 @@
 # Primer
 
-An offline, local-first **illustrated primer**. Start from a loose interest, say castles, and
-follow your curiosity: every phrase on a page is clickable, branching into a page written in
-context, a general article, or a sideways jump. Any concept can open in another lens, such as an
-image, a short video, a map or a narrated story, each in its own resizable window on a
-desktop-style workspace.
+**An offline illustrated primer: a book that writes itself as you read it.** Start from a loose
+interest, such as castles. Every phrase on the page can be clicked, and each one branches into a
+new page: one written in the context you came from, a general article, or a sideways jump.
+Any phrase can also be drawn as a picture. You keep reading while it renders.
 
-It is an extension of chatting with a language model into something you can navigate like a
-website. You can go back and forward, follow a branch, or just type.
+Primer runs on your own machine against local models (LM Studio, llama.cpp's `llama-server`, or a
+hosted OpenAI-compatible API if you choose). Everything you read and every picture it draws is
+kept, so your wandering becomes a book you can browse again later.
+
+![The reader window showing a page about a castle keep, with clickable phrases underlined and a strip of generated thumbnails, beside an Image window showing a MOSS-Image picture of a castle keep on a crag with its prompt, model and settings](docs/screenshots/reader-and-image.webp)
+
+## What it does
+
+**Pages you can follow anywhere.** Type anything ("castles", "how does a trebuchet work",
+"Gilgamesh") and Primer writes a page about it. A small fast model then marks the phrases worth
+following. Click one, and Primer offers three branches, already thinking ahead:
+
+- **In this context**: the phrase explained as it is used on this page.
+- **General**: the concept on its own.
+- **Sideways**: a related idea you might not have thought to ask about.
+
+![A phrase on the castle keep page clicked, with three branch cards fanning out from it: In this context, General, and Sideways, each with a suggested title, plus Image, Video and Ask about it buttons](docs/screenshots/branch-fork.webp)
+
+**Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
+**Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
+take while keeping the old version. Pages are cached, so going back is instant.
+
+**Pictures on demand.** Click **Image** on a page or a phrase, or type "draw a trebuchet at
+dawn". Primer turns the page into an image prompt, runs
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) in the background, and
+shows live progress in its own window. You can keep reading. Finished pictures sit as thumbnails
+on the page they belong to. SDXL, Qwen-Image 2.1 and MOSS-Image are supported, each with its own
+settings, and every image records its seed so it can be reproduced.
+
+![The Trebuchet page with three image thumbnails, one marked failed, and an Image window showing a Qwen-Image 2.1 picture of a wooden trebuchet in golden morning haze before a castle](docs/screenshots/trebuchet-qwen.webp)
+
+**A map of where you've been.** Every page you open joins a concept graph. The map shows the
+trail: which page you branched from, and how (in context, general, or sideways).
+
+![The Map of where I've been window listing Castle, Trebuchet, counterweight, Potential energy, Medieval castle, Siege tower, Battering ram, Castle keep and Drawbridge, indented by the page each was reached from](docs/screenshots/map-of-where-ive-been.webp)
+
+**It looks after its own models.** Primer starts and stops the model servers it needs. On one
+GPU it shares the card for you: in auto GPU mode it pauses the writing model while an image is
+drawn, then brings it back, and a page asked for in the meantime waits its turn. The Engines window
+shows each server's state and why. The Image models window can scan a folder and find complete
+models for you.
+
+![The Engines window showing the tier, text and fast model servers ready, the image server stopped, and the source and GPU modes, beside the Image models window listing SDXL, MOSS-Image and Qwen-Image 2.1 as ready, with the Qwen-Image editor open showing its three files found and its size, steps, CFG, sampler, seed and CPU offload settings](docs/screenshots/engines-and-image-models.webp)
+
+## Install
+
+Primer has been built and tested on **Windows 11** with an NVIDIA GPU. The server is plain Python
+with no dependencies and should run elsewhere too, but that hasn't been tried yet.
+
+### 1. What you need
+
+- **Python 3.11 or newer.** Nothing to `pip install`: the server uses only the standard library.
+- **Node.js 20 or newer**, to build the interface once.
+- **A text model server**, any one of:
+  - [LM Studio](https://lmstudio.ai/) with its `lms` command on your PATH, or
+  - [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` and a GGUF model, or
+  - a hosted OpenAI-compatible API (bring your own key).
+- **For pictures (optional):** a
+  [stable-diffusion.cpp release](https://github.com/leejet/stable-diffusion.cpp/releases) (CUDA,
+  Vulkan or CPU build) and at least one model: an SDXL checkpoint, Qwen-Image 2.1 or MOSS-Image.
+
+A good small setup is a 4B to 12B instruct model on the GPU for writing, plus a 1B to 2B model on
+the CPU for picking highlights. Measured on an RTX 2060 (12 GB), a page takes about a minute with
+gemma-4-E4B.
+
+### 2. Get it and build it
+
+```bash
+git clone https://github.com/nihilistau/Primer.git
+cd Primer
+cd ui && npm install && npm run build && cd ..
+```
+
+### 3. Point it at your models
+
+Pick a tier in `tiers/` and edit it to name the models you have:
+
+| Tier | For |
+| --- | --- |
+| `light` | CPU only, or a small GPU. One small model does everything. |
+| `hybrid` | One GPU (8 GB or more). LM Studio for writing, plus a small fast model. |
+| `workstation` | A big GPU (20 GB or more) and larger models. |
+| `hosted` | A hosted OpenAI-compatible API. |
+
+The model names in the shipped tiers are placeholders; they must match what your server reports
+(`lms ls` for LM Studio). To draw pictures, uncomment the `[images]` block and set `sd_server`
+to the path of `sd-server`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
+
+### 4. Run it
+
+```bash
+python serve.py --tier hybrid
+```
+
+Then open **http://127.0.0.1:8810**. Primer starts the model servers its tier manages, and stops
+them when you quit. Without `--tier` it uses the tier you last chose, or suggests one from your
+GPU's memory.
+
+To add image models, open **Image models** from the dock, paste the folder that holds them into
+**Scan a folder**, and click **Add** on each model it finds.
+
+## How to use it
+
+The short version:
+
+1. Type a topic into **Ask about anything...** and press Enter.
+2. Click any underlined phrase, then pick a branch.
+3. Use **back / forward**, **Deeper**, **Simpler** and **Regenerate** to move around.
+4. Click **Image**, or type "draw ...", for a picture. It renders while you keep reading.
+5. Open the **map** from the dock to see where you've been and jump back.
+
+The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
+
+## Privacy and safety
+
+- The server listens on `127.0.0.1` only and answers only Primer's own page. Requests from other
+  sites, other hosts or other origins are refused.
+- Nothing leaves your machine unless you choose a hosted tier.
+- Model files must be local `.safetensors` or `.gguf` files. Pickle formats (`.ckpt`, `.pt`,
+  `.bin`) and network paths are refused, and no command line can be set from the browser.
 
 ## Status
 
-**Design stage.** Nothing runs yet. The design is in
-[docs/superpowers/specs/](docs/superpowers/specs/). Build order:
-pages and branching → images → video → grounding (offline Wikipedia / web) → maps → narrated stories → an
-embedded browser the model can see and drive.
+This is **v0.2**: pages, branching and images work. Video, grounding in an offline
+encyclopedia or the web, maps, narrated stories and an embedded browser are planned next. The
+design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
+[changelog](CHANGELOG.md).
 
-## Principles
-
-- **Local first, everything a choice.** The writing model can be LM Studio, llama-server, the
-  Kairos sp-daemon or a hosted API. Image, video and voice are each local or hosted. Suggested
-  tiers (Light, Hybrid, Workstation, Hosted) fit different hardware, and you can adjust anything.
-- **Never wait on a spinner.** Images and video are background jobs. You keep reading while they render.
-- **Everything is kept.** Pages and media are cached in a concept graph, so your exploration
-  becomes a book you can browse later.
-- **Choose your grounding.** Storyteller, offline reference or web, labelled on every page.
-
-Sibling project of [Kairos](https://github.com/nihilistau/Kairos), whose desktop UI and design
-language Primer shares.
+Primer is a sibling of [Kairos](https://github.com/nihilistau/Kairos) and shares its desktop
+interface and design language.
 
 ## License
 

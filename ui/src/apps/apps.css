@@ -1,0 +1,54 @@
+/* the Graph and Engines windows. Colours come from the kit's tokens only. */
+.gp, .en { height: 100%; min-height: 0; overflow-y: auto; background: var(--surface-1); padding: var(--sp-3); }
+.gp-via { color: var(--text-2); display: inline-flex; }
+.gp-via-context { color: var(--warm); }
+.gp-also { display: block; font: 400 var(--fs-11)/1.3 var(--font-ui); color: var(--text-3); }
+
+.en-sec { padding: var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--hair); }
+.en-sec:last-child { border-bottom: 0; }
+.en-h { font: 600 var(--fs-11)/1 var(--font-ui); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-3); margin: 0 0 var(--sp-2); }
+.en-tier { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.en-note { font: 400 var(--fs-11)/1.4 var(--font-ui); color: var(--text-3); margin-top: var(--sp-1); }
+.en-server { padding: var(--sp-2) 0; border-bottom: 1px solid var(--hair); }
+.en-server:last-child { border-bottom: 0; }
+.en-server-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.en-role { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); min-width: 4.5em; }
+.en-actions { margin-left: auto; display: flex; gap: var(--sp-1); }
+.en-detail { font: 400 var(--fs-11)/1.4 var(--font-mono); color: var(--text-3); margin-top: var(--sp-1);
+  overflow-wrap: anywhere; }
+.en-reason { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); margin-top: var(--sp-1); }
+.en-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); margin-top: var(--sp-2); }
+.pn-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); padding: var(--sp-1) var(--sp-2); }
+
+/* the Image models window */
+.imm-banner { display: flex; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-2); background: var(--surface-0); border: 1px solid var(--warn); border-radius: var(--r-sm);
+  color: var(--text-1); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.imm-row { display: flex; align-items: center; gap: var(--sp-2); width: 100%; text-align: left; cursor: pointer;
+  padding: var(--sp-2); background: none; border: 0; border-bottom: 1px solid var(--hair); color: var(--text-1);
+  font: 400 var(--fs-13)/1.3 var(--font-ui); }
+.imm-row:hover, .imm-row:focus-visible, .imm-row-sel { background: var(--hover-tint); }
+.imm-star { width: 1.2em; color: var(--accent); text-align: center; }
+.imm-name { font-weight: 500; color: var(--text-1); overflow-wrap: anywhere; }
+.imm-fam { color: var(--text-3); font-size: var(--fs-11); margin-left: auto; }
+.imm-state-bad { color: var(--err); font-size: var(--fs-11); max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imm-new, .imm-scan { display: flex; gap: var(--sp-2); align-items: center; margin-top: var(--sp-2); }
+.imm-scan .ui-field { flex: 1 1 auto; min-width: 0; }
+.imm-edit { display: flex; flex-direction: column; gap: var(--sp-2); }
+.imm-field { display: flex; flex-direction: column; gap: 2px; }
+.imm-check { flex-direction: row; align-items: center; gap: var(--sp-2); }
+.imm-label { font: 500 var(--fs-12)/1.3 var(--font-ui); color: var(--text-2); }
+.imm-hint, .imm-note { font: 400 var(--fs-11)/1.4 var(--font-ui); color: var(--text-3); }
+.imm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--sp-2); }
+.im-note-ok { color: var(--ok); font-weight: 400; }
+.im-note-bad { color: var(--err); font-weight: 400; }
+.imm-problems, .imm-errors { margin: 0; padding-left: var(--sp-4); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.imm-problems { color: var(--text-2); }
+.imm-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.imm-prop { padding: var(--sp-2) 0; border-bottom: 1px solid var(--hair); }
+.imm-prop-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* Engines: the image server row */
+.en-paused { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); margin-top: var(--sp-1); }
+.imm-nowrap { white-space: nowrap; flex: none; }

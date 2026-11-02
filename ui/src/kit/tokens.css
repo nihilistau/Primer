@@ -1,0 +1,126 @@
+/* adapted from shannon-prime-kairos/ui/src/kit/tokens.css */
+/* tokens.css — THE ONLY PLACE A COLOUR IS WRITTEN DOWN (2026-09-24).
+ *
+ * Three layers, read top to bottom: palette → roles → scale. Components read roles. Below
+ * the roles, two fenced sections of object paint (the game table, the drawn portrait) that
+ * only their own window reads. The legacy aliases (--bg, --cyan, --es-* …) were deleted in
+ * redesign stage 6; G-ROOM-TOKENS leg 7 fails if one comes back, and leg 4 fails on any
+ * colour literal outside this file.
+ *
+ * `--mood-h` / `--mood-glow` set the ambient accent hue and glow; Primer uses these defaults.
+ */
+@property --mood-h { syntax: '<number>'; inherits: true; initial-value: 210; }
+
+:root {
+  /* surfaces, darkest first */
+  --surface-0: #070a0f;
+  --surface-1: #0c1119;
+  --surface-2: #111824;
+  --surface-3: #172131;
+
+  /* text. --text-3 was #5f7187 in the spec's first draft: 3.2:1 on surface-3, which
+     fails AA for the 11px captions it exists for. */
+  --text-1: #e3ebf4;
+  --text-2: #9aabbd;
+  --text-3: #7a8ca6;
+
+  /* hairlines — named `hair`, not `line`: `line` was a console-era alias (deleted in stage 6),
+     and one name with two values is this codebase's standing bug */
+  --hair: rgba(160, 190, 220, .10);
+  --hair-strong: rgba(160, 190, 220, .18);
+  --hair-rgb: 160, 190, 220;      /* COMMA triple — the hairline's hue at any other alpha (tints, hovers) */
+  --shade-rgb: 0, 0, 0;           /* what a shadow or a scrim is drawn in */
+  --surface-0-rgb: 7, 10, 15;
+  --surface-1-rgb: 12, 17, 25;
+
+  /* roles */
+  --accent: #46d9e6;
+  --accent-rgb: 70, 217, 230;     /* COMMA triple: rgba(var(--accent-rgb), .2) is valid */
+  --accent-dim: #1d5a63;
+  --accent-hover: #6be3ec;
+  --on-accent: #04262b;           /* ink drawn ON a cyan fill (the send button) */
+  --warm: #e8b64c;                /* "in this context" (Primer's warm accent) */
+  --warm-rgb: 232, 182, 76;
+  --ok: #4ad98a;
+  --ok-rgb: 74, 217, 138;
+  --warn: #f59e0b;
+  --warn-rgb: 245, 158, 11;
+  --err: #e2685b;
+  --err-rgb: 226, 104, 91;
+  --on-err: #170403;              /* ink drawn ON a red fill (the stop button) */
+  --hover-tint: rgba(160, 190, 220, .05);  /* a row under the pointer (Apps' list) */
+  /* the dark ink drawn on the green/amber/red window lights */
+  --lt-ink-max: #0b3a20; --lt-ink-min: #4a3306; --lt-ink-close: #4a120d;
+  /* an UNFOCUSED window's bar, and its three lights while they are grey. The grey was
+     #3a4658, 1.81:1 on that bar; a control wants 3:1 (WCAG 1.4.11) — this is 3.34:1. */
+  --bar-idle: #131b28;
+  /* the two BARS' ground — the taskbar below, the top bar above (stage 3): one
+     expression each, so the two cannot drift apart */
+  --bar-bg: rgba(12, 17, 25, .92);
+  --bar-shade: rgba(0, 0, 0, .45);
+  --lt-idle: #606e84;
+  --idle: #4a5568;
+  --an: #a78bfa;                  /* off the record — its own colour, never the error red */
+  --an-rgb: 167, 139, 250;
+  --private: #c96ce0;
+  --private-rgb: 201, 108, 224;  /* COMMA triple, for rgba(var(--private-rgb), a) */
+  /* two of Memory's class colours (redesign stage 5). The others are roles already:
+     identity --warm, relationship --private, preference --ok, event --accent, a secret --err */
+  --feeling: #e07a9a;
+  --self-narrative: #8fd0b0;
+  --read: #4ad98a; --write: #e8b64c; --world: #46d9e6; --machine: #e2685b;
+  /* extra chip tones carried over from the source kit; Primer uses none of them */
+  --solo: #c9a4e8; --solo-rgb: 201, 164, 232;      /* tone: solo */
+  --recall: #9ecbff; --recall-rgb: 76, 155, 232;   /* tone: recall; the tint's base is the deeper blue */
+  --wear: #d8a7ea; --wear-rgb: 216, 167, 234;      /* tone: wear (h 288) */
+  --err-soft: #f2a39a;            /* the shut-down button's word: red, softened for a resting control */
+  --tile-ink: #cfe0ee;            /* a desktop tile's glyph */
+  /* THE GAME TABLE (redesign stage 6) — object paint, not roles: the colours of a real board,
+     a card and a word grid. Only `.gm-` rules read these (G-ROOM-TOKENS leg 7). */
+  --board-light: #e9e2d4; --board-dark: #8f9c8c;
+  --piece-light: #fbfbf8; --piece-dark: #16161c; --piece-edge: #111111;
+  --card-face: #f4f1ea; --card-red: #b3242c; --card-back: #2a3350; --card-back-2: #1d2438;
+  --word-hit: #358d52;            /* was hsl(140 45% 38%) */
+  --word-near: #b8952e;           /* was hsl(45 60% 45%) */
+  /* PORTRAIT — illustration paint, not roles, carried over from the source kit; nothing in
+     Primer reads these. */
+  --face-skin-1: #f0dcd2; --face-skin-2: #dcbcae; --face-skin-3: #a97f74;
+  --face-hair-1: #2a2732; --face-hair-2: #131218; --face-hair-3: #050509;
+  --face-cloth-1: #1b1b22; --face-cloth-2: #0a0a0e; --face-collar: #07070b;
+  --face-neck: #c39a8d; --face-shade: #a87e73; --face-shade-deep: #8e6a60;
+  --face-chain-1: #cfd6de; --face-chain-2: #9aa4b0; --face-bead: #e6edf5;
+  --face-brow: #17151c; --face-eye: #f6f1ee; --face-iris: #4a3b33; --face-pupil: #120d0b;
+  --face-lid: #100e14; --face-lid-edge: #1a1620; --face-lip: #8e4b4b;
+  --face-fringe: #0b0a0f; --face-crown: #1a1822; --face-strand-1: #0d0c11; --face-strand-2: #100e15;
+
+  /* the ambient accent hue and glow (defaults) */
+  --mood-h: 210;
+  --mood-glow: .4;
+
+  /* type */
+  --font-ui: 'Inter Variable', 'Segoe UI Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'Cascadia Mono', Consolas, monospace;
+  --font-voice: 'Source Serif 4 Variable', Georgia, 'Iowan Old Style', serif;
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-15: 15px; --fs-18: 18px; --fs-22: 22px;
+
+  /* space, 4px grid */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-7: 28px; --sp-8: 32px;
+
+  /* radii */
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-pill: 999px;
+
+  /* elevation: a drop shadow plus a 1px inner top highlight — depth without blur */
+  --el-1: 0 2px 8px rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .04);
+  --el-2: 0 18px 50px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .04);
+  --el-3: 0 24px 64px rgba(0, 0, 0, .65), inset 0 1px 0 rgba(255, 255, 255, .05);
+
+  /* motion */
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 320ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.36, .64, 1);
+
+  /* layout */
+  --tb-h: 46px;
+  --top-h: 34px;
+}

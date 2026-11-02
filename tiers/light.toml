@@ -1,0 +1,10 @@
+# Placeholder model names: edit to match what you have installed.
+name = "light"
+fast = "text"
+
+[text]
+kind = "openai"
+base_url = "http://127.0.0.1:8081"
+model = "lfm3"
+managed = true
+launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]

@@ -1,0 +1,31 @@
+/* the Image window. Colours come from the kit's tokens only. */
+.im { height: 100%; min-height: 0; overflow: hidden; background: var(--surface-1); padding: var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-3); }
+.im-stage { position: relative; background: var(--surface-0); border: 1px solid var(--hair); border-radius: var(--r-sm);
+  flex: 1 1 auto; min-height: 160px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.im-pic { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.im-ph { color: var(--text-3); font: 400 var(--fs-13)/1.4 var(--font-ui); padding: var(--sp-5); text-align: center; }
+.im-tag { position: absolute; top: var(--sp-2); left: var(--sp-2); }
+.im-status { display: flex; flex-direction: column; gap: var(--sp-1); }
+.im-label { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); }
+.im-label-err { color: var(--err); }
+.im-bar { height: 6px; background: var(--hair); border-radius: var(--r-sm); overflow: hidden; }
+.im-bar-fill { height: 100%; background: var(--accent); transition: width var(--dur-fast) var(--ease-out); }
+.im-h { font: 600 var(--fs-11)/1 var(--font-ui); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-3); margin: 0 0 var(--sp-1); }
+.im-prompt { font-family: var(--font-voice); font-size: 15px; line-height: 1.5; width: 100%; box-sizing: border-box; }
+.im-words { font: 400 var(--fs-13)/1.7 var(--font-voice); color: var(--text-2); }
+.im-word { background: none; border: 0; padding: 0 1px; margin: 0; font: inherit; color: inherit; cursor: pointer;
+  border-radius: var(--r-sm); }
+.im-word:hover, .im-word:focus-visible { background: var(--hover-tint); color: var(--accent); }
+.im-meta { font: 400 var(--fs-12)/1.5 var(--font-ui); color: var(--text-2); }
+.im-meta b { font-weight: 500; color: var(--text-1); }
+.im-mono { font-family: var(--font-mono); font-size: var(--fs-11); color: var(--text-3); }
+.im-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.im-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+
+/* the lower panel (prompt, meta, actions) stays compact and scrolls; the picture keeps the rest */
+.im-panel { flex: 0 1 auto; max-height: 45%; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+  gap: var(--sp-3); }
+.im-words { max-height: 4.5em; overflow-y: auto; margin: var(--sp-1) 0 0; }
+.im-status { flex: 0 0 auto; }

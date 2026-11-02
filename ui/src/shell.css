@@ -1,0 +1,129 @@
+/* adapted from shannon-prime-kairos/ui/src/room/shell.css — desktop, dock and window frame.
+ * Reads tokens.css roles only; no colour is written here. */
+
+html, body, #root { height: 100%; }
+body { margin: 0; background: var(--surface-0); color: var(--text-1);
+  font: 400 var(--fs-13)/1.5 var(--font-ui); -webkit-font-smoothing: antialiased; overflow: hidden; }
+* { box-sizing: border-box; }
+button, textarea, input { font: inherit; color: inherit; }
+
+.room { position: relative; z-index: 1; height: 100vh; }
+.room::after { content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background: radial-gradient(120% 90% at 18% 88%, hsl(var(--mood-h) 80% 50% / .10), transparent 62%); }
+.desktop { position: fixed; inset: 0; overflow: hidden; z-index: 10; }
+
+.dock { position: fixed; left: 50%; bottom: 14px; z-index: 50;
+  display: flex; align-items: flex-end; gap: 10px; padding: 7px 10px; border-radius: 18px;
+  background: rgba(var(--surface-1-rgb), .6); backdrop-filter: blur(12px);
+  border: 1px solid rgba(var(--hair-rgb), .18); box-shadow: 0 0 24px hsl(var(--mood-h) 70% 60% / .12);
+  transform: translateX(-50%); transition: transform var(--dur-slow) var(--ease-out); }
+.dock.dock-over { border-color: rgba(var(--accent-rgb), .6); }
+.dock-item { position: relative; display: grid; place-items: center; width: 40px; height: 40px;
+  padding: 0; background: transparent; border: none; cursor: var(--cur-hand); user-select: none; }
+.dock-tile { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
+  color: var(--tile-ink); background: var(--surface-3); border: 1px solid rgba(var(--hair-rgb), .18);
+  transform-origin: 50% 100%;
+  transition: transform var(--dur-base) var(--ease-out), box-shadow var(--dur-base) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out); }
+.dock-item:hover .dock-tile { transform: translateY(-6px) scale(1.45);
+  border-color: hsl(var(--mood-h) 70% 60% / .7); box-shadow: 0 0 18px hsl(var(--mood-h) 70% 60% / .7); }
+.dock-item:hover + .dock-item .dock-tile { transform: translate(6px, -2px) scale(1.2); }
+.dock-item:has(+ .dock-item:hover) .dock-tile { transform: translate(-6px, -2px) scale(1.2); }
+.dock-item:hover + .dock-item + .dock-item .dock-tile { transform: translateX(4px); }
+.dock-item:has(+ .dock-item + .dock-item:hover) .dock-tile { transform: translateX(-4px); }
+.dock-item:focus-visible { outline: none; }
+.dock-item:focus-visible .dock-tile { box-shadow: 0 0 0 2px var(--surface-0), 0 0 0 4px hsl(var(--mood-h) 70% 60% / .7); }
+/* the dot sits on the button, not the tile, so it stays put while the tile grows */
+.dock-open::after { content: ''; position: absolute; bottom: -6px; left: 50%; width: 4px; height: 4px;
+  margin-left: -2px; border-radius: 50%; background: hsl(var(--mood-h) 80% 70%);
+  box-shadow: 0 0 6px hsl(var(--mood-h) 80% 60%); }
+.dock-tip { position: absolute; bottom: calc(100% + 26px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; pointer-events: none; visibility: hidden; padding: 2px 8px; border-radius: 6px;
+  font: 400 11px/1.4 var(--font-ui); color: var(--text-1); background: var(--surface-1);
+  border: 1px solid rgba(var(--hair-rgb), .18); }
+.dock-item:hover .dock-tip, .dock-item:focus-visible .dock-tip { visibility: visible; }
+.dock-lift .dock-tile { border-style: dashed; }
+.dock-sep { align-self: stretch; width: 1px; margin: 6px 2px; background: rgba(var(--hair-rgb), .18); }
+.dock-min .dock-tile { opacity: .75; }
+.dock-min .dock-lbl { display: none; }
+
+/* ── WINDOWS ─────────────────────────────────────────────────────────────── */
+.win { position: absolute; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface-2); border: 1px solid var(--hair); border-radius: 12px;
+  box-shadow: var(--el-2);
+  transition: left var(--dur-slow) var(--ease-out), top var(--dur-slow) var(--ease-out),
+              width var(--dur-slow) var(--ease-spring), height var(--dur-slow) var(--ease-spring),
+              border-color var(--dur-base), box-shadow var(--dur-base); }
+.win.dragging, body.resizing .win { transition: border-color var(--dur-base), box-shadow var(--dur-base); }
+/* FOCUS IS VISIBLE: the top window wears the ambient accent hue; the rest step back. */
+.win.win-focus { border-color: hsl(var(--mood-h) 60% 62% / .45);
+  box-shadow: 0 0 0 1px hsl(var(--mood-h) 60% 60% / .12), var(--el-3),
+              0 0 40px hsl(var(--mood-h) 70% 55% / calc(.06 + .08 * var(--mood-glow))); }
+.win.win-in { animation: win-in var(--dur-base) var(--ease-out); }
+@keyframes win-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+/* MINIMISE FLIES TO ITS BUTTON (stage 3). --min-dx/--min-dy are set by Win from the
+   button's position when the flight starts. RESTORE HAS ITS OWN KEYFRAME, from the button
+   to the box (final review, Q2): `win-min` played in reverse also reversed its easing, so
+   the window crept out of the button (scale .12 → .15 over the first ~120ms) and hurried
+   at the end. An ease-out restore leaves fast and settles into place. */
+.win.win-min-out { animation: win-min var(--dur-base) var(--ease-out) forwards; pointer-events: none; }
+.win.win-restore { animation: win-restore var(--dur-base) var(--ease-out); }
+@keyframes win-min { to { transform: translate(var(--min-dx, 0px), var(--min-dy, 240px)) scale(.12); opacity: 0; } }
+@keyframes win-restore { from { transform: translate(var(--min-dx, 0px), var(--min-dy, 240px)) scale(.12); opacity: 0; } }
+
+.win > .bar { display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 10px 0 12px;
+  flex: none; background: var(--surface-3); border-bottom: 1px solid var(--hair);
+  cursor: var(--cur-grab); user-select: none; }
+.win.dragging > .bar { cursor: var(--cur-grabbing); }
+.win:not(.win-focus) > .bar { background: var(--bar-idle); }
+.win > .bar .ic { display: grid; place-items: center; color: var(--text-2); }
+.win.win-focus > .bar .ic { color: hsl(var(--mood-h) 70% 72%); }
+.win > .bar .ti { font: 500 var(--fs-13)/1 var(--font-ui); color: var(--text-1); flex: 1;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.win:not(.win-focus) > .bar .ti { color: var(--text-3); }
+
+.win > .bar .lights { display: flex; gap: 7px; margin-left: auto; padding-left: 8px; }
+.win > .bar .lt { width: 12px; height: 12px; border-radius: 50%; border: none; padding: 0;
+  display: grid; place-items: center; cursor: var(--cur-hand); background: var(--lt-idle);
+  transition: background var(--dur-fast), transform var(--dur-fast); }
+.win > .bar .lt-green { color: var(--lt-ink-max); }
+.win > .bar .lt-amber { color: var(--lt-ink-min); }
+.win > .bar .lt-red { color: var(--lt-ink-close); }
+.win.win-focus > .bar .lt-green { background: var(--ok); }
+.win.win-focus > .bar .lt-amber { background: var(--warn); }
+.win.win-focus > .bar .lt-red { background: var(--err); }
+.win > .bar .lt svg { opacity: 0; transition: opacity var(--dur-fast); }
+.win > .bar .lights:hover .lt svg { opacity: 1; }
+.win > .bar .lights:hover .lt-green { background: var(--ok); }
+.win > .bar .lights:hover .lt-amber { background: var(--warn); }
+.win > .bar .lights:hover .lt-red { background: var(--err); }
+.win > .bar .lt:active { transform: scale(.9); }
+
+.win > .body { flex: 1; min-height: 0; overflow: auto; }
+/* chat flows inside its window (b863031): its old absolute inset:0 laid it over the bar */
+
+.win.maxed { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important;
+  border-radius: 0; }
+.win.maxed > .bar { cursor: var(--cur-arrow); }
+
+/* GRIPS — eight, invisible until found; corners above edges. */
+.win > .grip { position: absolute; z-index: 2; }
+.win > .g-n, .win > .g-s { left: 8px; right: 8px; height: 8px; cursor: var(--cur-ns); }
+.win > .g-e, .win > .g-w { top: 8px; bottom: 8px; width: 8px; cursor: var(--cur-ew); }
+.win > .g-n { top: -3px; } .win > .g-s { bottom: -3px; }
+.win > .g-w { left: -3px; } .win > .g-e { right: -3px; }
+.win > .g-ne, .win > .g-nw, .win > .g-se, .win > .g-sw { width: 14px; height: 14px; z-index: 3; }
+.win > .g-nw { top: -3px; left: -3px; cursor: var(--cur-nwse); }
+.win > .g-se { bottom: -3px; right: -3px; cursor: var(--cur-nwse); }
+.win > .g-ne { top: -3px; right: -3px; cursor: var(--cur-nesw); }
+.win > .g-sw { bottom: -3px; left: -3px; cursor: var(--cur-nesw); }
+.win > .g-se::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--text-3); border-bottom: 1.5px solid var(--text-3);
+  border-bottom-right-radius: 2px; opacity: .5; }
+.win:hover > .g-se::after { opacity: .9; }
+body.resizing, body.resizing * { user-select: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .win.win-in, .win.win-min-out, .win.win-restore { animation: none; }
+  .dock, .dock-tile { transition: none; }
+}

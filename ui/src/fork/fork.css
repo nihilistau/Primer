@@ -1,0 +1,56 @@
+/* fork — the branching-lines overlay. Colours come from the kit's tokens only. */
+.fk { position: absolute; left: 0; top: 0; width: 100%; height: 100%; z-index: 5; outline: none; pointer-events: none; }
+.fk > * { pointer-events: auto; }
+.fk-lines { position: absolute; left: 0; top: 0; pointer-events: none !important; overflow: visible; }
+.fk-line { fill: none; stroke: var(--accent); stroke-width: 1.4; stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1; animation: fk-draw var(--dur-slow) var(--ease-out) forwards; }
+.fk-line-context { stroke: var(--warm); stroke-opacity: .7; }
+.fk-line-general { stroke-opacity: .55; }
+.fk-line-sideways { stroke-opacity: .35; }
+@keyframes fk-draw { to { stroke-dashoffset: 0; } }
+
+.fk-card { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px;
+  text-align: left; padding: var(--sp-2) var(--sp-3); overflow: hidden; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--hair-strong); border-radius: var(--r-md);
+  color: var(--text-1); font: 400 var(--fs-12)/1.35 var(--font-ui); box-shadow: var(--el-1);
+  opacity: 0; animation: fk-in var(--dur-base) var(--ease-out) forwards; }
+.fk-card:hover, .fk-card:focus-visible { border-color: var(--accent); outline: none; }
+.fk-card.fk-context { border-color: rgba(var(--warm-rgb), .45); }
+.fk-card.fk-context:hover, .fk-card.fk-context:focus-visible { border-color: var(--warm); }
+.fk-skel { cursor: default; }
+@keyframes fk-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.fk-tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); }
+.fk-context .fk-tag { color: var(--warm); }
+.fk-title { font-weight: 600; font-size: var(--fs-13); color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fk-blurb { color: var(--text-3); font-size: 11.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.fk-bar { display: block; height: 9px; border-radius: 4px; background: var(--hair-strong); animation: fk-pulse 1.2s ease-in-out infinite; }
+.fk-bar-tag { width: 40%; height: 7px; }
+.fk-bar-title { width: 80%; margin-top: 4px; }
+.fk-bar-blurb { width: 60%; margin-top: 4px; }
+@keyframes fk-pulse { 50% { opacity: .45; } }
+
+.fk-actions { position: absolute; display: flex; gap: 6px; flex-wrap: wrap; }
+.fk-chip { font: 400 var(--fs-12)/1 var(--font-ui); padding: 6px 10px; border-radius: 7px; cursor: pointer;
+  background: var(--surface-3); border: 1px solid var(--hair-strong); color: var(--text-2); }
+.fk-chip:hover, .fk-chip:focus-visible { border-color: var(--accent); color: var(--text-1); outline: none; }
+.fk-chip[aria-disabled="true"] { color: var(--text-3); cursor: not-allowed; opacity: .7; }
+.fk-chip[aria-disabled="true"]:hover { border-color: var(--hair-strong); color: var(--text-3); }
+.fk-chip[aria-disabled="true"]:focus-visible { border-color: var(--accent); }
+
+.fk-error { position: absolute; box-sizing: border-box; display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); background: var(--surface-3); border: 1px solid rgba(var(--err-rgb), .5);
+  border-radius: var(--r-md); color: var(--text-1); font: 400 var(--fs-12)/1.35 var(--font-ui); }
+.fk-error span { flex: 1 1 auto; min-width: 0; }
+.fk-retry { font: inherit; padding: 5px 10px; border-radius: 7px; cursor: pointer; background: var(--surface-2);
+  border: 1px solid var(--hair-strong); color: var(--text-1); }
+.fk-retry:hover, .fk-retry:focus-visible { border-color: var(--accent); outline: none; }
+
+.fk-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fk-line { animation: none; stroke-dashoffset: 0; }
+  .fk-card { animation: none; opacity: 1; }
+  .fk-bar { animation: none; }
+}
