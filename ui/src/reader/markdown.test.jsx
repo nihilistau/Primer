@@ -17,3 +17,19 @@ test('renders structure and marks a phrase once', () => {
   expect(html).toContain('<code>code</code>')
   expect(html.match(/rd-phrase/g)).toHaveLength(1)
 })
+test('citations and highlighted phrases both render', () => {
+  const sources = [{ n: 1, title: 'A', href: 'http://k/a' }, { n: 2, title: 'B' }]
+  const html = renderToStaticMarkup(
+    <Markdown source={'The castle fell [1] and the moat dried [2], see [5].'} phrases={['castle']} sources={sources} onPhrase={() => {}} />)
+  expect(html).toContain('rd-phrase')
+  expect(html).toMatch(/<sup[^>]*><a href="http:\/\/k\/a" target="_blank" rel="noopener noreferrer"[^>]*>1<\/a><\/sup>/)
+  expect(html).toMatch(/<sup[^>]*>2<\/sup>/)
+  expect(html).toContain('[5]')
+})
+test('a non-http href produces no link', () => {
+  const sources = [{ n: 1, title: 'A', href: 'javascript:alert(1)' }, { n: 2, title: 'B', href: 'data:text/html,x' }]
+  const html = renderToStaticMarkup(<Markdown source={'a [1] b [2]'} sources={sources} />)
+  expect(html).not.toContain('<a')
+  expect(html).not.toContain('javascript:')
+  expect(html).toMatch(/<sup[^>]*>1<\/sup>/)
+})

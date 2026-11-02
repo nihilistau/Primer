@@ -339,3 +339,267 @@ def test_body_too_large_closes_the_connection(client, monkeypatch):
     # next "request" would be the unread body)
     out = _split_post(client.port, {"Content-Type": "application/json"}, b"", length=50)
     assert out.startswith(b"HTTP/1.1 400 ") and b"body too large" in out
+
+
+# --- grounding: source modes API ---
+
+import pytest
+
+from primer.config import EngineSpec, ReferenceConfig, Tier, WebConfig, write_settings
+from primer.grounding import Source
+from tests import fake_kiwix_server
+from tests.conftest import Client
+from tests.fakes import FakeEngine
+
+
+def _grounded(tmp_path, g, tier, settings=None, replies=None):
+    """(app, client, shutdown) for `tier`; servers report healthy and launch nothing."""
+    from primer.hardware import Hardware
+    from primer.pages import PageService
+    from primer.server import App, make_server
+    from primer.servers import ManagedServer, ServerManager
+
+    var = tmp_path / "var"
+    if settings is not None:
+        write_settings(var, settings)
+    servers = ServerManager(tier)
+    servers._servers.update({r: ManagedServer(r, tier.text, health=lambda: True) for r in ("text", "fast")})
+    md = "# Whales\nWhales are big marine mammals that breathe air through blowholes."
+    pages = PageService(g, FakeEngine(replies or [md]), FakeEngine(['["blowholes"]']))
+    (tmp_path / "ui").mkdir(exist_ok=True)
+    (tmp_path / "tiers").mkdir(exist_ok=True)
+    app = App(tier=tier, servers=servers, pages=pages, graph=g, hardware=Hardware(None, 0.0, 16.0),
+              var_dir=var, ui_dir=tmp_path / "ui", tiers_dir=tmp_path / "tiers")
+    server = make_server(app, port=0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def close():
+        server.shutdown()
+        server.server_close()
+        app.pages.shutdown()
+    return app, Client(server.server_address[1]), close
+
+
+def _spec():
+    return EngineSpec(kind="openai", base_url="http://127.0.0.1:1", model="fake")
+
+
+def test_status_sources_availability(tmp_path, g):
+    kiwix, url = fake_kiwix_server.serve()
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url=url))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        s = client.get("/v1/status")["sources"]
+        assert s["storyteller"] == {"available": True, "reason": ""}
+        assert s["reference"]["available"] is True
+        assert s["reference"]["books"] == [{"name": "wikipedia_en", "title": "wikipedia en"}]
+        assert s["web"]["available"] is True and s["web"]["engine"] == "duckduckgo"
+        kiwix.kill()
+        app._forget_reference()  # status remembers the reference for a few seconds
+        s = client.get("/v1/status")["sources"]
+        assert s["reference"] == {"available": False, "reason": "The reference server isn't running",
+                                  "books": []}
+    finally:
+        close()
+
+
+def test_status_sources_unconfigured(tmp_path, g):
+    tier = Tier("t", _spec(), _spec(), web=WebConfig(search="off"))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        s = client.get("/v1/status")["sources"]
+        assert s["reference"] == {"available": False, "reason": "No [reference] section in this tier",
+                                  "books": []}
+        assert s["web"] == {"available": False, "reason": "Web search is off in this tier", "engine": ""}
+        assert client.get("/v1/status")["source_mode"] == "storyteller"
+    finally:
+        close()
+
+
+def test_source_mode_set_and_persisted(tmp_path, g):
+    tier = Tier("t", _spec(), _spec())
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        st = client.post("/v1/source-mode", {"mode": "web"})
+        assert st["source_mode"] == "web" and app.pages.source_mode == "web"
+        assert read_settings(tmp_path / "var")["source_mode"] == "web"
+    finally:
+        close()
+    g2 = type(g)(tmp_path / "other.sqlite")
+    app2, client2, close2 = _grounded(tmp_path, g2, tier)  # a restart reads it back
+    try:
+        assert client2.get("/v1/status")["source_mode"] == "web"
+        assert app2.pages.source_mode == "web"
+    finally:
+        close2()
+
+
+def test_source_mode_survives_tier_reload(tmp_path, g):
+    tier = Tier("t", _spec(), _spec())
+    app, client, close = _grounded(tmp_path, g, tier, settings={"source_mode": "web"})
+    try:
+        (tmp_path / "tiers" / "other.toml").write_text(
+            '[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\n', encoding="utf-8")
+        client.post("/v1/tier", {"name": "other"})
+        assert client.get("/v1/status")["source_mode"] == "web"
+        assert app.pages.grounder is not None
+    finally:
+        close()
+
+
+def test_settings_mode_beats_tier_mode_but_invalid_is_ignored(tmp_path, g):
+    tier = Tier("t", _spec(), _spec(), source_mode="reference")
+    app, client, close = _grounded(tmp_path, g, tier, settings={"source_mode": "bogus"})
+    try:
+        assert client.get("/v1/status")["source_mode"] == "reference"
+    finally:
+        close()
+
+
+def test_source_mode_rejects_unknown(tmp_path, g):
+    app, client, close = _grounded(tmp_path, g, Tier("t", _spec(), _spec()))
+    try:
+        for body in ({"mode": "oracle"}, {"mode": 3}, {}):
+            client.post("/v1/source-mode", body, expect=400)
+        assert app.pages.source_mode == "storyteller"
+    finally:
+        close()
+
+
+def test_open_with_source_param(tmp_path, g):
+    kiwix, url = fake_kiwix_server.serve()
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url=url))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        client.sse("/v1/pages/open", {"concept": "Whale", "via": "typed", "source": "bogus"}, expect=400)
+        ev = dict(client.sse("/v1/pages/open", {"concept": "Whale", "via": "typed", "source": "reference"}))
+        assert ev["done"]["source_mode"] == "reference" and ev["sources"]["sources"]
+    finally:
+        close()
+        kiwix.kill()
+
+
+def test_reference_href_built_per_request(tmp_path, g):
+    kiwix, url = fake_kiwix_server.serve()
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url=url))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        ev = dict(client.sse("/v1/pages/open", {"concept": "Whale", "via": "typed", "source": "reference"}))
+        node = ev["node"]["id"]
+        srcs = client.get(f"/v1/pages/{node}")["version"]["sources"]
+        assert srcs[0]["n"] == 1 and srcs[0]["origin"] == "reference"
+        assert srcs[0]["href"] == f"{url}/content/wikipedia_en/Whale"
+        import dataclasses
+        app.tier = dataclasses.replace(app.tier, reference=ReferenceConfig(base_url="http://127.0.0.1:9911"))
+        srcs = client.get(f"/v1/pages/{node}")["version"]["sources"]
+        assert srcs[0]["href"] == "http://127.0.0.1:9911/content/wikipedia_en/Whale"
+        app.tier = dataclasses.replace(app.tier, reference=None)  # no reference now: no link
+        srcs = client.get(f"/v1/pages/{node}")["version"]["sources"]
+        assert srcs[0]["origin"] == "reference" and "href" not in srcs[0]
+    finally:
+        close()
+        kiwix.kill()
+
+
+def test_web_href_only_http(tmp_path, g):
+    app, client, close = _grounded(tmp_path, g, Tier("t", _spec(), _spec()))
+    try:
+        ev = dict(client.sse("/v1/pages/open", {"concept": "Whale", "via": "typed"}))
+        node = ev["node"]["id"]
+        g.add_version(node, "# Whale\nbody text here.", "web", "normal", [
+            Source(1, "Good", "web", "t", url="https://example.com/a", where="example.com"),
+            Source(2, "Bad", "web", "t", url="javascript:alert(1)", where="x"),
+            Source(3, "File", "web", "t", url="file:///etc/passwd", where="y")])
+        srcs = client.get(f"/v1/pages/{node}")["version"]["sources"]
+        assert srcs[0]["href"] == "https://example.com/a"
+        assert "href" not in srcs[1] and "href" not in srcs[2]
+        assert srcs[1]["title"] == "Bad" and srcs[1]["where"] == "x"
+    finally:
+        close()
+
+
+def test_reference_role_in_status_and_404_without_config(tmp_path, g):
+    app, client, close = _grounded(tmp_path, g, Tier("t", _spec(), _spec()))
+    try:
+        assert [x["role"] for x in client.get("/v1/status")["servers"]] == ["text", "fast"]
+        client.post("/v1/servers/reference/start", {}, expect=404)
+        client.post("/v1/servers/reference/stop", {}, expect=404)
+    finally:
+        close()
+
+
+def test_reference_role_listed_and_controllable_over_http(tmp_path, g):
+    kiwix, url = fake_kiwix_server.serve()
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url=url))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        assert [x["role"] for x in client.get("/v1/status")["servers"]] == ["text", "fast", "reference"]
+        assert client.post("/v1/servers/reference/start", {})["role"] == "reference"
+    finally:
+        close()
+        kiwix.kill()
+
+
+def test_reload_tier_stops_old_and_starts_new_reference(tmp_path, g, monkeypatch):
+    from primer.servers import ManagedServer
+
+    calls = []
+    monkeypatch.setattr(ManagedServer, "stop", lambda self: calls.append(("stop", self.role, self.spec.base_url)))
+    monkeypatch.setattr(ManagedServer, "start", lambda self, wait=True: calls.append(("start", self.role, self.spec.base_url)))
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url="http://127.0.0.1:9001"))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        (tmp_path / "tiers" / "other.toml").write_text(
+            '[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\n'
+            '[reference]\nbase_url="http://127.0.0.1:9002"\n', encoding="utf-8")
+        client.post("/v1/tier", {"name": "other"})
+        ref = [c for c in calls if c[1] == "reference"]
+        assert ref == [("stop", "reference", "http://127.0.0.1:9001"),
+                       ("start", "reference", "http://127.0.0.1:9002")]
+    finally:
+        close()
+
+
+def test_status_reference_check_is_bounded(tmp_path, g, monkeypatch):
+    import time as _t
+    from primer import server as server_mod
+    from primer.grounding.kiwix import KiwixClient
+
+    monkeypatch.setattr(server_mod, "STATUS_REFERENCE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(KiwixClient, "books", lambda self: (_t.sleep(5), [])[1])  # a trickling kiwix
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url="http://127.0.0.1:9003"))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        t0 = _t.monotonic()
+        s = client.get("/v1/status")["sources"]["reference"]
+        assert _t.monotonic() - t0 < 2.5
+        assert s == {"available": False, "reason": "The reference server isn't running", "books": []}
+    finally:
+        close()
+
+
+def test_reference_status_is_cached_briefly(tmp_path, g, monkeypatch):
+    kiwix, url = fake_kiwix_server.serve()
+    tier = Tier("t", _spec(), _spec(), reference=ReferenceConfig(base_url=url))
+    app, client, close = _grounded(tmp_path, g, tier)
+    try:
+        calls = []
+        real = type(app)._books
+        monkeypatch.setattr(type(app), "_books", staticmethod(lambda u: calls.append(u) or real(u)))
+        client.get("/v1/status")
+        client.get("/v1/status")
+        assert len(calls) == 1
+        app._forget_reference()
+        client.get("/v1/status")
+        assert len(calls) == 2
+    finally:
+        kiwix.kill()
+        close()
+
+
+def test_managed_reference_passes_book_order(tmp_path):
+    from primer.server import App
+    ref = ReferenceConfig(kiwix_serve="kiwix-serve", zims=("D:/z/b_book.zim", "D:/z/a_book.zim"))
+    assert App.make_grounder(Tier("t", _spec(), _spec(), reference=ref)).book_order == ["b_book", "a_book"]
+    ext = ReferenceConfig(base_url="http://127.0.0.1:9")
+    assert App.make_grounder(Tier("t", _spec(), _spec(), reference=ext)).book_order == []

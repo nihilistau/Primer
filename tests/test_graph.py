@@ -163,3 +163,16 @@ def test_fail_unfinished_media_on_start(g):
 def test_media_requires_existing_node(g):
     with pytest.raises(ValueError):
         g.add_media("nope", "p", "image", "sd15", "x", {})
+
+
+def test_add_version_with_sources_roundtrip(g):
+    from primer.grounding import Source
+    node = g.node_for("Whale", "concept")
+    srcs = [Source(1, "Whale", "reference", "full text", book="wikipedia_en", path="Whale", where="Wikipedia"),
+            Source(2, "Whales", "web", "x", url="https://example.com/w", where="example.com")]
+    v = g.add_version(node.id, "# Whale", "reference", "normal", srcs)
+    got = g.sources(node.id, v.n)
+    assert got == [Source(1, "Whale", "reference", "", "wikipedia_en", "Whale", "", "Wikipedia"),
+                   Source(2, "Whales", "web", "", "", "", "https://example.com/w", "example.com")]
+    v2 = g.add_version(node.id, "# Whale 2", "storyteller", "normal")
+    assert g.sources(node.id, v2.n) == [] and len(g.sources(node.id, v.n)) == 2

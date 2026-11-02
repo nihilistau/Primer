@@ -84,6 +84,18 @@ Notes:
   relative path is relative to the repo root, not the current directory). The
   Engines window then reports "requires an API key" or "rejected the API key" if it is missing
   or wrong.
+- **Extra request fields.** A `[text.extra]` (or `[fast.extra]`) table is added to every chat
+  request to that engine, for options your server understands. Thinking models such as Gemma 4
+  can spend a whole page's token budget thinking, especially on grounded pages with long
+  sources, and then write nothing ("empty response"). With llama-server, turn thinking off:
+
+  ```toml
+  [text.extra]
+  chat_template_kwargs = { enable_thinking = false }
+  ```
+
+  `messages`, `max_tokens`, `temperature`, `stream` and `model` can't be overridden this way.
+  A hosted API may reject fields it doesn't know.
 - Small fast models often paraphrase highlight phrases instead of copying them. Primer snaps
   each phrase to the exact text on the page, so clickable phrases still land.
 
@@ -238,6 +250,79 @@ and VAE tiling on.
 
 Kijai's Wan 2.2 5B Turbo LoRA at 8 steps and CFG 1 took half the time but ignored the prompt, so
 it isn't recommended.
+
+## Grounding
+
+Phase 4 lets a page be written from sources: an offline copy of Wikipedia (**offline
+reference**) or the live web (**web**), as well as the model's own telling (**storyteller**).
+The default for new pages is the tier's `source_mode`, until you choose another in the Engines
+window (remembered in `var/settings.json`). Any page can be rewritten in another mode from its
+badge.
+
+### Offline reference (Kiwix)
+
+1. Download [kiwix-tools](https://download.kiwix.org/release/kiwix-tools/) for your system
+   (on Windows, `kiwix-tools_win-x86_64-3.8.1.zip`) and unpack it anywhere.
+2. Download one or more Wikipedia ZIM files from
+   [download.kiwix.org/zim/wikipedia](https://download.kiwix.org/zim/wikipedia/). Check each
+   against its `.sha256`. Good choices for English:
+
+   | File | Size | Contents |
+   | --- | --- | --- |
+   | `wikipedia_en_top_nopic_<date>.zim` | 2.6 GB | the 50,000 most-read articles, in full, no pictures |
+   | `wikipedia_en_all_mini_<date>.zim` | 13 GB | every article's opening section |
+   | `wikipedia_en_all_nopic_<date>.zim` | 49 GB | every article in full, no pictures |
+
+   Keep them on an internal drive, like the models.
+3. Add `[reference]` to your tier:
+
+   ```toml
+   [reference]
+   kiwix_serve = "D:/Tools/kiwix-tools/kiwix-serve.exe"
+   zims = ["D:/Reference/wikipedia_en_top_nopic_2026-09.zim",
+           "D:/Reference/wikipedia_en_all_mini_2026-09.zim"]
+   port = 8830
+   ```
+
+   Primer starts `kiwix-serve` on `127.0.0.1` when it starts, shows it in the Engines window as
+   the **Reference server**, and stops it on exit. It uses no GPU. To use a `kiwix-serve` you run
+   yourself, give `base_url = "http://127.0.0.1:8830"` instead of `kiwix_serve` and `zims`.
+
+When the same article is in more than one ZIM, the one listed first wins, so list the full
+articles before the "mini" ones. Primer looks for an article whose title matches the page first,
+then runs a full-text search, and reads up to three articles (about 6,000 characters in all).
+Source links open the article in `kiwix-serve`'s own page, in a new browser tab.
+
+### Web
+
+Web mode needs no setup: it searches DuckDuckGo and reads the top pages. To choose another
+search engine, or turn web mode off, add `[web]` to the tier:
+
+```toml
+[web]
+search = "duckduckgo"      # or "searxng", "brave" or "off"
+# searxng_url = "http://127.0.0.1:8888"     # for searxng
+# api_key_file = "var/keys/brave.key"       # for brave
+```
+
+Primer fetches up to five results at once and uses the first three that work, waiting at most
+30 seconds. Only `http`/`https` pages on public addresses are fetched (never `localhost` or
+your local network), at most 2 MB each.
+
+### When there's no source
+
+If the encyclopedia has nothing on the topic, `kiwix-serve` isn't running, or no web page could
+be read, the page is written from the model's own knowledge, recorded as storyteller, and the
+reader shows why.
+
+### Measured grounding speeds
+
+On the same machine, writing with gemma-4-E4B (Q6_K, thinking off) on llama-server:
+
+| Mode | Finding sources | Whole page |
+| --- | --- | --- |
+| Offline reference (`wikipedia_en_top_nopic`) | 0.3 s | about 9 s |
+| Web (DuckDuckGo, three pages) | about 6.5 s | about 15 s |
 
 ## Tests
 

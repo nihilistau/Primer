@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +20,10 @@ from primer.config import (TIERS_DIR, ConfigError, Tier, list_tiers, load_tier, 
 from primer.engines import make_engine
 from primer.gpu import GpuGate
 from primer.graph import clean_typed
+from primer.grounding import MODES
+from primer.grounding.grounder import Grounder
+from primer.grounding.kiwix import KiwixClient, KiwixError
+from primer.grounding.web import make_searcher
 from primer.hardware import Hardware, suggest_tier
 from primer.images.families import FAMILIES, SETTINGS, TWO_STAGE_SETTINGS, VIDEO_SETTINGS
 from primer.images.models import (NETWORK_PATH, ImageModel, ModelStore, StoreCorrupt, animate_model,
@@ -49,6 +54,11 @@ RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a
 MAX_SCAN_FILES = 2000
 MODEL_FIELDS = ("id", "name", "family", "files", "settings", "loras")  # all a client may set on a model
 RESUME_POLL_S = 0.1
+STATUS_REFERENCE_TIMEOUT_S = 2.0  # /v1/status asks kiwix-serve once, and must stay quick
+REFERENCE_STATUS_TTL_S = 5.0
+NO_REFERENCE = "No [reference] section in this tier"
+REFERENCE_DOWN = "The reference server isn't running"
+WEB_OFF = "Web search is off in this tier"
 
 
 class TextPause:
@@ -134,10 +144,15 @@ class App:
     text_pause: TextPause | None = None
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
 
     def __post_init__(self) -> None:
         """Fill in what wasn't passed: the model store, a gate over these servers (also given
         to the pages when they have none) and the image service."""
+        if self.pages.grounder is None:
+            self.pages.grounder = self.make_grounder(self.tier)
+        self.pages.source_mode = self.saved_source_mode() or self.tier.source_mode
         if self.store is None:
             self.store = ModelStore(self.var_dir)
         if self.gate is None:
@@ -154,6 +169,33 @@ class App:
         return ImageService(self.graph, self.store, tier.images, fast, gate,
                             self.var_dir / "media", **extra)
 
+    @staticmethod
+    def make_grounder(tier: Tier) -> Grounder:
+        """A managed reference lists its books first-wins in zims order (kiwix-serve names a
+        book after its ZIM file, without .zim); an external server's order is left to it."""
+        ref = tier.reference
+        kiwix = KiwixClient(ref.url) if ref is not None else None
+        order = [Path(z).stem for z in ref.zims] if ref is not None and ref.managed else None
+        return Grounder(kiwix, make_searcher(tier.web), book_order=order)
+
+    def saved_source_mode(self) -> str | None:
+        """The reader's saved default mode (settings.json), if it is a valid one."""
+        try:
+            mode = read_settings(self.var_dir).get("source_mode")
+        except ConfigError:
+            return None
+        return mode if mode in MODES else None
+
+    def set_source_mode(self, mode: str) -> None:
+        """Make `mode` the default for new pages and remember it across restarts and tiers."""
+        with self._lock:
+            self.pages.source_mode = mode
+            try:
+                settings = read_settings(self.var_dir)
+            except ConfigError:
+                settings = {}
+            write_settings(self.var_dir, {**settings, "source_mode": mode})
+
     def shutdown_images(self) -> None:
         """Stop image jobs and sd-server without restarting text servers that are about to stop."""
         if self.text_pause is not None:
@@ -163,6 +205,7 @@ class App:
     def reload_tier(self, name: str) -> None:
         """Switch tiers. Raises ConfigError, changing nothing, if the tier is unknown or invalid."""
         tier = load_tier(name, self.tiers_dir)
+        self._forget_reference()
         with self._lock:
             self.shutdown_images()
             self.servers.stop_all()
@@ -170,7 +213,9 @@ class App:
             servers = ServerManager(tier)
             text_pause, gate = make_gate(tier, servers)
             fast = make_engine(tier.fast)
-            pages = PageService(self.graph, make_engine(tier.text), fast, tier.source_mode, gate)
+            mode = self.saved_source_mode() or tier.source_mode
+            pages = PageService(self.graph, make_engine(tier.text), fast, mode, gate,
+                                self.make_grounder(tier))
             images = self.make_images(tier, gate, fast)
             text_pause.release_gpu = images.release_gpu
             self.tier, self.pages, self.servers = tier, pages, servers
@@ -189,16 +234,83 @@ class App:
         lock so it can't act on a ServerManager that a concurrent tier switch discards."""
         with self._lock:
             getattr(self.servers, action)(role)
+            self._forget_reference()
             return next(s for s in self.servers.statuses() if s["role"] == role)
 
     def status(self) -> dict:
         return {"tier": self.tier.name, "tiers": list_tiers(self.tiers_dir),
                 "suggested_tier": suggest_tier(self.hardware),
                 "hardware": asdict(self.hardware), "servers": self.servers.statuses(),
-                "source_mode": self.tier.source_mode, "gpu_mode": self.tier.gpu_mode,
+                "source_mode": self.pages.source_mode, "sources": self.sources_status(),
+                "gpu_mode": self.tier.gpu_mode,
                 "images": self.images.server_status(), "image_available": self.image_available(),
                 "video_available": self.image_available("video"),
                 "animate_available": self.animate_available(), "gpu": self.gate.state()}
+
+    def sources_status(self) -> dict:
+        """Which source modes can be used now, and why not. One quick call to kiwix-serve,
+        bounded in total (a server that trickles bytes can't hold /v1/status)."""
+        tier, pages = self.tier, self.pages
+        books: list[dict] = []
+        if tier.reference is None:
+            ref_ok, ref_reason = False, NO_REFERENCE
+        else:
+            books = self._cached_books(tier.reference.url)
+            ref_ok = books is not None
+            ref_reason = "" if ref_ok else REFERENCE_DOWN
+            books = books or []
+        grounder = pages.grounder
+        web_ok = grounder is not None and grounder.searcher is not None
+        return {"storyteller": {"available": True, "reason": ""},
+                "reference": {"available": ref_ok, "reason": ref_reason, "books": books},
+                "web": {"available": web_ok, "reason": "" if web_ok else WEB_OFF,
+                        "engine": tier.web.search if web_ok else ""}}
+
+    def _forget_reference(self) -> None:
+        with self._ref_lock:
+            self._ref_cache = None
+
+    def _cached_books(self, url: str) -> list[dict] | None:
+        """_books, remembered for REFERENCE_STATUS_TTL_S (status is polled every couple of
+        seconds, and a silent kiwix-serve would cost the full deadline each time)."""
+        with self._ref_lock:
+            hit = self._ref_cache
+            if hit is not None and hit[1] == url and time.monotonic() < hit[0]:
+                return hit[2]
+            books = self._books(url)
+            self._ref_cache = (time.monotonic() + REFERENCE_STATUS_TTL_S, url, books)
+            return books
+
+    @staticmethod
+    def _books(url: str) -> list[dict] | None:
+        """kiwix-serve's books, or None when it doesn't answer within the status deadline."""
+        box: list = []
+
+        def ask() -> None:
+            try:
+                box.append(KiwixClient(url, STATUS_REFERENCE_TIMEOUT_S).books())
+            except KiwixError:
+                pass
+
+        t = threading.Thread(target=ask, daemon=True)
+        t.start()
+        t.join(STATUS_REFERENCE_TIMEOUT_S)
+        return box[0] if box else None
+
+    def page_sources(self, node_id: str, n: int) -> list[dict]:
+        """A version's sources for the reader. Reference links use the reference url of the
+        current tier (kiwix-serve may have moved); web links only if they are http(s)."""
+        ref = self.tier.reference
+        kiwix = KiwixClient(ref.url) if ref is not None else None
+        out = []
+        for s in self.graph.sources(node_id, n):
+            item = {"n": s.n, "title": s.title, "origin": s.origin, "where": s.where}
+            if s.origin == "reference" and kiwix is not None and s.book and s.path:
+                item["href"] = kiwix.href(s.book, s.path)
+            elif s.origin == "web" and s.url.lower().startswith(("http://", "https://")):
+                item["href"] = s.url
+            out.append(item)
+        return out
 
     def image_available(self, kind: str = "image") -> dict:
         ok, reason = self.images.available(kind)
@@ -369,7 +481,9 @@ def _make_handler(app: App):
                         self._json({"error": "not found"}, 404)
                     else:
                         node = page["node"]
-                        self._json({"node": asdict(node), "version": asdict(page["version"]),
+                        version = {**asdict(page["version"]),
+                                   "sources": app.page_sources(node.id, page["version"].n)}
+                        self._json({"node": asdict(node), "version": version,
                                     "versions": page["versions"], "highlights": page["highlights"],
                                     "media": [asdict(m) for m in app.graph.media_for_node(node.id)]})
                 elif path == "/v1/image-models":
@@ -399,6 +513,12 @@ def _make_handler(app: App):
                 body = self._body()
                 if path == "/v1/tier":
                     self._set_tier(body)
+                elif path == "/v1/source-mode":
+                    mode = body.get("mode")
+                    if not isinstance(mode, str) or mode not in MODES:
+                        raise _BadRequest(f"mode must be one of {MODES}")
+                    app.set_source_mode(mode)
+                    self._json(app.status())
                 elif path == "/v1/pages/open":
                     self._open(body)
                 elif path.startswith("/v1/servers/"):
@@ -472,14 +592,16 @@ def _make_handler(app: App):
             if depth not in DEPTHS:
                 raise _BadRequest(f"depth must be one of {DEPTHS}")
             concept, phrase = body.get("concept", ""), body.get("phrase", "")
-            from_id = body.get("from_id")
+            from_id, source = body.get("from_id"), body.get("source")
+            if source is not None and (not isinstance(source, str) or source not in MODES):
+                raise _BadRequest(f"source must be one of {MODES}")
             if not isinstance(concept, str) or not isinstance(phrase, str):
                 raise _BadRequest("concept and phrase must be strings")
             if any(v is not None and not isinstance(v, str) for v in (from_id, node_id)):
                 raise _BadRequest("from_id and node_id must be strings")
             return OpenRequest(concept=concept, via=via, from_id=from_id, phrase=phrase,
                                depth=depth, regenerate=bool(body.get("regenerate", False)),
-                               node_id=node_id)
+                               node_id=node_id, source=source)
 
         def _open(self, body: dict) -> None:
             req = self._open_request(body)

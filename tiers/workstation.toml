@@ -35,3 +35,23 @@ launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]
 # [images]
 # sd_server = "C:/path/to/stable-diffusion.cpp/sd-server.exe"
 # port = 8820
+
+# Offline reference (a Primer-managed kiwix-serve over ZIM files). Uncomment and edit; the
+# book listed first wins when the same article is in several. Until then the "offline
+# reference" source shows as unavailable. Use base_url instead of kiwix_serve + zims for an
+# external kiwix-serve.
+# [reference]
+# kiwix_serve = "C:/path/to/kiwix-serve.exe"
+# zims = ["C:/path/to/wikipedia_en_top_nopic.zim", "C:/path/to/wikipedia_en_all_mini.zim"]
+# port = 8830
+
+# ALTERNATIVELY, instead of the block above (not together with it), use an already-running
+# external kiwix-serve:
+# [reference]
+# base_url = "http://127.0.0.1:8830"
+
+# Web search for the "web" source: "duckduckgo" (default), "searxng", "brave" or "off".
+# [web]
+# search = "duckduckgo"
+# searxng_url = "http://127.0.0.1:8888"
+# api_key_file = "var/keys/brave.key"

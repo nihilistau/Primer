@@ -47,6 +47,9 @@ def test_shutdown_stops_servers_even_if_page_shutdown_is_interrupted(tmp_path, m
             calls.append("stop_all")
 
     class Pages:
+        grounder = object()
+        source_mode = "storyteller"
+
         def __init__(self, *a, **kw):
             pass
 

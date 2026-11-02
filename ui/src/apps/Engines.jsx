@@ -2,6 +2,7 @@
  * how the book is sourced. Polls every 2 s. */
 import { useState } from 'react'
 import * as api from '../api.js'
+import { rewriteOptions } from '../reader/sourceMode.js'
 import { Button, Chip, Select } from '../kit/parts.jsx'
 import { Body, usePoll } from './panel.jsx'
 import './apps.css'
@@ -18,7 +19,7 @@ function Server({ s, busy, onAction }) {
   return (
     <div className="en-server">
       <div className="en-server-top">
-        <span className="en-role">{s.role}</span>
+        <span className="en-role">{s.role === 'reference' ? 'Reference server' : s.role}</span>
         <Chip tone={TONE[s.state] || 'neutral'} dot>{s.state}</Chip>
         <span className="en-actions">
           <Button size="sm" disabled={busy || ['ready', 'starting', 'external'].includes(s.state)}
@@ -89,9 +90,20 @@ export default function Engines() {
             </section>
             <section className="en-sec">
               <h3 className="en-h">Modes</h3>
-              <div className="en-tier"><span>Source</span><Chip>{st.source_mode}</Chip></div>
-              <div className="en-tier"><span>GPU</span><Chip>{st.gpu_mode}</Chip></div>
-              <div className="en-note">configurable per tier</div>
+              <div className="en-modes">
+              <div className="en-tier"><span>Source</span>
+                <Select aria-label="Source" value={st.source_mode} disabled={busy}
+                        onChange={(e) => act(() => api.setSourceMode(e.target.value))}>
+                  {rewriteOptions(st).map(o => (
+                    <option key={o.mode} value={o.mode} disabled={o.disabled && o.mode !== st.source_mode}
+                            title={o.disabled ? o.reason : undefined}>
+                      {o.disabled ? `${o.label} (${o.reason})` : o.label}
+                    </option>
+                  ))}
+                </Select></div>
+              <div className="en-tier"><span>GPU</span><Chip>{st.gpu_mode}</Chip>
+                <span className="en-note">configurable per tier</span></div>
+              </div>
             </section>
           </>
         )}

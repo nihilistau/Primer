@@ -11,6 +11,7 @@ from typing import Iterator, Literal
 from .engines import EngineError
 from .gpu import GpuGate
 from .graph import Card, Graph, Node, Version, clean_typed
+from .grounding import MODES, Source
 from .prompts import (branch_messages, highlight_messages, page_messages, parse_branches,
                       parse_highlights, sentence_around)
 
@@ -18,6 +19,7 @@ log = logging.getLogger(__name__)
 
 _PAGE_TOKENS = {"normal": 900, "deeper": 2000, "simpler": 500}
 _EXCERPT_CHARS = 1200
+_OWN = "written from the model's own knowledge."
 
 
 @dataclass
@@ -29,16 +31,18 @@ class OpenRequest:
     depth: Literal["normal", "deeper", "simpler"] = "normal"
     regenerate: bool = False
     node_id: str | None = None
+    source: str | None = None
 
 
 class PageService:
     def __init__(self, graph: Graph, text, fast, source_mode: str = "storyteller",
-                 gate: GpuGate | None = None):
+                 gate: GpuGate | None = None, grounder=None):
         self.graph = graph
         self.gate = gate  # when set, page text generation takes turns with image jobs
         self.text = text
         self.fast = fast
         self.source_mode = source_mode
+        self.grounder = grounder
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
         self._queue: queue.Queue = queue.Queue()
@@ -59,14 +63,37 @@ class PageService:
             yield ("error", {"message": node})
             return
 
+        latest = self.graph.latest_version(node.id)
+        serve_cached = latest is not None and not req.regenerate and req.depth == "normal"
+        # Advisory: the badge can show this early; the `done` event carries the authoritative mode.
+        mode = latest.source_mode if serve_cached else self._mode(req)
         yield ("node", {"id": node.id, "title": node.title, "kind": node.kind, "parent_id": node.parent_id,
-                      "source_mode": self.source_mode})
+                      "source_mode": mode})
         with self._lock_for(node.id):
             latest = self.graph.latest_version(node.id)
+            note = ""
             if latest and not req.regenerate and req.depth == "normal":
                 yield ("delta", {"text": latest.markdown})
                 version, cached = latest, True
             else:
+                mode = self._mode(req)
+                sources: list[Source] = []
+                if mode != "storyteller":
+                    if self.grounder is None:
+                        note = (f"Offline reference isn't set up in this tier; {_OWN}" if mode == "reference"
+                                else f"Web search is off in this tier; {_OWN}")
+                    else:
+                        for ev in self._ground(mode, node.title):
+                            if ev[0] == "result":
+                                sources, note = ev[1]
+                            else:
+                                yield ev
+                    if note:
+                        mode, sources = "storyteller", []
+                    elif sources:
+                        yield ("sources", {"sources": [
+                            {"n": s.n, "title": s.title, "origin": s.origin, "where": s.where}
+                            for s in sources]})
                 chunks: list[str] = []
                 # Lock order: per-node lock, then the GPU gate; released in reverse.
                 turn = self.gate.page() if self.gate else nullcontext()
@@ -78,7 +105,7 @@ class PageService:
                         raise
                 with turn:
                     try:
-                        for piece in self.text.stream(self._messages(node, req.depth),
+                        for piece in self.text.stream(self._messages(node, req.depth, sources),
                                                       max_tokens=_PAGE_TOKENS[req.depth], temperature=0.7):
                             chunks.append(piece)
                             yield ("delta", {"text": piece})
@@ -89,10 +116,10 @@ class PageService:
                 if not markdown.strip():
                     yield ("error", {"message": "empty response"})
                     return
-                version = self.graph.add_version(node.id, markdown, self.source_mode, req.depth)
+                version = self.graph.add_version(node.id, markdown, mode, req.depth, sources)
                 cached = False
             yield ("done", {"n": version.n, "source_mode": version.source_mode,
-                            "depth": version.depth, "cached": cached})
+                            "depth": version.depth, "cached": cached, "note": note})
             phrases = self._highlights(node.id, version)
         yield ("highlights", {"phrases": phrases})
         for phrase in phrases:
@@ -142,7 +169,31 @@ class PageService:
         self.graph.add_edge(req.from_id, node.id, req.phrase or concept, req.via)
         return node
 
-    def _messages(self, node: Node, depth: str) -> list[dict]:
+    def _mode(self, req: OpenRequest) -> str:
+        """The mode to write in; an unknown request mode is storyteller (the server rejects it earlier)."""
+        if req.source is None:
+            return self.source_mode
+        return req.source if req.source in MODES else "storyteller"
+
+    def _ground(self, mode: str, query: str):
+        """Yield ("grounding", ...) events as retrieval reports, then ("result", (sources, note))."""
+        box: queue.Queue = queue.Queue()
+        result: list = []
+
+        def run() -> None:
+            try:
+                result.append(self.grounder.gather(mode, query, box.put))
+            except Exception as exc:  # gather should not raise; never let it break the page
+                log.exception("grounder failed")
+                result.append(([], f"Grounding failed ({exc}); {_OWN}"))
+            box.put(None)
+
+        threading.Thread(target=run, name="primer-ground", daemon=True).start()
+        while (status := box.get()) is not None:
+            yield ("grounding", {"status": status})
+        yield ("result", result[0])
+
+    def _messages(self, node: Node, depth: str, sources=()) -> list[dict]:
         parent_title = parent_excerpt = None
         if node.kind == "context" and node.parent_id:
             parent = self.graph.get_node(node.parent_id)
@@ -153,7 +204,8 @@ class PageService:
                     parent_excerpt = pv.markdown[:_EXCERPT_CHARS]
         recent = [t for t in self.graph.recent_titles(30) if t != node.title]
         return page_messages(node.title, kind=node.kind, parent_title=parent_title,
-                             parent_excerpt=parent_excerpt, recent=recent, depth=depth)
+                             parent_excerpt=parent_excerpt, recent=recent, depth=depth,
+                             sources=sources)
 
     def _highlights(self, node_id: str, version: Version) -> list[str]:
         stored = self.graph.get_highlights(node_id, version.n)

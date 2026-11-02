@@ -1,3 +1,4 @@
+import os
 import socket
 import sys
 from pathlib import Path
@@ -449,3 +450,73 @@ def test_pause_without_a_pause_command_stops(tmp_path):
     s.start()
     s.pause()
     assert s.status()["state"] == "stopped"
+
+
+# --- the reference (kiwix-serve) role ---
+
+def _ref_tier(**kw):
+    from primer.config import ReferenceConfig
+    spec = EngineSpec("openai", "http://x")
+    return Tier("t", spec, spec, reference=ReferenceConfig(**kw))
+
+
+def test_reference_role_launch_args(monkeypatch):
+    from primer import servers as servers_mod
+
+    seen = []
+
+    class FakeProc:
+        pid = 4242
+        returncode = None
+
+        def __init__(self, argv, **kw):
+            seen.append(list(argv))
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(servers_mod.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(servers_mod.children, "adopt", lambda *a, **k: None)
+    monkeypatch.setattr(servers_mod.children, "release", lambda *a, **k: None)
+    tier = _ref_tier(kiwix_serve="C:/k/kiwix-serve.exe", zims=("D:/z/a.zim", "b.zim"), port=8831)
+    m = ServerManager(tier)
+    ref = m._servers["reference"]
+    assert ref.spec.managed and not ref.spec.gpu
+    assert m.gpu_servers() == []
+    ref._health = lambda: bool(seen)  # unhealthy until the launch has happened
+    ref.start(wait=True)
+    assert seen == [["C:/k/kiwix-serve.exe", "--address=127.0.0.1", "--port=8831",
+                     os.path.normpath("D:/z/a.zim"), "b.zim"]]  # kiwix-serve on Windows needs D:\z
+    assert ref.status()["state"] == "ready"
+    ref.stop()
+
+
+def test_external_reference_is_not_managed():
+    m = ServerManager(_ref_tier(base_url="http://127.0.0.1:9999"))
+    ref = m._servers["reference"]
+    assert not ref.spec.managed and ref.spec.base_url == "http://127.0.0.1:9999"
+    st = next(s for s in m.statuses() if s["role"] == "reference")
+    assert st["state"] == "stopped"
+
+
+def test_no_reference_role_without_config():
+    spec = EngineSpec("openai", "http://x")
+    m = ServerManager(Tier("t", spec, spec))
+    assert [s["role"] for s in m.statuses()] == ["text", "fast"]
+    with pytest.raises(ValueError):
+        m.start("reference")
+
+
+def test_reference_role_listed_and_controllable():
+    m = ServerManager(_ref_tier(base_url="http://127.0.0.1:9999"))
+    assert [s["role"] for s in m.statuses()] == ["text", "fast", "reference"]
+    m.stop("reference")

@@ -1,6 +1,7 @@
 """Launch, health-check and stop the model servers a tier manages."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -9,8 +10,9 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from primer import children
-from primer.config import REPO_ROOT, EngineSpec, Tier
+from primer.config import REPO_ROOT, EngineSpec, ReferenceConfig, Tier
 from primer.engines import make_engine
+from primer.grounding.kiwix import KiwixClient
 
 POLL_S = 0.5
 STOP_WAIT_S = 5
@@ -219,15 +221,28 @@ class ManagedServer:
                 "model": self.spec.model, "pid": pid, "reason": reason}
 
 
-class ServerManager:
-    ROLES = ("text", "fast")
+def reference_spec(ref: ReferenceConfig) -> EngineSpec:
+    """kiwix-serve as an EngineSpec (only launch, stop and base_url matter: health is the catalog)."""
+    # normpath: kiwix-serve on Windows can't open a ZIM given as D:/x/y.zim
+    launch = (ref.kiwix_serve, "--address=127.0.0.1", f"--port={ref.port}", *map(os.path.normpath, ref.zims)) if ref.managed else ()
+    return EngineSpec("openai", ref.url, managed=ref.managed, launch=launch, ready_timeout_s=60.0)
 
+
+class ServerManager:
     def __init__(self, tier: Tier):
         self._servers: dict[str, ManagedServer] = {"text": ManagedServer("text", tier.text)}
         if tier.fast == tier.text:
             self._servers["fast"] = self._servers["text"]
         else:
             self._servers["fast"] = ManagedServer("fast", tier.fast)
+        if tier.reference is not None:  # never a GPU server
+            spec = reference_spec(tier.reference)
+            self._servers["reference"] = ManagedServer("reference", spec, health=KiwixClient(spec.base_url).health)
+
+    @property
+    def ROLES(self) -> tuple[str, ...]:
+        """The roles of this tier: text, fast, and reference when it has one."""
+        return tuple(self._servers)
 
     def _unique(self) -> list[ManagedServer]:
         return list({id(s): s for s in self._servers.values()}.values())

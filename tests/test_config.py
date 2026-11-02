@@ -172,3 +172,64 @@ def test_lm_studio_tiers_unload_models_to_pause():
         t = load_tier(n).text
         assert t.gpu and t.launch == ("lms", "server", "start")
         assert t.pause == ("lms", "unload", "--all")
+
+
+def test_reference_config_requires_server_or_url(tmp_path):
+    for i, body in enumerate(['', 'kiwix_serve="k"\n', 'kiwix_serve="k"\nzims=["a.zim"]\nbase_url="http://h"\n']):
+        (tmp_path / f"r{i}.toml").write_text(_TEXT + "[reference]\n" + body)
+        with pytest.raises(ConfigError, match="reference"):
+            load_tier(f"r{i}", tiers_dir=tmp_path)
+    (tmp_path / "ok.toml").write_text(_TEXT + '[reference]\nkiwix_serve="k"\nzims=["a.zim","b.zim"]\n')
+    ref = load_tier("ok", tiers_dir=tmp_path).reference
+    assert ref.managed and ref.zims == ("a.zim", "b.zim")
+    (tmp_path / "ext.toml").write_text(_TEXT + '[reference]\nbase_url="http://h:1"\n')
+    assert not load_tier("ext", tiers_dir=tmp_path).reference.managed
+    assert load_tier("ext", tiers_dir=tmp_path).reference.url == "http://h:1"
+
+
+def test_reference_url_defaults_to_port(tmp_path):
+    (tmp_path / "p.toml").write_text(_TEXT + '[reference]\nkiwix_serve="k"\nzims=["a.zim"]\n')
+    assert load_tier("p", tiers_dir=tmp_path).reference.url == "http://127.0.0.1:8830"
+    (tmp_path / "q.toml").write_text(_TEXT + '[reference]\nkiwix_serve="k"\nzims=["a"]\nport=9000\n')
+    assert load_tier("q", tiers_dir=tmp_path).reference.url == "http://127.0.0.1:9000"
+    assert load_tier("q", tiers_dir=tmp_path).web.search == "duckduckgo"
+    assert load_tier("q", tiers_dir=tmp_path).reference.managed
+
+
+def test_web_config_needs_url_or_key(tmp_path):
+    for i, body in enumerate(['search="searxng"', 'search="brave"', 'search="bing"']):
+        (tmp_path / f"w{i}.toml").write_text(_TEXT + "[web]\n" + body + "\n")
+        with pytest.raises(ConfigError, match="web"):
+            load_tier(f"w{i}", tiers_dir=tmp_path)
+    (tmp_path / "s.toml").write_text(_TEXT + '[web]\nsearch="searxng"\nsearxng_url="http://s"\n')
+    assert load_tier("s", tiers_dir=tmp_path).web.searxng_url == "http://s"
+    (tmp_path / "b.toml").write_text(_TEXT + '[web]\nsearch="brave"\napi_key_file="k.txt"\n')
+    assert load_tier("b", tiers_dir=tmp_path).web.api_key_file == "k.txt"
+    (tmp_path / "o.toml").write_text(_TEXT + '[web]\nsearch="off"\n')
+    assert load_tier("o", tiers_dir=tmp_path).web.search == "off"
+
+
+def test_tier_source_mode_validated(tmp_path):
+    (tmp_path / "m.toml").write_text('source_mode="web"\n' + _TEXT)
+    assert load_tier("m", tiers_dir=tmp_path).source_mode == "web"
+    (tmp_path / "n.toml").write_text('source_mode="oracle"\n' + _TEXT)
+    with pytest.raises(ConfigError, match="source_mode"):
+        load_tier("n", tiers_dir=tmp_path)
+
+
+def test_engine_extra_table(tmp_path):
+    (tmp_path / "x.toml").write_text(
+        'name="x"\nfast="text"\n[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\n'
+        '[text.extra]\nchat_template_kwargs = { enable_thinking = false }\n')
+    t = load_tier("x", tiers_dir=tmp_path)
+    assert t.text.extra == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert load_tier("hybrid").text.extra == {}
+    (tmp_path / "y.toml").write_text(
+        'name="y"\nfast="text"\n[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\nextra = 3\n')
+    with pytest.raises(ConfigError, match="extra"):
+        load_tier("y", tiers_dir=tmp_path)
+    (tmp_path / "z.toml").write_text(
+        'name="z"\nfast="text"\n[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\n'
+        '[text.extra]\nmessages = []\n')
+    with pytest.raises(ConfigError, match="messages"):
+        load_tier("z", tiers_dir=tmp_path)

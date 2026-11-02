@@ -219,3 +219,10 @@ def test_only_loopback_hosts_bypass_proxies(url, direct, dead_proxy):
         assert not any(h.proxies for h in handlers)  # an empty ProxyHandler isn't even kept
     else:  # the hosted tier may need a corporate proxy: the environment's proxies apply
         assert handlers and handlers[0].proxies.get("https") == "http://127.0.0.1:9"
+
+
+def test_extra_fields_merged_into_the_request(fake_server):
+    spec = EngineSpec("openai", fake_server.url, extra={"chat_template_kwargs": {"enable_thinking": False}})
+    make_engine(spec).complete(MSG)
+    assert fake_server.last_body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert fake_server.last_body["messages"] == MSG

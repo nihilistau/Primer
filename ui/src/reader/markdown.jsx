@@ -4,6 +4,7 @@
 import { Fragment } from 'react'
 import { marked } from 'marked'
 import { splitByPhrases } from './highlight.js'
+import { splitCitations, safeHref } from './citations.js'
 
 function Phrase({ phrase, text, onPhrase }) {
   const pick = (e, newWindow) => onPhrase && onPhrase({ phrase, rect: e.currentTarget.getBoundingClientRect(), newWindow })
@@ -18,10 +19,27 @@ function Phrase({ phrase, text, onPhrase }) {
   )
 }
 
-export function Markdown({ source, phrases = [], onPhrase }) {
+/* [n] -> a superscript link to source n; a source with no href is just the number. */
+function Cite({ source, n }) {
+  return (
+    <sup className="rd-cite">
+      {source && safeHref(source.href)
+        ? <a href={safeHref(source.href)} target="_blank" rel="noopener noreferrer" title={source.title}>{n}</a>
+        : n}
+    </sup>
+  )
+}
+
+export function Markdown({ source, phrases = [], sources = [], onPhrase }) {
   const seen = new Set()
-  const text = (s, key) => splitByPhrases(s, phrases, seen).map((part, i) =>
+  const phrased = (s, key) => splitByPhrases(s, phrases, seen).map((part, i) =>
     typeof part === 'string' ? part : <Phrase key={key + '.' + i} {...part} onPhrase={onPhrase} />)
+  // citations are split first, then phrases are matched within each stretch of plain text
+  const text = (s, key) => sources.length
+    ? splitCitations(s, sources.length).map((part, i) => typeof part === 'string'
+        ? <Fragment key={key + '.c' + i}>{phrased(part, key + '.c' + i)}</Fragment>
+        : <Cite key={key + '.c' + i} n={part.n} source={sources.find(x => x.n === part.n)} />)
+    : phrased(s, key)
 
   const inline = (tokens = [], key = '') => tokens.map((t, i) => {
     const k = key + i

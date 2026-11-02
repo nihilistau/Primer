@@ -65,3 +65,22 @@
 
 .rd-imgerr { padding: 0 var(--sp-3); border-top: 1px solid var(--hair); background: var(--surface-2); }
 .rd-media-err { margin-top: var(--sp-2); font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--err); }
+
+/* grounding: status line, note, citations, sources, the badge menu */
+.rd-note { padding: var(--sp-1) var(--sp-3); border-bottom: 1px solid var(--hair);
+  font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-3); }
+.rd-grounding { margin-bottom: var(--sp-3); font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-3); }
+.rd-cite { font: 400 .65em/1 var(--font-ui); margin-left: 1px; }
+.rd-cite a { color: var(--accent); text-decoration: none; }
+.rd-cite a:hover, .rd-cite a:focus-visible { color: var(--accent-hover); text-decoration: underline; }
+.rd-sources { margin-top: var(--sp-5); padding-top: var(--sp-3); border-top: 1px solid var(--hair); }
+.rd-sources h3 { margin: 0 0 var(--sp-2); font: 600 var(--fs-13)/1.3 var(--font-ui); color: var(--text-2); }
+.rd-sources ol { margin: 0; padding-left: 1.6em; font: 400 var(--fs-13)/1.5 var(--font-ui); color: var(--text-1); }
+.rd-sources a { color: var(--accent); }
+.rd-where { color: var(--text-3); margin-left: var(--sp-2); }
+.rd-badge { position: relative; display: inline-block; }
+.rd-menu { position: absolute; top: 100%; left: 0; z-index: 10; margin-top: 4px; min-width: 190px;
+  display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2);
+  background: var(--surface-2); border: 1px solid var(--hair-strong); border-radius: var(--r-sm); }
+.rd-menu-h { font: 600 var(--fs-12)/1.3 var(--font-ui); color: var(--text-3); padding: 0 var(--sp-1) var(--sp-1); }
+.rd-menu button { text-align: left; }

@@ -42,7 +42,7 @@ class OpenAICompatEngine:
         return headers
 
     def _body(self, messages, max_tokens, temperature, stream) -> dict:
-        body = {"messages": messages, "max_tokens": max_tokens,
+        body = {**self.spec.extra, "messages": messages, "max_tokens": max_tokens,
                 "temperature": temperature, "stream": stream}
         if self.spec.model:
             body["model"] = self.spec.model

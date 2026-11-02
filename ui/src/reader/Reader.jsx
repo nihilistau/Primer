@@ -12,11 +12,13 @@ import { Markdown } from './markdown.jsx'
 import { createHistory } from './history.js'
 import { routePrompt, imageButton, imageChecking, imageCheckFailed, thumbState } from './imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
+import { safeHref } from './citations.js'
+import { badgeLabel, rewriteOptions } from './sourceMode.js'
 import { retryBody } from './retry.js'
 import { streamEndError } from './streamEnd.js'
 import './reader.css'
 
-const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '',
+const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '', sources: [], grounding: '', note: '',
                 phrases: [], streaming: false, error: '', request: null, waiting: '' }
 
 /* The pick seam. A phrase click or a 1-80 character selection calls
@@ -59,22 +61,28 @@ export default function Reader({ windowId, start, onPick }) {
               title: mode === 'replace' ? hist.current.current()?.title || '' : '',
               streaming: true, request: body })
     const ended = { done: false, error: false }
+    let nodeId = body.node_id || null  // nodeRef only catches up on render; a cached page ends first
     try {
       await api.openPage(body, ({ event, data }) => {
         if (!live()) return
         if (event === 'done' || event === 'error') ended[event] = true
         if (event === 'node') {
+          nodeId = data.id
           const entry = { nodeId: data.id, title: data.title }
           if (mode === 'replace' || hist.current.current()?.nodeId === data.id) hist.current.replace(entry)
           else hist.current.push(entry)
           setView(v => ({ ...v, nodeId: data.id, title: data.title, sourceMode: data.source_mode || v.sourceMode }))
           tick(x => x + 1)
+        } else if (event === 'grounding') {
+          setView(v => ({ ...v, grounding: data.status || '' }))
+        } else if (event === 'sources') {
+          setView(v => ({ ...v, sources: data.sources || [], grounding: '' }))
         } else if (event === 'waiting') {
           setView(v => (v.markdown ? v : { ...v, waiting: data.reason || 'paused for a picture or video' }))
         } else if (event === 'delta') {
           setView(v => ({ ...v, waiting: '', markdown: v.markdown + data.text }))
         } else if (event === 'done') {
-          setView(v => ({ ...v, n: data.n, depth: data.depth, sourceMode: data.source_mode }))
+          setView(v => ({ ...v, n: data.n, depth: data.depth, sourceMode: data.source_mode, note: data.note || '', grounding: '' }))
         } else if (event === 'highlights') {
           setView(v => ({ ...v, phrases: data.phrases || [] }))
         } else if (event === 'error') {
@@ -87,7 +95,18 @@ export default function Reader({ windowId, start, onPick }) {
       if (e.name === 'AbortError' || !live()) return
       setView(v => ({ ...v, error: e.message || 'The page could not be written.' }))
     }
-    if (live()) setView(v => ({ ...v, streaming: false, waiting: '' }))
+    if (live()) setView(v => ({ ...v, streaming: false, waiting: '', grounding: '' }))
+    // the stream's sources carry no links; reload them from the saved page
+    if (live() && ended.done) refreshSources(nodeId, ac)
+  }
+
+  const refreshSources = async (id, ac) => {
+    if (!id) return
+    try {
+      const p = await api.page(id)
+      if (abort.current !== ac || p.node.id !== id) return
+      setView(v => ({ ...v, sources: p.version.sources || v.sources }))
+    } catch { /* keep the unlinked list */ }
   }
 
   /* Show an existing page (back/forward): loaded from storage, never regenerated. */
@@ -101,7 +120,7 @@ export default function Reader({ windowId, start, onPick }) {
       if (abort.current !== ac) return
       setView({ ...EMPTY, nodeId: p.node.id, title: p.node.title, request: { node_id: entry.nodeId },
                 markdown: p.version.markdown, n: p.version.n, depth: p.version.depth,
-                sourceMode: p.version.source_mode, phrases: p.highlights || [] })
+                sourceMode: p.version.source_mode, sources: p.version.sources || [], phrases: p.highlights || [] })
     } catch (e) {
       if (abort.current !== ac) return
       setView(v => ({ ...v, error: e.message || 'The page could not be loaded.' }))
@@ -234,7 +253,35 @@ export default function Reader({ windowId, start, onPick }) {
 
   const retry = () => run(retryBody(view.request, view.nodeId),
                           view.nodeId ? 'replace' : 'push')
-  const reload = (extra) => run({ node_id: view.nodeId, ...extra }, 'replace')
+  // a rewrite keeps the page's own source mode, so the badge doesn't flip to the default
+  const reload = (extra) => run({ node_id: view.nodeId, ...(view.sourceMode ? { source: view.sourceMode } : {}), ...extra }, 'replace')
+  const [menu, setMenu] = useState(null)       // the "Rewrite from" options while open, else null
+  const openMenu = async () => {
+    if (menu) { setMenu(null); return }
+    setMenu(rewriteOptions(null))
+    try { const opts = rewriteOptions(await api.status()); setMenu(m => (m ? opts : m)) } catch { /* keep the storyteller-only menu */ }
+  }
+  const rewrite = (mode) => { setMenu(null); run({ node_id: view.nodeId, regenerate: true, source: mode }, 'replace') }
+  const badgeRef = useRef(null)
+  useEffect(() => {
+    if (!menu) return
+    const onDown = (e) => { if (badgeRef.current && !badgeRef.current.contains(e.target)) setMenu(null) }
+    const items = () => [...badgeRef.current.querySelectorAll('[role=menuitem]:not(:disabled)')]
+    const onKey = (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const it = items(); if (!it.length) return
+        e.preventDefault()
+        const i = it.indexOf(document.activeElement)
+        it[(i + (e.key === 'ArrowDown' ? 1 : it.length - 1)) % it.length].focus()
+      } else if (e.key === 'Escape') { setMenu(null); badgeRef.current?.querySelector('button')?.focus() }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [menu])
+  useEffect(() => { setMenu(null) }, [view.nodeId])
+  // focus the first enabled item whenever the options (re)appear
+  useEffect(() => { if (menu) badgeRef.current?.querySelector('[role=menuitem]:not(:disabled)')?.focus() }, [menu])
   const hasPage = view.nodeId || view.streaming || view.markdown
 
   return (
@@ -245,7 +292,23 @@ export default function Reader({ windowId, start, onPick }) {
         <Button variant="ghost" size="sm" icon="forward" aria-label="Forward" title="Forward"
                 disabled={!hist.current.canForward()} onClick={forward} />
         <div className={'rd-title' + (view.title ? '' : ' rd-title-dim')}>{view.title || 'New page'}</div>
-        {view.sourceMode ? <Chip tone="accent">{view.sourceMode}</Chip> : null}
+        {view.sourceMode ? (
+          <div className="rd-badge" ref={badgeRef}>
+            <Chip tone="accent" onClick={view.nodeId && !view.streaming ? openMenu : undefined}
+                  title={view.nodeId && !view.streaming ? 'Rewrite from another source' : undefined}>
+              {badgeLabel(view.sourceMode, view.sources.length)}
+            </Chip>
+            {menu ? (
+              <div className="rd-menu" role="menu" aria-label="Rewrite from">
+                <div className="rd-menu-h">Rewrite from</div>
+                {menu.map(o => (
+                  <Button key={o.mode} size="sm" role="menuitem" disabled={o.disabled}
+                          title={o.disabled ? o.reason : undefined} onClick={() => rewrite(o.mode)}>{o.label}</Button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {view.n ? <Chip>{`v${view.n}${view.depth !== 'normal' ? ' · ' + view.depth : ''}`}</Chip> : null}
         <div className="rd-actions">
           <Button size="sm" disabled={!view.nodeId || view.streaming || !imgBtn.enabled}
@@ -262,10 +325,13 @@ export default function Reader({ windowId, start, onPick }) {
         </div>
       </div>
 
+      {view.note ? <div className="rd-note" role="status">{view.note}</div> : null}
+
       <div className="rd-body" ref={bodyRef} onScroll={() => fork && closeFork()}>
         {hasPage ? (
           <div className="rd-article" ref={articleRef} tabIndex={-1} onMouseUp={onSelect}>
-            <Markdown source={view.markdown} phrases={view.phrases} onPhrase={pick} />
+            {view.grounding && !view.markdown ? <div className="rd-grounding" role="status">{view.grounding}</div> : null}
+            <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} />
             {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
             {mediaItems.length ? (
               <ul className="rd-strip" aria-label="Images and videos on this page">
@@ -290,6 +356,21 @@ export default function Reader({ windowId, start, onPick }) {
                   )
                 })}
               </ul>
+            ) : null}
+            {view.sources.length && !view.streaming ? (
+              <section className="rd-sources">
+                <h3>Sources</h3>
+                <ol>
+                  {view.sources.map(s => (
+                    <li key={s.n} value={s.n}>
+                      {safeHref(s.href)
+                        ? <a href={safeHref(s.href)} target="_blank" rel="noopener noreferrer">{s.title}</a>
+                        : <span>{s.title}</span>}
+                      {s.where ? <span className="rd-where">{s.where}</span> : null}
+                    </li>
+                  ))}
+                </ol>
+              </section>
             ) : null}
             {mediaErr ? <div className="rd-media-err" role="status">{mediaErr}</div> : null}
             {view.error ? (

@@ -56,7 +56,8 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     servers = ServerManager(tier)
     text_pause, gate = make_gate(tier, servers)
     fast = make_engine(tier.fast)
-    pages = PageService(graph, make_engine(tier.text), fast, tier.source_mode, gate)
+    pages = PageService(graph, make_engine(tier.text), fast, tier.source_mode, gate,
+                        App.make_grounder(tier))
     images = ImageService(graph, store, tier.images, fast, gate, var_dir / "media")
     return App(tier=tier, servers=servers, pages=pages, graph=graph,
                hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,

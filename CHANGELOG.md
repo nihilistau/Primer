@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.4.0: grounding (2026-11-03)
+
+Pages can now be written from sources: an offline copy of Wikipedia, or the live web.
+
+### Added
+
+- **Three source modes**: storyteller (the model's own telling), **offline reference** (Kiwix
+  ZIM files of Wikipedia, served by `kiwix-serve`) and **web** (a search, then the top pages).
+- **Citations and sources.** Grounded pages cite their sources as small numbered links, and a
+  Sources list closes the page with each article's title and where it came from. Links open in
+  a new tab.
+- **Source badge and "Rewrite from".** The badge says what a page was grounded in
+  (`offline reference · 3 sources`) and opens a menu to rewrite the page from another source.
+  Older versions are kept.
+- **Default source**, chosen in the Engines window (Modes → Source) and remembered.
+- **Reference server.** Primer starts and stops `kiwix-serve` (`[reference]` in the tier) and
+  shows it in the Engines window. An external `kiwix-serve` works too.
+- **Web search engines**: DuckDuckGo (default, no key), SearXNG or Brave (`[web]` in the tier),
+  or off.
+- **Honest fallback.** When no source is found or the backend is down, the page is written from
+  the model's own knowledge, recorded as storyteller, and the reader says why.
+- **Extra request fields per engine** (`[text.extra]`), for example to turn off a model's
+  thinking: `chat_template_kwargs = { enable_thinking = false }`.
+
+### Security
+
+- Web pages are fetched only from public addresses (`localhost`, private and link-local
+  addresses are refused, also after a redirect), with size, type and time limits.
+- Fetched text is given to the model as reference material, never as instructions, and is never
+  shown as HTML. Source links are only ever `http` or `https`.
+- `kiwix-serve` listens on `127.0.0.1` only, and its pages are never served from Primer's own
+  address.
+
+### Measured
+
+With gemma-4-E4B on an RTX 2060: an offline-reference page in about 9 s (0.3 s to find its
+sources), a web page in about 15 s.
+
 ## v0.3.0: video (2026-11-02)
 
 Primer can now make short clips of what you are reading.

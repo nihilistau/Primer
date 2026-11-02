@@ -12,7 +12,9 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Sequence
+
+from .grounding import Source
 
 _QUOTES = "\"'“”‘’«»"
 _LEAD_CHARS = string.whitespace + _QUOTES + "([{"
@@ -91,6 +93,10 @@ CREATE TABLE IF NOT EXISTS edges(
 CREATE TABLE IF NOT EXISTS versions(
     node_id TEXT NOT NULL, n INTEGER NOT NULL, markdown TEXT NOT NULL, source_mode TEXT NOT NULL,
     depth TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(node_id, n));
+CREATE TABLE IF NOT EXISTS sources(
+    node_id TEXT NOT NULL, n INTEGER NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL,
+    origin TEXT NOT NULL, book TEXT NOT NULL, path TEXT NOT NULL, url TEXT NOT NULL,
+    place TEXT NOT NULL, PRIMARY KEY(node_id, n, idx));
 CREATE TABLE IF NOT EXISTS highlights(
     node_id TEXT NOT NULL, n INTEGER NOT NULL, phrases_json TEXT NOT NULL, PRIMARY KEY(node_id, n));
 CREATE TABLE IF NOT EXISTS cards(
@@ -162,14 +168,28 @@ class Graph:
                 (node_id,)).fetchone()
         return Version(*row) if row else None
 
-    def add_version(self, node_id: str, markdown: str, source_mode: str, depth: str) -> Version:
+    def add_version(self, node_id: str, markdown: str, source_mode: str, depth: str,
+                    sources: Sequence[Source] = ()) -> Version:
         with self._lock, self._db:
             n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM versions WHERE node_id=?",
                                  (node_id,)).fetchone()[0]
             now = time.time()
             self._db.execute(f"INSERT INTO versions({_VERSION_COLS}) VALUES(?,?,?,?,?,?)",
                              (node_id, n, markdown, source_mode, depth, now))
+            self._db.executemany(
+                "INSERT INTO sources(node_id, n, idx, title, origin, book, path, url, place) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                [(node_id, n, s.n, s.title, s.origin, s.book, s.path, s.url, s.where) for s in sources])
         return Version(node_id, n, markdown, source_mode, depth, now)
+
+    def sources(self, node_id: str, n: int) -> list[Source]:
+        """The numbered sources of a version (their text is not stored)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT idx, title, origin, book, path, url, place FROM sources "
+                "WHERE node_id=? AND n=? ORDER BY idx", (node_id, n)).fetchall()
+        return [Source(idx, title, origin, "", book, path, url, place)
+                for idx, title, origin, book, path, url, place in rows]
 
     def versions(self, node_id: str) -> list[Version]:
         with self._lock:

@@ -5,7 +5,7 @@ import json
 import math
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +18,9 @@ TIER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 class ConfigError(Exception):
     pass
+
+
+_OWN_FIELDS = {"messages", "max_tokens", "temperature", "stream", "model"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,9 @@ class EngineSpec:
     api_key_file: str = ""
     ready_timeout_s: float = 120.0
     gpu: bool = False  # uses the GPU: the GPU guard counts it
+    # extra request fields, e.g. chat_template_kwargs = { enable_thinking = false } for a model
+    # that would otherwise spend its token budget thinking
+    extra: dict = field(default_factory=dict, hash=False)
 
     @property
     def health_path(self) -> str:
@@ -51,6 +57,33 @@ class ImagesConfig:
 
 
 @dataclass(frozen=True)
+class ReferenceConfig:
+    kiwix_serve: str = ""
+    zims: tuple[str, ...] = ()
+    port: int = 8830
+    base_url: str = ""
+
+    @property
+    def url(self) -> str:
+        return self.base_url.rstrip("/") or f"http://127.0.0.1:{self.port}"
+
+    @property
+    def managed(self) -> bool:
+        return bool(self.kiwix_serve)
+
+
+WEB_SEARCHES = ("duckduckgo", "searxng", "brave", "off")
+SOURCE_MODES = ("storyteller", "reference", "web")
+
+
+@dataclass(frozen=True)
+class WebConfig:
+    search: Literal["duckduckgo", "searxng", "brave", "off"] = "duckduckgo"
+    searxng_url: str = ""
+    api_key_file: str = ""
+
+
+@dataclass(frozen=True)
 class Tier:
     name: str
     text: EngineSpec
@@ -58,6 +91,8 @@ class Tier:
     source_mode: str = "storyteller"
     gpu_mode: Literal["auto", "manual"] = "auto"
     images: ImagesConfig | None = None
+    reference: ReferenceConfig | None = None
+    web: WebConfig = field(default_factory=WebConfig)
 
 
 def _engine(raw: object, where: str) -> EngineSpec:
@@ -82,6 +117,12 @@ def _engine(raw: object, where: str) -> EngineSpec:
         timeout = float(raw.get("ready_timeout_s", 120.0))
     except (TypeError, ValueError):
         raise ConfigError(f"{where}: ready_timeout_s must be a number") from None
+    extra = raw.get("extra", {})
+    if not isinstance(extra, dict):
+        raise ConfigError(f"{where}: extra must be a table")
+    clash = sorted(set(extra) & _OWN_FIELDS)
+    if clash:
+        raise ConfigError(f"{where}: extra can't set {', '.join(clash)}")
     gpu = raw.get("gpu", False)
     if not isinstance(gpu, bool):
         raise ConfigError(f"{where}: gpu must be true or false")
@@ -96,6 +137,7 @@ def _engine(raw: object, where: str) -> EngineSpec:
         api_key_file=str(raw.get("api_key_file", "")),
         ready_timeout_s=timeout,
         gpu=gpu,
+        extra=dict(extra),
     )
 
 
@@ -119,6 +161,41 @@ def _images(raw: object, where: str) -> ImagesConfig:
                         stall_timeout_s=float(stall))
 
 
+def _reference(raw: object, where: str) -> ReferenceConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected a table")
+    kiwix_serve, base_url = raw.get("kiwix_serve", ""), raw.get("base_url", "")
+    if not isinstance(kiwix_serve, str) or not isinstance(base_url, str):
+        raise ConfigError(f"{where}: kiwix_serve and base_url must be strings")
+    zims = raw.get("zims", [])
+    if not isinstance(zims, list) or not all(isinstance(z, str) and z for z in zims):
+        raise ConfigError(f"{where}: zims must be a list of path strings")
+    port = raw.get("port", 8830)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+        raise ConfigError(f"{where}: port must be an integer from 1024 to 65535")
+    if bool(kiwix_serve) == bool(base_url):
+        raise ConfigError(f"{where}: set either kiwix_serve (with zims) or base_url, not both or neither")
+    if kiwix_serve and not zims:
+        raise ConfigError(f"{where}: kiwix_serve needs at least one entry in zims")
+    return ReferenceConfig(kiwix_serve=kiwix_serve, zims=tuple(zims), port=port, base_url=base_url)
+
+
+def _web(raw: object, where: str) -> WebConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected a table")
+    search = raw.get("search", "duckduckgo")
+    if search not in WEB_SEARCHES:
+        raise ConfigError(f"{where}: search must be one of {WEB_SEARCHES}, got {search!r}")
+    url, key = raw.get("searxng_url", ""), raw.get("api_key_file", "")
+    if not isinstance(url, str) or not isinstance(key, str):
+        raise ConfigError(f"{where}: searxng_url and api_key_file must be strings")
+    if search == "searxng" and not url:
+        raise ConfigError(f"{where}: searxng needs searxng_url")
+    if search == "brave" and not key:
+        raise ConfigError(f"{where}: brave needs api_key_file")
+    return WebConfig(search=search, searxng_url=url, api_key_file=key)
+
+
 def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     # only a plain name listed in tiers_dir: a path here would run another file's launch command
     if not isinstance(name, str) or not TIER_NAME.fullmatch(name) or name not in list_tiers(tiers_dir):
@@ -135,13 +212,20 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     if gpu_mode not in GPU_MODES:
         raise ConfigError(f"{name}: gpu_mode must be one of {GPU_MODES}, got {gpu_mode!r}")
     images = _images(data["images"], f"{name}.images") if "images" in data else None
+    source_mode = data.get("source_mode", "storyteller")
+    if source_mode not in SOURCE_MODES:
+        raise ConfigError(f"{name}: source_mode must be one of {SOURCE_MODES}, got {source_mode!r}")
+    reference = _reference(data["reference"], f"{name}.reference") if "reference" in data else None
+    web = _web(data["web"], f"{name}.web") if "web" in data else WebConfig()
     return Tier(
         name=str(data.get("name", name)),
         text=text,
         fast=fast,
-        source_mode=str(data.get("source_mode", "storyteller")),
+        source_mode=source_mode,
         gpu_mode=gpu_mode,
         images=images,
+        reference=reference,
+        web=web,
     )
 
 

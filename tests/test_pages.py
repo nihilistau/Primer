@@ -359,3 +359,160 @@ def test_closing_generator_at_waiting_yield_unqueues(graph, text_engine, fast_en
         list(s.open(OpenRequest("Trebuchet", "start")))  # node lock was released too
     finally:
         s.shutdown()
+
+
+# grounding
+
+from primer.grounding import Source
+
+
+class _FakeGrounder:
+    def __init__(self, sources=(), note="", log=None):
+        self.sources, self.note, self.log, self.calls = list(sources), note, log, []
+
+    def gather(self, mode, query, status):
+        self.calls.append((mode, query))
+        if self.log is not None:
+            self.log.append("gather")
+        status("Searching the web…")
+        return self.sources, self.note
+
+
+_WEB = [Source(1, "Trebuchet facts", "web", "A trebuchet is a siege engine.", url="https://example.com/t",
+               where="example.com")]
+
+
+def test_open_grounded_emits_grounding_sources_done(graph, text_engine, fast_engine):
+    s = PageService(graph, text_engine, fast_engine, grounder=_FakeGrounder(_WEB))
+    try:
+        ev = list(s.open(OpenRequest("Trebuchet", "start", source="web")))
+    finally:
+        s.shutdown()
+    kinds = [k for k, _ in ev]
+    assert kinds[:3] == ["node", "grounding", "sources"] and kinds.index("sources") < kinds.index("delta")
+    assert dict(ev)["node"]["source_mode"] == "web"
+    assert dict(ev)["sources"] == {"sources": [
+        {"n": 1, "title": "Trebuchet facts", "origin": "web", "where": "example.com"}]}
+    assert dict(ev)["done"]["source_mode"] == "web" and dict(ev)["done"]["note"] == ""
+    assert "A trebuchet is a siege engine." in text_engine.calls[0][1]["content"]
+    nid = dict(ev)["node"]["id"]
+    assert graph.latest_version(nid).source_mode == "web"
+    assert graph.sources(nid, 1)[0].url == "https://example.com/t"
+
+
+def test_grounding_happens_before_gpu_turn(graph, text_engine, fast_engine):
+    order = []
+
+    class _RecordingGate:
+        def page(self):
+            order.append("turn")
+            return self
+
+        def try_enter(self):
+            return True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    s = PageService(graph, text_engine, fast_engine, gate=_RecordingGate(),
+                    grounder=_FakeGrounder(_WEB, log=order))
+    try:
+        list(s.open(OpenRequest("Trebuchet", "start", source="web")))
+    finally:
+        s.shutdown()
+    assert order == ["gather", "turn"]
+
+
+def test_open_cached_page_ignores_default_mode(graph, text_engine, fast_engine):
+    g = _FakeGrounder(_WEB)
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    try:
+        list(s.open(OpenRequest("Trebuchet", "start")))
+        s.source_mode = "web"
+        ev = list(s.open(OpenRequest("Trebuchet", "start")))
+    finally:
+        s.shutdown()
+    assert dict(ev)["node"]["source_mode"] == "storyteller"
+    assert dict(ev)["done"]["source_mode"] == "storyteller"
+    assert dict(ev)["done"]["cached"] is True and g.calls == []
+
+
+def test_rewrite_from_web_adds_version_with_sources(graph, text_engine, fast_engine):
+    s = PageService(graph, text_engine, fast_engine, grounder=_FakeGrounder(_WEB))
+    try:
+        nid = dict(list(s.open(OpenRequest("Trebuchet", "start"))))["node"]["id"]
+        ev = list(s.open(OpenRequest("Trebuchet", "start", regenerate=True, source="web")))
+    finally:
+        s.shutdown()
+    assert dict(ev)["node"]["source_mode"] == "web"
+    assert [v.source_mode for v in graph.versions(nid)] == ["storyteller", "web"]
+    assert graph.sources(nid, 1) == [] and len(graph.sources(nid, 2)) == 1
+
+
+def test_fallback_records_storyteller_and_note(graph, text_engine, fast_engine):
+    note = "No usable web page found for \"Trebuchet\"; written from the model's own knowledge."
+    s = PageService(graph, text_engine, fast_engine, grounder=_FakeGrounder([], note))
+    try:
+        ev = list(s.open(OpenRequest("Trebuchet", "start", source="web")))
+    finally:
+        s.shutdown()
+    kinds = [k for k, _ in ev]
+    assert "sources" not in kinds and dict(ev)["done"]["note"] == note
+    assert dict(ev)["done"]["source_mode"] == "storyteller"
+    nid = dict(ev)["node"]["id"]
+    assert graph.latest_version(nid).source_mode == "storyteller" and graph.sources(nid, 1) == []
+    assert "Sources" not in text_engine.calls[0][1]["content"]
+
+
+def test_grounded_mode_without_grounder_falls_back(graph, text_engine, fast_engine):
+    s = PageService(graph, text_engine, fast_engine, source_mode="reference")
+    try:
+        ev = list(s.open(OpenRequest("Trebuchet", "start")))
+    finally:
+        s.shutdown()
+    assert dict(ev)["done"]["source_mode"] == "storyteller"
+    assert "isn't set up" in dict(ev)["done"]["note"]
+
+
+def test_closing_generator_at_grounding_yield_releases_node_lock(graph, text_engine, fast_engine):
+    s = PageService(graph, text_engine, fast_engine, grounder=_FakeGrounder(_WEB))
+    try:
+        gen = s.open(OpenRequest("Trebuchet", "start", source="web"))
+        assert next(gen)[0] == "node" and next(gen)[0] == "grounding"
+        gen.close()
+        nid = graph.node_for("Trebuchet", "concept").id
+        lock = s._lock_for(nid)
+        assert lock.acquire(timeout=1)
+        lock.release()
+        assert graph.latest_version(nid) is None
+        ev = list(s.open(OpenRequest("Trebuchet", "start", source="web")))
+        assert dict(ev)["done"]["source_mode"] == "web"
+    finally:
+        s.shutdown()
+
+
+def test_unknown_source_is_storyteller_without_note(graph, text_engine, fast_engine):
+    g = _FakeGrounder(_WEB)
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    try:
+        ev = list(s.open(OpenRequest("Trebuchet", "start", source="telepathy")))
+    finally:
+        s.shutdown()
+    assert dict(ev)["node"]["source_mode"] == "storyteller" and g.calls == []
+    assert dict(ev)["done"]["source_mode"] == "storyteller" and dict(ev)["done"]["note"] == ""
+
+
+def test_deeper_without_source_uses_default_mode(graph, text_engine, fast_engine):
+    g = _FakeGrounder(_WEB)
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    try:
+        list(s.open(OpenRequest("Trebuchet", "start")))
+        s.source_mode = "web"
+        ev = list(s.open(OpenRequest("Trebuchet", "start", depth="deeper")))
+    finally:
+        s.shutdown()
+    assert dict(ev)["done"]["source_mode"] == "web" and dict(ev)["node"]["source_mode"] == "web"
+    assert g.calls == [("web", "Trebuchet")]

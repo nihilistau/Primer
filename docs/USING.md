@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching, drawing and animating with Primer. To install it and point it at your models,
+A guide to reading, branching, grounding, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -25,8 +25,9 @@ following, shown with a dotted underline.
 
 The header of each page shows:
 
-- **The source mode**, such as `storyteller`, which says what the page is grounded in. Storyteller
-  pages come from the model's own knowledge. Offline-reference and web grounding are planned.
+- **The source badge**, which says what the page is grounded in: `storyteller` (the model's own
+  knowledge), `offline reference · 3 sources` or `web · 3 sources`. Click it to rewrite the page
+  from another source (see [Sources](#sources)).
 - **The version**, such as `v1`. Regenerating a page adds a version rather than replacing it.
 
 The buttons beside it rewrite the page you are on:
@@ -62,6 +63,34 @@ Click a card to open that page. Under the cards:
 - **Video** makes a short clip of just this phrase.
 
 Press **Escape** or click elsewhere to close the fork without choosing.
+
+## Sources
+
+A page can be written three ways:
+
+| Mode | Written from |
+| --- | --- |
+| **Storyteller** | The model's own knowledge. Fast, fully offline, accuracy best-effort. |
+| **Offline reference** | Articles from a local copy of Wikipedia. Works with no network. |
+| **Web** | The top results of a web search, read live. |
+
+New pages use the default mode, set in the **Engines** window under **Modes → Source**. To
+rewrite the page you are reading from another source, click its badge and choose under **Rewrite
+from**. The rewrite is a new version; the old one is kept.
+
+While a grounded page is being prepared, the reader says what it is doing: "Searching the
+offline encyclopedia…", "Reading 3 articles…", "Searching the web…". Then the page is written as
+usual. Facts taken from a source carry a small number, such as ¹, linking to that source. The
+**Sources** list at the end of the page names each one and where it came from (the encyclopedia's
+title, or the web site). Links open in a new browser tab.
+
+If nothing can be found, or the encyclopedia or the web can't be reached, the page is written
+from the model's own knowledge instead. Its badge then says `storyteller`, and a line under the
+header says why.
+
+A mode that can't be used right now is greyed out, with the reason: no offline encyclopedia set
+up in this tier, the reference server not running, or web search turned off. To set up the
+offline encyclopedia, see [RUNNING.md](RUNNING.md#grounding).
 
 ## The map
 
@@ -204,7 +233,9 @@ state:
 | failed | It could not be started. The reason says exactly what went wrong. |
 
 **Start** and **Stop** control a server by hand. The **Image server** row shows `sd-server`, which
-Primer starts when a picture is needed.
+Primer starts when a picture is needed. The **Reference server** row (when the tier has an offline
+encyclopedia) shows `kiwix-serve`, which Primer starts with everything else. **Modes → Source**
+sets the default source for new pages.
 
 ### Sharing one GPU
 
@@ -225,7 +256,8 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 - **Out of VRAM?** Turn on Offload to CPU, lower the size, or use auto GPU mode so the writing
   model steps aside.
 - **Your data** lives in `var/`: the concept graph (`primer.sqlite`), pictures (`var/media/`) and
-  your models (`images.json`). Back up that folder to keep your book.
+  your models (`images.json`). Back up that folder to keep your book. Grounded pages keep the
+  list of their sources with them.
 
 ## Troubleshooting
 
@@ -240,4 +272,7 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 | Thumbnails show a red cross | That picture failed. Open it to see why. |
 | Video button disabled | Hover it for the reason: no video model added, or no default video model. |
 | Animate disabled | No video model that can start from a picture (Wan 2.2 TI2V 5B, Wan 2.2 I2V or LTX-2.3). |
+| A grounded page came out as `storyteller` | Read the line under the header: no source was found, or the encyclopedia or web couldn't be reached. Check the Reference server in Engines. |
+| The Reference server `failed` | Check `kiwix_serve` and `zims` in the tier: the paths must exist, and each file must be a complete ZIM (compare its `.sha256`). |
+| "empty response" on a grounded page | A thinking model used its whole budget thinking. Turn thinking off with `[text.extra]` (see [RUNNING.md](RUNNING.md#tiers)). |
 | `sd-server stopped while generating (exit code 3221225478)` | Windows couldn't read part of `sd-server` or a model file, usually an external disk that disconnected. Move them to an internal drive. |
