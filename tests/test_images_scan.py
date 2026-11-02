@@ -322,3 +322,293 @@ def test_scan_capped_reports_truncation(tmp_path):
     assert [p["name"] for p in proposals] == ["a", "b"] and truncated is True
     assert scan_folder_capped(tmp_path, 3)[1] is False
     assert len(scan_folder_capped(tmp_path, 10)[0]) == 3
+
+
+# ---- video (phase 3) ----
+from primer.images.scan import _roles  # noqa: E402
+
+
+def wan_gguf(path: Path, in_ch: int | None, truncate: bool = False):
+    """arch "wan" plus a tensor index whose patch_embedding.weight has in_ch input channels."""
+    def s(x: str) -> bytes:
+        b = x.encode()
+        return struct.pack("<Q", len(b)) + b
+    kvs = [s("general.architecture") + struct.pack("<I", 8) + s("wan"),
+           s("general.file_type") + struct.pack("<II", 4, 15)]
+    tensors = [s("blocks.0.cross_attn.k.weight") + struct.pack("<I2Q", 2, 5120, 5120) + struct.pack("<IQ", 12, 0)]
+    if in_ch is not None:
+        tensors.append(s("patch_embedding.weight") + struct.pack("<I5Q", 5, 2, 2, 1, in_ch, 5120)
+                       + struct.pack("<IQ", 12, 0))
+    raw = b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(kvs)) + b"".join(kvs) + b"".join(tensors)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw[:-10] if truncate else raw)
+    return path
+
+
+def shaped(path: Path, shapes: dict):
+    """A safetensors header with real shapes for its keys."""
+    header = {k: {"dtype": "F16", "shape": v, "data_offsets": [0, 0]} for k, v in shapes.items()}
+    raw = json.dumps(header).encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(struct.pack("<Q", len(raw)) + raw)
+    return path
+
+
+def wan_vae(path: Path, z: int | None):
+    """Wan VAE keys; conv2.bias is [16] for 2.1, [48] for 2.2. z None: unreadable, the name decides."""
+    c = z or 16
+    return shaped(path, {"conv1.bias": [2 * c], "conv2.bias": [z] if z else "x",
+                         "conv2.weight": [c, c, 1, 1, 1], "decoder.conv1.weight": [384, c, 3, 3, 3],
+                         "encoder.conv1.weight": [96, 3, 3, 3, 3]})
+
+
+def lora(path: Path, style: str = "down"):
+    a, b = ("lora_down", "lora_up") if style == "down" else ("lora_A", "lora_B")
+    return safet(path, [f"diffusion_model.blocks.0.cross_attn.k.{a}.weight",
+                        f"diffusion_model.blocks.0.cross_attn.k.{b}.weight"])
+
+
+def t5(path: Path):
+    return gguf(path, "t5encoder")
+
+
+def ltx(path: Path):
+    return gguf(path, "ltxv")
+
+
+def gemma(path: Path):
+    return gguf(path, "gemma3")
+
+
+def connectors(path: Path):
+    return safet(path, ["text_embedding_projection.audio_aggregate_embed.bias",
+                        "text_embedding_projection.video_aggregate_embed.bias"])
+
+
+def ltx_vae(path: Path):
+    return safet(path, ["decoder.conv_in.conv.bias", "decoder.conv_in.conv.weight", "per_channel_statistics.mean"])
+
+
+def ltx_audio_vae(path: Path):
+    return safet(path, ["audio_vae.decoder.conv_in.conv.bias", "vocoder.conv_pre.weight"])
+
+
+def roles(path: Path):
+    return sorted(_roles(path, sniff(path)))
+
+
+def test_sniff_reads_wan_input_channels_from_the_tensor_index(tmp_path):
+    assert sniff(wan_gguf(tmp_path / "a.gguf", 36)) == {"format": "gguf", "arch": "wan", "wan_in": 36}
+    assert sniff(wan_gguf(tmp_path / "b.gguf", None)) == {"format": "gguf", "arch": "wan"}
+    assert sniff(wan_gguf(tmp_path / "c.gguf", 48, truncate=True)) == {"format": "gguf", "arch": "wan"}
+    assert sniff(wan_vae(tmp_path / "v.safetensors", 48))["vae_z"] == 48
+    assert "vae_z" not in sniff(wan_vae(tmp_path / "w.safetensors", None))
+    st = sniff(shaped(tmp_path / "m.safetensors", {"patch_embedding.weight": [5120, 16, 1, 2, 2]}))
+    assert st["wan_in"] == 16
+
+
+def test_video_roles_from_headers(tmp_path):
+    i2v = [("wan2.2-i2v-a14b", "diffusion")]
+    assert roles(wan_gguf(tmp_path / "Wan2.2-TI2V-5B-Q6_K.gguf", 48)) == [("wan2.2-ti2v-5b", "diffusion")]
+    assert roles(wan_gguf(tmp_path / "Wan2.2-TI2V-5B-Q8.gguf", None)) == [("wan2.2-ti2v-5b", "diffusion")]
+    assert roles(wan_gguf(tmp_path / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", 16)) == [
+        ("wan2.2-t2v-a14b", "high_noise")]
+    assert roles(wan_gguf(tmp_path / "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf", 16)) == [("wan2.2-t2v-a14b", "diffusion")]
+    assert roles(wan_gguf(tmp_path / "Wan2.2-T2V-A14B-LowNoise-Q8.gguf", None)) == [("wan2.2-t2v-a14b", "diffusion")]
+    # the I2V finetune: by its header, and by its name when the header can't tell
+    assert roles(wan_gguf(tmp_path / "dasiwaWAN22I2V14B_midnightflirtLow-Q4_K_M.gguf", 36)) == i2v
+    assert roles(wan_gguf(tmp_path / "n" / "dasiwaWAN22I2V14B_midnightflirtLow-Q4_K_M.gguf", None)) == i2v
+    assert roles(wan_gguf(tmp_path / "n" / "dasiwaWAN22I2V14B_midnightflirtHigh-Q4_K_M.gguf", None)) == [
+        ("wan2.2-i2v-a14b", "high_noise")]
+    # the stage from the folder when the name doesn't say
+    assert roles(wan_gguf(tmp_path / "HighNoise" / "wan-a14b-q4.gguf", 16)) == [("wan2.2-t2v-a14b", "high_noise")]
+    assert roles(t5(tmp_path / "umt5-xxl-encoder-Q5_K_M.gguf")) == sorted(
+        [("wan2.2-ti2v-5b", "t5xxl"), ("wan2.2-t2v-a14b", "t5xxl"), ("wan2.2-i2v-a14b", "t5xxl")])
+    assert roles(wan_vae(tmp_path / "Wan2.1_VAE.safetensors", 16)) == [
+        ("wan2.2-i2v-a14b", "vae"), ("wan2.2-t2v-a14b", "vae")]
+    assert roles(wan_vae(tmp_path / "Wan2.2_VAE.safetensors", 48)) == [("wan2.2-ti2v-5b", "vae")]
+    assert roles(wan_vae(tmp_path / "x" / "Wan2.2_VAE.safetensors", None)) == [("wan2.2-ti2v-5b", "vae")]
+    assert roles(wan_vae(tmp_path / "x" / "some_vae.safetensors", None)) == []
+    assert roles(ltx(tmp_path / "ltx-2.3-22b-distilled-1.1-Q3_K_M.gguf")) == [("ltx-2.3-distilled", "diffusion")]
+    assert roles(ltx(tmp_path / "ltx-2.3-22b-dev-Q4_K_M.gguf")) == [("ltx-2.3", "diffusion")]
+    assert roles(ltx(tmp_path / "ltx-2-19b-dev-Q4_K_M.gguf")) == []  # LTX-2, not 2.3
+    assert roles(gemma(tmp_path / "gemma-3-12b-it-abliterated-v2.q4_k_m.gguf")) == [
+        ("ltx-2.3", "llm"), ("ltx-2.3-distilled", "llm")]
+    assert roles(gemma(tmp_path / "mmproj-gemma-3-12b.gguf")) == []
+    assert roles(connectors(tmp_path / "ltx-2.3-22b-distilled_embeddings_connectors.safetensors")) == [
+        ("ltx-2.3", "connectors"), ("ltx-2.3-distilled", "connectors")]
+    assert roles(ltx_vae(tmp_path / "ltx-2.3-22b-distilled_video_vae.safetensors")) == [
+        ("ltx-2.3", "vae"), ("ltx-2.3-distilled", "vae")]
+    assert roles(ltx_audio_vae(tmp_path / "ltx-2.3-22b-distilled_audio_vae.safetensors")) == []
+    assert roles(lora(tmp_path / "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors")) == []
+
+
+def by_family(props):
+    return {p["family"]: p for p in props}
+
+
+def test_a14b_pairs_low_with_high_and_never_t2v_with_i2v(tmp_path):
+    m = tmp_path / "wan"
+    wan_gguf(m / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", 16)
+    wan_gguf(m / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf", 16)
+    wan_gguf(m / "LowNoise" / "Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf", 16)
+    wan_gguf(m / "LowNoise" / "dasiwaWAN22I2V14B_midnightflirtLow-Q4_K_M.gguf", 36)
+    props = by_family(scan_folder(tmp_path))
+    t2v = props["wan2.2-t2v-a14b"]
+    assert Path(t2v["files"]["high_noise"]).name == "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf"
+    i2v = props["wan2.2-i2v-a14b"]
+    assert "high_noise" not in i2v["files"] and "high_noise" in i2v["missing"]
+    # a high-noise file is only a partner: alone it is not a model
+    assert scan_folder(m / "HighNoise") == []
+
+
+def test_a14b_does_not_pair_across_model_folders(tmp_path):
+    wan_gguf(tmp_path / "a" / "LowNoise" / "Wan2.2-T2V-A14B-LowNoise-Q4.gguf", 16)
+    wan_gguf(tmp_path / "b" / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q4.gguf", 16)
+    [p] = scan_folder(tmp_path)
+    assert "high_noise" in p["missing"]
+
+
+def test_shared_t5_and_vae_found_from_the_scan_root(tmp_path):
+    t5(tmp_path / "shared" / "umt5-xxl-encoder-Q5_K_M.gguf")
+    wan_vae(tmp_path / "shared" / "VAE" / "Wan2.1_VAE.safetensors", 16)
+    m = tmp_path / "wan22-t2v-a14b"
+    wan_gguf(m / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", 16)
+    wan_gguf(m / "LowNoise" / "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf", 16)
+    [p] = scan_folder(tmp_path)
+    assert p["missing"] == []
+    assert Path(p["files"]["t5xxl"]).parent.name == "shared"
+    assert Path(p["files"]["vae"]).name == "Wan2.1_VAE.safetensors"
+    assert len(p["notes"]) == 2 and all("shared files" in n for n in p["notes"])
+    # a model one level down takes the root's shared files too (the root is its parent)
+    wan_gguf(tmp_path / "wan22-ti2v-5b" / "Wan2.2-TI2V-5B-Q6_K.gguf", 48)
+    wan_vae(tmp_path / "wan22-ti2v-5b" / "VAE" / "Wan2.2_VAE.safetensors", 48)
+    ti2v = by_family(scan_folder(tmp_path))["wan2.2-ti2v-5b"]
+    assert ti2v["missing"] == []
+    assert Path(ti2v["files"]["vae"]).name == "Wan2.2_VAE.safetensors"  # never the 2.1 VAE
+    # never a sibling model folder's files
+    t5(tmp_path / "other-model" / "umt5-xxl.gguf")
+    assert Path(by_family(scan_folder(tmp_path))["wan2.2-t2v-a14b"]["files"]["t5xxl"]).parent.name == "shared"
+
+
+def test_loras_staged_by_name_and_fast_defaults(tmp_path):
+    from primer.images.families import FAMILIES
+    m = tmp_path / "wan22-i2v"
+    wan_gguf(m / "HighNoise" / "x-I2V-High.gguf", 36)
+    wan_gguf(m / "LowNoise" / "x-I2V-Low.gguf", 36)
+    lora(m / "loras" / "NSFW-22-H-e8.safetensors", "A")
+    lora(m / "loras" / "NSFW-22-L-e8.safetensors", "A")
+    lora(m / "loras" / "slow_motion.safetensors")
+    [p] = scan_folder(tmp_path)
+    assert [(Path(x["file"]).name, x["stage"], x["strength"]) for x in p["loras"]] == [
+        ("NSFW-22-H-e8.safetensors", "high", 1.0), ("NSFW-22-L-e8.safetensors", "low", 1.0),
+        ("slow_motion.safetensors", "both", 1.0)]
+    assert p["settings"] == {}  # no few-step LoRA
+    lora(m / "loras" / "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors")
+    [p] = scan_folder(tmp_path)
+    assert p["settings"] == FAMILIES["wan2.2-i2v-a14b"].fast_defaults and p["settings"]["steps"] == 4
+    # TI2V 5B: its Turbo LoRA (in LoRAs/, one level down) is proposed, but the family has no fast defaults
+    f = tmp_path / "wan22-ti2v-5b"
+    wan_gguf(f / "Wan2.2-TI2V-5B-Q6_K.gguf", 48)
+    lora(f / "LoRAs" / "Wan22-Turbo" / "Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors")
+    ti2v = by_family(scan_folder(tmp_path))["wan2.2-ti2v-5b"]
+    assert [x["stage"] for x in ti2v["loras"]] == ["both"] and ti2v["settings"] == {}
+
+
+def test_loras_come_from_one_folder(tmp_path):
+    m = tmp_path / "m"
+    wan_gguf(m / "Wan2.2-T2V-A14B-LowNoise.gguf", 16)
+    lora(m / "loras" / "a" / "one.safetensors")
+    lora(m / "loras" / "b" / "two.safetensors")
+    [p] = scan_folder(tmp_path)
+    assert [Path(x["file"]).name for x in p["loras"]] == ["one.safetensors"]
+    assert [n for n in p["notes"] if "not added" in n] and all("two" not in n for n in p["notes"])
+    lora(m / "loras" / "direct.safetensors")
+    [p] = scan_folder(tmp_path)
+    assert [Path(x["file"]).name for x in p["loras"]] == ["direct.safetensors"]
+
+
+def test_image_proposals_have_no_loras_or_settings(tmp_path):
+    safet(tmp_path / "xl.safetensors", ["conditioner.embedders.0.w"])
+    lora(tmp_path / "loras" / "style.safetensors")
+    [p] = scan_folder(tmp_path)
+    assert p["loras"] == [] and p["settings"] == {}
+
+
+def test_underscore_folders_are_ignored(tmp_path):
+    wan_gguf(tmp_path / "_unused" / "Wan2.2-TI2V-5B-Q6_K.gguf", 48)
+    safet(tmp_path / "_old" / "xl.safetensors", ["conditioner.embedders.0.w"])
+    assert scan_folder(tmp_path) == []
+
+
+def build_video_tree(root: Path):
+    """The layout of the user's video models folder, with synthetic headers."""
+    t5(root / "shared" / "umt5-xxl-encoder-Q5_K_M.gguf")
+    wan_vae(root / "shared" / "VAE" / "Wan2.1_VAE.safetensors", 16)
+    wan_gguf(root / "wan22-ti2v-5b" / "Wan2.2-TI2V-5B-Q6_K.gguf", 48)
+    wan_vae(root / "wan22-ti2v-5b" / "VAE" / "Wan2.2_VAE.safetensors", 48)
+    t = root / "wan22-t2v-a14b"
+    wan_gguf(t / "HighNoise" / "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", 16)
+    wan_gguf(t / "LowNoise" / "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf", 16)
+    for st in ("high", "low"):
+        lora(t / "loras" / f"wan2.2_t2v_A14b_{st}_noise_lora_rank64_lightx2v_4step_1217.safetensors")
+    i = root / "wan22-i2v-a14b-nsfw"
+    wan_gguf(i / "HighNoise" / "dasiwaWAN22I2V14B_midnightflirtHigh-Q4_K_M.gguf", 36)
+    wan_gguf(i / "LowNoise" / "dasiwaWAN22I2V14B_midnightflirtLow-Q4_K_M.gguf", 36)
+    for st in ("high", "low"):
+        lora(i / "loras" / f"wan2.2_i2v_A14b_{st}_noise_lora_rank64_lightx2v_4step_1022.safetensors")
+    lora(i / "loras" / "NSFW-22-H-e8.safetensors", "A")
+    lora(i / "loras" / "NSFW-22-L-e8.safetensors", "A")
+    x = root / "ltx23-distilled"
+    ltx(x / "distilled-1.1" / "ltx-2.3-22b-distilled-1.1-Q3_K_M.gguf")
+    connectors(x / "text_encoders" / "ltx-2.3-22b-distilled_embeddings_connectors.safetensors")
+    ltx_vae(x / "vae" / "ltx-2.3-22b-distilled_video_vae.safetensors")
+    ltx_audio_vae(x / "vae" / "ltx-2.3-22b-distilled_audio_vae.safetensors")
+    gemma(x / "gemma-3-12b-it-abliterated-v2.q4_k_m.gguf")
+    lora(root / "_unused" / "wan22-ti2v-5b-LoRAs" / "Wan22-Turbo" / "Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors")
+    wan_gguf(root / "_unused" / "Wan2.2-TI2V-5B-Q8_0.gguf", 48)
+    # a download in progress lives under the dot-folder .cache
+    wan_gguf(t / ".cache" / "huggingface" / "LowNoise" / "x.gguf", 16)
+
+
+def test_scan_of_the_real_video_layout(tmp_path):
+    root = tmp_path / "video"
+    build_video_tree(root)
+    props = scan_folder(root)
+    assert sorted(p["family"] for p in props) == [
+        "ltx-2.3-distilled", "wan2.2-i2v-a14b", "wan2.2-t2v-a14b", "wan2.2-ti2v-5b"]
+    for p in props:
+        assert p["missing"] == [], p
+    by = by_family(props)
+
+    def name(p, slot):
+        return Path(p["files"][slot]).name
+    ti2v = by["wan2.2-ti2v-5b"]
+    assert (name(ti2v, "t5xxl"), name(ti2v, "vae")) == ("umt5-xxl-encoder-Q5_K_M.gguf", "Wan2.2_VAE.safetensors")
+    assert ti2v["loras"] == [] and ti2v["settings"] == {}
+    t2v = by["wan2.2-t2v-a14b"]
+    assert name(t2v, "diffusion") == "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf"
+    assert name(t2v, "high_noise") == "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf"
+    assert name(t2v, "vae") == "Wan2.1_VAE.safetensors"
+    assert sorted(x["stage"] for x in t2v["loras"]) == ["high", "low"]
+    assert t2v["settings"]["steps"] == 4
+    i2v = by["wan2.2-i2v-a14b"]
+    assert name(i2v, "diffusion") == "dasiwaWAN22I2V14B_midnightflirtLow-Q4_K_M.gguf"
+    assert name(i2v, "high_noise") == "dasiwaWAN22I2V14B_midnightflirtHigh-Q4_K_M.gguf"
+    assert len(i2v["loras"]) == 4
+    assert sorted(x["stage"] for x in i2v["loras"]) == ["high", "high", "low", "low"]
+    assert i2v["settings"]["steps"] == 4
+    lt = by["ltx-2.3-distilled"]
+    assert {s: name(lt, s) for s in ("llm", "connectors", "vae")} == {
+        "llm": "gemma-3-12b-it-abliterated-v2.q4_k_m.gguf",
+        "connectors": "ltx-2.3-22b-distilled_embeddings_connectors.safetensors",
+        "vae": "ltx-2.3-22b-distilled_video_vae.safetensors"}
+
+
+def test_scanned_video_proposals_pass_the_model_checks(tmp_path):
+    """LoRA stages and settings in each proposal are what the model store accepts."""
+    from primer.images.models import clean_loras, clean_settings
+    build_video_tree(tmp_path)
+    for p in scan_folder(tmp_path):
+        assert clean_loras(p["family"], p["loras"]) == p["loras"]
+        assert clean_settings(p["family"], p["settings"]) == p["settings"]

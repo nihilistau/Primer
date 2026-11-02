@@ -1,13 +1,16 @@
 /* imageRoute — what a typed line means (an image or a page) and whether the Image buttons work. */
 import * as api from '../api.js'
 
-/* Ask the server whether `text` is an image request. An image routes to a createImage body
- * (the page's node, or the subject as a concept when the reader is empty); anything else, or
- * an intent call that fails, is a page request as before. */
+/* Ask the server whether `text` is a video or an image request (video first, as the server
+ * checks it). Either routes to a createImage body (the page's node, or the subject as a concept
+ * when the reader is empty; a video adds kind video); anything else, or an intent call that
+ * fails, is a page request as before. */
 export async function routePrompt(text, { nodeId } = {}) {
-  let subject = null
-  try { subject = (await api.intent(text)).image || null } catch { /* just open a page */ }
-  if (subject) return { kind: 'image', body: nodeId ? { node_id: nodeId, subject } : { concept: subject, subject } }
+  let r = {}
+  try { r = (await api.intent(text)) || {} } catch { /* just open a page */ }
+  const where = (subject) => (nodeId ? { node_id: nodeId, subject } : { concept: subject, subject })
+  if (r.video) return { kind: 'video', body: { ...where(r.video), kind: 'video' } }
+  if (r.image) return { kind: 'image', body: where(r.image) }
   return { kind: 'page', body: { concept: text, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
 }
 

@@ -17,6 +17,14 @@ describe('routePrompt', () => {
     expect(await routePrompt('draw a trebuchet', { nodeId: null }))
       .toEqual({ kind: 'image', body: { concept: 'a trebuchet', subject: 'a trebuchet' } })
   })
+  it('routes a video request to a kind video body, before an image', async () => {
+    impl = async () => ({ video: 'a mill turning', image: null })
+    expect(await routePrompt('make a video of a mill turning', { nodeId: 'n1' }))
+      .toEqual({ kind: 'video', body: { node_id: 'n1', subject: 'a mill turning', kind: 'video' } })
+    impl = async () => ({ video: 'a mill', image: 'a mill' })
+    expect(await routePrompt('animate a mill', { nodeId: null }))
+      .toEqual({ kind: 'video', body: { concept: 'a mill', subject: 'a mill', kind: 'video' } })
+  })
   it('routes anything else to a page, with from_id when there is a node', async () => {
     impl = async () => ({ image: null })
     expect(await routePrompt('how do levers work', { nodeId: 'n1' }))

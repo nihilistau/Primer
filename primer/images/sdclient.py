@@ -1,6 +1,8 @@
 """Client for stable-diffusion.cpp's sd-server native async API (/sdcpp/v1)."""
 from __future__ import annotations
 
+import base64
+import binascii
 import http.client
 import json
 import urllib.error
@@ -41,6 +43,52 @@ def to_params(prompt: str, s: dict) -> dict:
     if s.get("vae_tiling"):
         body["vae_tiling_params"] = {"enabled": True}
     return body
+
+
+def to_video_params(prompt: str, s: dict, loras: list[dict],
+                    init_png_b64: str | None) -> dict:
+    """Effective video settings -> native vid_gen body. Flow shift is a startup flag, not sent."""
+    body = to_params(prompt, s)
+    if "frames" in s:
+        body["video_frames"] = s["frames"]
+    if "fps" in s:
+        body["fps"] = s["fps"]
+    if "moe_boundary" in s:
+        body["moe_boundary"] = s["moe_boundary"]
+    if "high_noise_steps" in s:
+        hn: dict = {"sample_steps": s["high_noise_steps"]}
+        if "sampler" in s:
+            hn["sample_method"] = s["sampler"]
+        if "high_noise_cfg" in s:
+            hn["guidance"] = {"txt_cfg": s["high_noise_cfg"]}
+        body["high_noise_sample_params"] = hn
+    if loras:
+        body["lora"] = [{"path": l["path"], "multiplier": l["multiplier"],
+                         "is_high_noise": l["is_high_noise"]} for l in loras]
+    if init_png_b64:
+        body["init_image"] = init_png_b64
+    body["output_format"] = "webm"
+    return body
+
+
+def decode_video(job: dict) -> tuple[bytes, dict]:
+    """A completed vid_gen job -> (container bytes, {mime, fps, frame_count})."""
+    res = job.get("result")
+    if not isinstance(res, dict):
+        raise ValueError("job has no result")
+    mime = res.get("mime_type")
+    if mime != "video/webm":
+        raise ValueError(f"unexpected video type {mime!r}")
+    b64 = res.get("b64_json")
+    if not isinstance(b64, str) or not b64:
+        raise ValueError("result has no video data")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise ValueError("video data is not valid base64") from e
+    if not raw:
+        raise ValueError("video data is empty")
+    return raw, {"mime": mime, "fps": res.get("fps"), "frame_count": res.get("frame_count")}
 
 
 class SdClient:
@@ -85,6 +133,13 @@ class SdClient:
         jid = obj.get("id")
         if not isinstance(jid, str) or not jid:
             raise SdError("img_gen response has no job id")
+        return jid
+
+    def submit_video(self, params: dict) -> str:
+        obj = self._call("POST", "/sdcpp/v1/vid_gen", params, ok=(202,))
+        jid = obj.get("id")
+        if not isinstance(jid, str) or not jid:
+            raise SdError("vid_gen response has no job id")
         return jid
 
     def job(self, id: str) -> dict:

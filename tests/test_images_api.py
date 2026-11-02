@@ -1,8 +1,10 @@
 """HTTP routes for image jobs, image models, typed-request intent and media files (Task 9)."""
+import http.client
 import json
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -10,12 +12,14 @@ from primer.config import EngineSpec, ImagesConfig, Tier
 from primer.graph import Graph
 from primer.hardware import Hardware
 from primer.images import service as service_mod
+from primer.images.families import FAMILIES
 from primer.images.models import ImageModel, ModelStore
+from primer.images.service import NO_ANIMATE_MODEL
 from primer.pages import PageService
 from primer.server import App, TextPause, make_server
 from primer.servers import ManagedServer, ServerManager
 from tests.conftest import Client
-from tests.fake_sd_server import PNG_1X1
+from tests.fake_sd_server import PNG_1X1, TINY_WEBM
 from tests.fakes import FakeEngine
 from tests.test_images_scan import gguf, safet
 from tests.test_images_service import FakeSdLauncher
@@ -93,10 +97,16 @@ def _page(env):
     return env.client.sse("/v1/pages/open", {"concept": "Trebuchet", "via": "start"})[0][1]["id"]
 
 
+def test_intent_returns_video(env):
+    c = env.client
+    assert c.post("/v1/intent", {"text": "animate a trebuchet firing"}) == {"image": None, "video": "a trebuchet firing"}
+    assert c.post("/v1/intent", {"text": "make a video of a moat"})["image"] is None
+
+
 def test_intent_route(env):
     c = env.client
-    assert c.post("/v1/intent", {"text": "draw a picture of a trebuchet"}) == {"image": "a trebuchet"}
-    assert c.post("/v1/intent", {"text": "trebuchets"}) == {"image": None}
+    assert c.post("/v1/intent", {"text": "draw a picture of a trebuchet"}) == {"image": "a trebuchet", "video": None}
+    assert c.post("/v1/intent", {"text": "trebuchets"}) == {"image": None, "video": None}
     assert c.post("/v1/intent", {"text": 7}, expect=400)["error"]
     assert c.post("/v1/intent", {}, expect=400)["error"]
 
@@ -197,7 +207,7 @@ def test_image_models_crud_and_default(env, tmp_path):
     assert listing["default"] == "sdxl-one" and listing["available"] == {"ok": True, "reason": ""}
     assert [m["id"] for m in listing["models"]] == ["sdxl-one"] and listing["models"][0]["problems"] == []
     fams = listing["families"]
-    assert set(fams) == {"sdxl", "qwen-image-2.1", "moss-image"}
+    assert {"sdxl", "qwen-image-2.1", "moss-image"} <= set(fams)  # plus the video families
     assert fams["sdxl"]["label"] == "SDXL" and fams["sdxl"]["defaults"]["steps"] == 20
     assert [s["name"] for s in fams["sdxl"]["slots"]] == ["model", "vae"]
     assert fams["sdxl"]["slots"][0]["required"] is True
@@ -331,7 +341,8 @@ def test_no_route_accepts_executable_or_flags(env, tmp_path):
                                                   "files": {"model": _model_file(tmp_path, "s.gguf"),
                                                             "launch": "calc.exe"},
                                                   "settings": {"steps": 2, **evil}, **evil}, **evil})
-    assert set(saved) == {"id", "name", "family", "files", "settings"}
+    assert set(saved) == {"id", "name", "family", "files", "settings", "loras"}
+    assert saved["loras"] == []
     assert saved["files"] == {"model": str(tmp_path / "models" / "s.gguf")}
     assert saved["settings"] == {"steps": 2}
     raw = env.store.path.read_text()
@@ -630,3 +641,213 @@ def test_auto_mode_without_gpu_text_servers_keeps_sd_server(env):
     m2 = env.client.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "a tower"})
     assert _wait_job(env, m2["id"], "done")["status"] == "done"
     assert len(env.launcher.specs) == 1
+
+
+# --- video (Phase 3) ---
+
+def _video_model(env, family="wan2.2-ti2v-5b", mid=None, loras=(), **settings):
+    files = {s.name: _model_file(env.tmp, f"{family}-{s.name}.safetensors") for s in FAMILIES[family].slots}
+    return env.store.save(ImageModel(mid or f"vid-{family.replace('.', '')}", f"Video {family}", family, files,
+                                     {"steps": 2, "frames": 9, "fps": 8, **settings}, list(loras)))
+
+
+def _get(port, path, headers):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.request("GET", path, headers=headers)
+        r = conn.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+    finally:
+        conn.close()
+
+
+def test_video_job_through_api_and_webm_served(env):
+    vid = _video_model(env)
+    nid = _page(env)
+    m = env.client.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "a trebuchet swings",
+                                       "kind": "video"})
+    assert m["kind"] == "video" and m["model_id"] == vid.id
+    job = _wait_job(env, m["id"], "done", "failed", "cancelled")
+    assert job["status"] == "done", job
+    assert job["kind"] == "video" and job["fps"] == 8 and job["frames"] == 9 and job["file"].endswith(".webm")
+    status, headers, body = _get(env.client.port, f"/v1/media/{job['file']}", {})
+    assert status == 200 and body == TINY_WEBM
+    assert headers["Content-Type"] == "video/webm" and headers["Accept-Ranges"] == "bytes"
+
+
+def test_media_webm_names_and_range_requests(env):
+    media = env.var / "media"
+    media.mkdir(parents=True)
+    data = bytes(range(100))
+    name = "e" * 64 + ".webm"
+    (media / name).write_bytes(data)
+    (media / ("a" * 64 + ".png")).write_bytes(PNG_1X1)
+    (env.var / ("b" * 64 + ".webm")).write_bytes(b"outside")
+    p, path = env.client.port, f"/v1/media/{name}"
+    for rng, first, last in [("bytes=0-9", 0, 9), ("bytes=90-", 90, 99), ("bytes=-5", 95, 99),
+                             ("bytes=95-200", 95, 99), ("bytes=0-0", 0, 0), ("bytes=-500", 0, 99)]:
+        status, h, body = _get(p, path, {"Range": rng})
+        assert status == 206, rng
+        assert body == data[first:last + 1] and h["Content-Range"] == f"bytes {first}-{last}/100", rng
+        assert h["Content-Type"] == "video/webm" and h["Content-Length"] == str(last - first + 1)
+    for rng in ["bytes=100-", "bytes=5-2", "bytes=0-1,4-5", "items=0-1", "bytes=-0", "bytes=-", "bytes=a-b", ""]:
+        status, h, body = _get(p, path, {"Range": rng})
+        assert status == 416 and body == b"" and h["Content-Range"] == "bytes */100", rng
+    # an image ignores Range
+    status, h, body = _get(p, "/v1/media/" + "a" * 64 + ".png", {"Range": "bytes=0-1"})
+    assert status == 200 and body == PNG_1X1 and h["Content-Type"] == "image/png"
+    for bad in ["E" * 64 + ".webm", "e" * 64 + ".WEBM", "e" * 64 + ".mp4", "e" * 64 + ".webm.png",
+                "..%2F" + "b" * 64 + ".webm", "%2e%2e%5c" + "b" * 64 + ".webm", "b" * 64 + ".webm"]:
+        assert _raw(p, "GET", f"/v1/media/{bad}")[0] == 404, bad
+    assert _raw(p, "GET", path, headers={"Origin": "https://evil.example"})[0] == 403
+    assert _raw(p, "GET", path, headers={"Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert _raw(p, "GET", path, headers={"Host": "evil.example"})[0] == 403
+
+
+def test_create_video_request_errors(env):
+    c, nid = env.client, _page(env)
+    base = {"node_id": nid, "subject": "x", "prompt": "a moat"}
+    for kind in ["gif", 7, None, ""]:
+        assert "kind must be one of" in c.post("/v1/images", {**base, "kind": kind}, expect=400)["error"], kind
+    assert c.post("/v1/images", {**base, "animate_from": "m1"}, expect=400)["error"] == "animate_from needs kind video"
+    assert c.post("/v1/images", {**base, "kind": "image", "animate_from": "m1"}, expect=400)["error"] == \
+        "animate_from needs kind video"
+    for bad in [7, "", ["m1"]]:
+        c.post("/v1/images", {**base, "kind": "video", "animate_from": bad}, expect=400)
+    # no video model yet: unavailable with the reason, like images
+    assert c.post("/v1/images", {**base, "kind": "video"}, expect=409)["error"] == "no video model added yet"
+    assert c.post("/v1/images", {**base, "kind": "video", "animate_from": "m1"}, expect=409)["error"] == \
+        NO_ANIMATE_MODEL
+    # the wrong kind of model for the request
+    assert "is an image model" in c.post("/v1/images", {**base, "kind": "video", "model_id": "sdxl-one"},
+                                         expect=400)["error"]
+    i2v = _video_model(env, "wan2.2-i2v-a14b")
+    assert "is a video model" in c.post("/v1/images", {**base, "model_id": i2v.id}, expect=400)["error"]
+    # an image-to-video-only model refuses a text request
+    # (the default: unavailable, as the Video button says; named: a bad request)
+    i2v_only = "Wan 2.2 I2V A14B only animates a picture: use Animate on an image"
+    assert c.post("/v1/images", {**base, "kind": "video"}, expect=409)["error"] == i2v_only
+    assert c.post("/v1/images", {**base, "kind": "video", "model_id": i2v.id}, expect=400)["error"] == i2v_only
+    # Animate: the picture must be a finished image of Primer's own
+    r = c.post("/v1/images", {**base, "kind": "video", "animate_from": "nope"}, expect=400)
+    assert r["error"] == "unknown picture to animate"
+    with env.app.gate.page():  # holds the GPU so the image stays queued
+        pending = c.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "a castle"})
+        r = c.post("/v1/images", {**base, "kind": "video", "animate_from": pending["id"]}, expect=400)
+        assert r["error"] == "the picture to animate isn't finished"
+        c.post(f"/v1/images/{pending['id']}/cancel", {})
+    # a model that can't animate, named for an Animate job
+    t2v = _video_model(env, "wan2.2-t2v-a14b")
+    r = c.post("/v1/images", {**base, "kind": "video", "animate_from": pending["id"], "model_id": t2v.id},
+               expect=400)
+    assert "can't animate a picture" in r["error"]
+    assert [m.id for m in env.graph.media_for_node(nid)] == [pending["id"]]  # nothing else was queued
+
+
+def test_animate_through_api(env):
+    c, nid = env.client, _page(env)
+    _video_model(env, "wan2.2-t2v-a14b")  # the video default, which can't animate
+    vid = _video_model(env)
+    img = c.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "a castle"})
+    assert _wait_job(env, img["id"], "done")["status"] == "done"
+    m = c.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "the castle, camera pans",
+                              "kind": "video", "animate_from": img["id"]})
+    assert m["model_id"] == vid.id and m["settings"]["animate_from"] == img["id"]
+    job = _wait_job(env, m["id"], "done", "failed")
+    assert job["status"] == "done", job
+    assert job["settings"]["animate_from"] == img["id"]  # what a video Again sends back
+    # a video can't be animated
+    r = c.post("/v1/images", {"node_id": nid, "subject": "x", "prompt": "p", "kind": "video",
+                              "animate_from": m["id"]}, expect=400)
+    assert r["error"] == "only a picture can be animated"
+
+
+def test_image_models_lists_video_families_defaults_and_availability(env, tmp_path):
+    c = env.client
+    listing = c.get("/v1/image-models")
+    fams = listing["families"]
+    sdxl, ti2v, i2v = fams["sdxl"], fams["wan2.2-ti2v-5b"], fams["wan2.2-i2v-a14b"]
+    assert sdxl["kind"] == "image" and sdxl["needs_init"] is False and sdxl["frame_step"] == 0
+    assert sdxl["can_animate"] is False and sdxl["fast_defaults"] == {}
+    assert "frames" not in sdxl["settings"] and {"width", "steps", "seed", "negative"} <= set(sdxl["settings"])
+    assert ti2v["kind"] == "video" and ti2v["can_animate"] is True and ti2v["needs_init"] is False
+    assert {"frames", "fps"} <= set(ti2v["settings"]) and "high_noise_steps" not in ti2v["settings"]
+    assert i2v["needs_init"] is True and i2v["frame_step"] == 4 and i2v["fast_defaults"]["steps"] == 4
+    assert {"high_noise_steps", "high_noise_cfg", "moe_boundary"} <= set(i2v["settings"])
+    assert fams["ltx-2.3"]["frame_step"] == 8 and fams["ltx-2.3"]["defaults"]["fps"] == 24
+    assert listing["video_default"] is None
+    assert listing["video_available"] == {"ok": False, "reason": "no video model added yet"}
+    assert listing["animate_available"] == {"ok": False, "model_id": None, "reason": NO_ANIMATE_MODEL}
+    assert listing["models"][0]["kind"] == "image" and listing["models"][0]["loras"] == []
+
+    lora_dir = tmp_path / "loras"
+    lora_dir.mkdir()
+    (lora_dir / "fast.safetensors").write_bytes(b"lora")
+    files = {s: _model_file(tmp_path, f"w-{s}.safetensors") for s in ("diffusion", "high_noise", "t5xxl", "vae")}
+    loras = [{"file": str(lora_dir / "fast.safetensors"), "strength": 0.8, "stage": "high"}]
+    saved = c.post("/v1/image-models", {"model": {"name": "Wan I2V", "family": "wan2.2-i2v-a14b",
+                                                  "files": files, "loras": loras,
+                                                  "settings": {"frames": 30, "high_noise_steps": 2}}})
+    assert saved["loras"] == loras and saved["settings"] == {"frames": 29, "high_noise_steps": 2}
+    listing = c.get("/v1/image-models")
+    entry = {m["id"]: m for m in listing["models"]}[saved["id"]]
+    assert entry["kind"] == "video" and entry["loras"] == loras and entry["problems"] == []
+    assert listing["video_default"] == saved["id"] and listing["default"] == "sdxl-one"
+    # an image-to-video default can't make a video from text: the Video button says why
+    i2v_only = {"ok": False, "reason": "Wan 2.2 I2V A14B only animates a picture: use Animate on an image"}
+    assert listing["video_available"] == i2v_only and c.get("/v1/status")["video_available"] == i2v_only
+    assert listing["animate_available"] == {"ok": True, "reason": "", "model_id": saved["id"]}
+    # re-saving through the API keeps the LoRAs it is sent
+    again = c.post("/v1/image-models", {"model": {**saved, "name": "Wan I2V again"}})
+    assert again["loras"] == loras and env.store.get(saved["id"]).loras == loras
+    # the default route sets the default of the model's own kind
+    ti2v_model = _video_model(env)
+    assert c.post("/v1/image-models/default", {"id": ti2v_model.id}) == {"ok": True}
+    listing = c.get("/v1/image-models")
+    assert listing["video_default"] == ti2v_model.id and listing["default"] == "sdxl-one"
+    s = c.get("/v1/status")
+    assert s["video_available"] == {"ok": True, "reason": ""}
+    assert s["animate_available"] == {"ok": True, "reason": "", "model_id": ti2v_model.id}
+    # a missing file is the reason
+    Path(ti2v_model.files["vae"]).unlink()
+    s = c.get("/v1/status")
+    assert s["video_available"]["ok"] is False and "file not found" in s["video_available"]["reason"]
+    # Animate falls back to the usable I2V model; with none usable, the default's reason
+    assert s["animate_available"] == {"ok": True, "reason": "", "model_id": saved["id"]}
+    Path(files["vae"]).unlink()
+    s = c.get("/v1/status")
+    assert s["animate_available"]["ok"] is False and s["animate_available"]["model_id"] == ti2v_model.id
+    assert "file not found" in s["animate_available"]["reason"]
+
+
+def test_status_video_availability_without_images_or_with_corrupt_store(env):
+    real = env.app.images.images
+    env.app.images.images = None
+    s = env.client.get("/v1/status")
+    assert s["video_available"] == {"ok": False, "reason": "sd-server not configured in this tier"}
+    assert s["animate_available"] == {"ok": False, "reason": "sd-server not configured in this tier",
+                                      "model_id": None}
+    env.app.images.images = real
+    env.store.path.write_text("{not json")
+    s = env.client.get("/v1/status")
+    assert "not a valid model store" in s["video_available"]["reason"]
+    assert "not a valid model store" in s["animate_available"]["reason"]
+
+
+def test_save_model_validates_loras(env, tmp_path):
+    c = env.client
+    good = str(tmp_path / "loras" / "a.safetensors")
+    base = {"name": "Wan", "family": "wan2.2-ti2v-5b"}
+    for bad in ["x", 7, {"file": good}, [1], ["x"], [{"file": "relative.safetensors"}],
+                [{"file": good, "strength": "strong"}], [{"file": good, "strength": True}],
+                [{"file": good, "stage": "sideways"}], [{"file": good, "stage": "high"}],  # one-stage family
+                [{"file": None}]]:
+        assert c.post("/v1/image-models", {"model": {**base, "loras": bad}}, expect=400)["error"], bad
+    saved = c.post("/v1/image-models", {"model": {**base, "loras": [{"file": good, "strength": 5}]}})
+    assert saved["loras"] == [{"file": good, "strength": 2.0, "stage": "both"}]  # clamped, stage defaulted
+    assert c.post("/v1/image-models", {"model": {**base, "loras": None}})["loras"] == []
+    # a picture model takes no LoRAs
+    pic = {"name": "Pic", "family": "sdxl", "files": {"model": _model_file(tmp_path, "pic.safetensors")}}
+    err = c.post("/v1/image-models", {"model": {**pic, "loras": [{"file": good}]}}, expect=400)["error"]
+    assert err == "LoRAs are only used by video models"
+    assert c.post("/v1/image-models", {"model": {**pic, "loras": []}})["loras"] == []

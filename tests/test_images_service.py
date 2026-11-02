@@ -20,7 +20,7 @@ from primer.images.prompting import image_prompt_messages
 from primer.images.sdclient import SdClient
 from primer.images.service import ImageService, decode_png
 from primer.servers import ManagedServer
-from tests.fake_sd_server import PNG_1X1, PREVIEW_B64
+from tests.fake_sd_server import PNG_1X1, PREVIEW_B64, TINY_WEBM
 from tests.fakes import FakeEngine
 
 FAKE_SD = str(Path(__file__).resolve().parent / "fake_sd_server.py")
@@ -598,4 +598,358 @@ def test_models_without_a_default_say_so(env):
     raw["default"] = None  # e.g. written by an older Primer
     env.store.path.write_text(json.dumps(raw), encoding="utf-8")
     svc = env.make()
-    assert svc.available() == (False, "no default image model (choose one in Image models)")
+    assert svc.available() == (False, "no default image model (choose one in Models)")
+
+
+# --- Phase 3: video jobs ---
+
+def _video_model(env, family="wan2.2-ti2v-5b", name="Wan Small", loras=(), **settings):
+    fam = FAMILIES[family]
+    files = {s.name: _model_file(env.tmp, f"{family}-{s.name}.safetensors") for s in fam.slots}
+    return env.store.save(ImageModel(f"vid-{family.replace('.', '')}", name, family, files,
+                                     {"steps": 2, "frames": 9, "fps": 8, **settings}, list(loras)))
+
+
+def _done_image(env, file=None, status="done", kind="image", data=PNG_1X1):
+    m = env.graph.add_media(env.node.id, "trebuchet", kind, env.sdxl.id, "an old picture", {})
+    if file is None and data is not None:
+        env.media_dir.mkdir(parents=True, exist_ok=True)
+        file = hashlib.sha256(data).hexdigest() + ".png"
+        (env.media_dir / file).write_bytes(data)
+    return env.graph.update_media(m.id, status=status, file=file)
+
+
+def _spy_video(monkeypatch):
+    sent = []
+    real = SdClient.submit_video
+
+    def spy(self, params):
+        sent.append(params)
+        return real(self, params)
+
+    monkeypatch.setattr(SdClient, "submit_video", spy)
+    return sent
+
+
+def test_video_job_runs_end_to_end_with_fake(env):
+    vid = _video_model(env)
+    seen = []
+    svc = env.make(fast=FakeEngine(lambda msgs: seen.append(msgs) or "a trebuchet swings, camera pans"))
+    assert svc.available("video") == (True, "")
+    m = svc.create(env.node.id, "trebuchet", "a trebuchet", kind="video")
+    assert m.kind == "video" and m.model_id == vid.id
+    job = _wait_status(svc, m.id, "done", "failed", "cancelled")
+    assert job["status"] == "done", job
+    name = hashlib.sha256(TINY_WEBM).hexdigest() + ".webm"
+    assert job["file"] == name and (env.media_dir / name).read_bytes() == TINY_WEBM
+    assert job["kind"] == "video" and job["fps"] == 8 and job["frames"] == 9
+    assert env.graph.get_media(m.id).settings["result_frames"] == 9
+    style = image_prompt_messages(FAMILIES[vid.family], "x", None, None)[0]["content"]
+    assert seen[0][0]["content"] == style and "camera movement" in style
+    # images are untouched: no fps/frames on their jobs
+    img = svc.create(env.node.id, "trebuchet", "a", prompt="a")
+    ij = _wait_status(svc, img.id, "done", "failed")
+    assert ij["kind"] == "image" and "fps" not in ij and "frames" not in ij
+
+
+def test_image_then_video_restarts_server_with_new_flags(env, monkeypatch):
+    lora_dir = env.tmp / "loras"
+    lora_dir.mkdir()
+    (lora_dir / "fast.safetensors").write_bytes(b"lora")
+    vid = _video_model(env, "wan2.2-t2v-a14b", "Wan Big",
+                       loras=[{"file": str(lora_dir / "fast.safetensors"), "strength": 1.0}])
+    sent = _spy_video(monkeypatch)
+    svc = env.make()
+    a = svc.create(env.node.id, "trebuchet", "a", prompt="a")
+    _wait_status(svc, a.id, "done")
+    v = svc.create(env.node.id, "trebuchet", "v", prompt="v", kind="video", model_id=vid.id)
+    assert _wait_status(svc, v.id, "done", "failed")["status"] == "done"
+    b = svc.create(env.node.id, "trebuchet", "b", prompt="b")
+    assert _wait_status(svc, b.id, "done", "failed")["status"] == "done"
+    first, second, third = env.launcher.launches
+    assert first[5:] == ("-m", env.sdxl.files["model"], "--vae-tiling")
+    assert "--high-noise-diffusion-model" in second and vid.files["high_noise"] in second
+    assert second[second.index("--lora-model-dir") + 1] == str(lora_dir)
+    assert third == first  # the video model's flags never leak into the image launch
+    assert env.launcher.servers[1].proc is None
+    assert sent[0]["lora"] == [{"path": "fast.safetensors", "multiplier": 1.0, "is_high_noise": False},
+                               {"path": "fast.safetensors", "multiplier": 1.0, "is_high_noise": True}]
+    assert sent[0]["output_format"] == "webm" and "init_image" not in sent[0]
+
+
+def test_lora_folder_change_restarts_server(env):
+    d1, d2 = env.tmp / "l1", env.tmp / "l2"
+    for d in (d1, d2):
+        d.mkdir()
+        (d / "x.safetensors").write_bytes(b"lora")
+    vid = _video_model(env, loras=[{"file": str(d1 / "x.safetensors")}])
+    svc = env.make()
+    v = svc.create(env.node.id, "trebuchet", "v", prompt="v", kind="video")
+    _wait_status(svc, v.id, "done")
+    env.store.save(replace(vid, loras=[{"file": str(d2 / "x.safetensors")}]))
+    v2 = svc.create(env.node.id, "trebuchet", "v", prompt="v2", kind="video")
+    _wait_status(svc, v2.id, "done")
+    assert len(env.launcher.launches) == 2
+    assert str(d2) in env.launcher.launches[1]
+
+
+def test_text_request_to_i2v_only_model_refused(env):
+    svc = env.make()
+    assert svc.available("video") == (False, "no video model added yet")
+    with pytest.raises(ValueError, match="no video model added yet"):
+        svc.create(env.node.id, "trebuchet", "a", kind="video")
+    i2v = _video_model(env, "wan2.2-i2v-a14b", "Wan Animate")
+    # the Video button is off with the same reason a text request is refused with
+    assert svc.available("video") == (False, "Wan 2.2 I2V A14B only animates a picture: use Animate on an image")
+    with pytest.raises(ValueError) as e:
+        svc.create(env.node.id, "trebuchet", "a trebuchet", kind="video")
+    assert str(e.value) == "Wan 2.2 I2V A14B only animates a picture: use Animate on an image"
+    with pytest.raises(ValueError, match="^Wan Animate is a video model$"):
+        svc.create(env.node.id, "trebuchet", "a", model_id=i2v.id)
+    with pytest.raises(ValueError, match="^SDXL One is an image model$"):
+        svc.create(env.node.id, "trebuchet", "a", kind="video", model_id=env.sdxl.id)
+    src = _done_image(env)
+    with pytest.raises(ValueError, match="only a video"):
+        svc.create(env.node.id, "trebuchet", "a", animate_from=src.id)
+    with pytest.raises(ValueError, match="kind"):
+        svc.create(env.node.id, "trebuchet", "a", kind="audio")
+    assert svc.available() == (True, "")  # the image default is unaffected
+    assert [m.id for m in env.graph.media_for_node(env.node.id)] == [src.id]  # nothing was created
+    assert env.launcher.launches == []
+
+
+def test_animate_requires_done_image_in_media_dir(env):
+    _video_model(env, "wan2.2-i2v-a14b", "Wan Animate")
+    svc = env.make()
+    outside = env.tmp / "secret.png"
+    outside.write_bytes(PNG_1X1)
+    cases = {
+        "the picture to animate isn't finished": _done_image(env, status="queued").id,
+        "only a picture can be animated": _done_image(env, kind="video").id,
+        "the picture to animate is gone": _done_image(env, file="missing.png").id,
+        "unknown picture to animate": "nope",
+    }
+    for bad in ("../secret.png", "..\\secret.png", str(outside), "..", "", "sub/x.png"):
+        cases[f"gone: {bad!r}"] = _done_image(env, file=bad).id
+    before = len(env.graph.media_for_node(env.node.id))
+    for reason, src in cases.items():
+        with pytest.raises(ValueError) as e:
+            svc.create(env.node.id, "trebuchet", "a", kind="video", animate_from=src)
+        want = "the picture to animate is gone" if reason.startswith("gone") else reason
+        assert str(e.value) == want, reason
+    assert len(env.graph.media_for_node(env.node.id)) == before
+    assert env.launcher.launches == []
+
+
+def test_animate_sends_init_image(env, monkeypatch):
+    vid = _video_model(env, "wan2.2-i2v-a14b", "Wan Animate")
+    src = _done_image(env)
+    sent = _spy_video(monkeypatch)
+    seen = []
+    svc = env.make(fast=FakeEngine(lambda msgs: seen.append(msgs) or "the stone flies, slow push in"))
+    m = svc.create(env.node.id, "trebuchet", "a trebuchet", kind="video", animate_from=src.id)
+    assert m.settings["animate_from"] == src.id and m.model_id == vid.id
+    job = _wait_status(svc, m.id, "done", "failed")
+    assert job["status"] == "done", job
+    assert job["settings"]["animate_from"] == src.id
+    assert base64.b64decode(sent[0]["init_image"]) == PNG_1X1
+    assert "animate_from" not in sent[0] and "result_fps" not in sent[0]
+    user = seen[0][1]["content"]
+    assert "animates the given picture" in user and "an old picture" in user
+    # the source is read when the job runs: gone by then, the job fails with the reason
+    with env.gate.page():
+        m2 = svc.create(env.node.id, "trebuchet", "x", prompt="x", kind="video", animate_from=src.id)
+        _wait_status(svc, m2.id, "queued")
+        (env.media_dir / src.file).unlink()
+    job2 = _wait_status(svc, m2.id, "failed", "done")
+    assert job2["status"] == "failed" and job2["error"] == "the picture to animate is gone"
+
+
+def test_video_cancel_and_stall_like_images(env):
+    _video_model(env)
+    svc = env.make(steps_delay=0.3)
+    m = svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", overrides={"steps": 30})
+    _wait_status(svc, m.id, "generating")
+    assert _until(lambda: svc.job(m.id).get("progress", {}).get("total") == 30), svc.job(m.id)
+    assert svc.cancel(m.id) is True
+    job = _wait_status(svc, m.id, "cancelled", "failed", "done", timeout=10)
+    assert job["status"] == "cancelled" and job["file"] is None and job["fps"] is None
+    assert not env.media_dir.exists() or list(env.media_dir.iterdir()) == []
+    svc.shutdown()
+
+    env.images = replace(env.images, stall_timeout_s=1.5)
+    svc2 = env.make(steps_delay=1000)
+    m2 = svc2.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", overrides={"steps": 5})
+    _wait_status(svc2, m2.id, "generating")
+    proc = env.launcher.servers[0].proc
+    job2 = _wait_status(svc2, m2.id, "failed", "done", "cancelled", timeout=10)
+    assert job2["status"] == "failed"
+    assert job2["error"] == "sd-server stopped making progress (no update for 1.5s)"
+    assert _until(lambda: proc.poll() is not None)
+    _wait_drained(env)
+
+
+def test_video_bad_result_fails_with_reason(env, monkeypatch):
+    real_job = SdClient.job
+
+    def gif_job(self, id):
+        j = real_job(self, id)
+        if j.get("result"):
+            j["result"]["mime_type"] = "image/gif"
+        return j
+
+    monkeypatch.setattr(SdClient, "job", gif_job)
+    _video_model(env)
+    svc = env.make()
+    m = svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video")
+    job = _wait_status(svc, m.id, "failed", "done")
+    assert job["status"] == "failed" and "unexpected video type" in job["error"]
+    assert not env.media_dir.exists() or list(env.media_dir.iterdir()) == []
+
+
+def test_image_available_ignores_video_models(env):
+    env.store.delete(env.sdxl.id)
+    _video_model(env)
+    svc = env.make()
+    assert svc.available() == (False, "no image model set up")
+    assert svc.available("video") == (True, "")
+
+
+# --- fix round 1: Animate picks a model that can animate ---
+
+def test_can_animate_flags():
+    from primer.images.families import FAMILIES as F
+    assert {f.id for f in F.values() if f.can_animate} == {
+        "wan2.2-ti2v-5b", "wan2.2-i2v-a14b", "ltx-2.3-distilled", "ltx-2.3"}
+    for f in F.values():
+        if f.needs_init:
+            assert f.can_animate, f.id
+        if f.kind == "image":
+            assert not f.can_animate, f.id
+
+
+def test_animate_with_explicit_model_that_cannot_animate_refused(env):
+    t2v = _video_model(env, "wan2.2-t2v-a14b", "Wan Text")
+    src = _done_image(env)
+    svc = env.make()
+    before = len(env.graph.media_for_node(env.node.id))
+    with pytest.raises(ValueError) as e:
+        svc.create(env.node.id, "trebuchet", "a", kind="video", model_id=t2v.id, animate_from=src.id)
+    assert str(e.value) == "Wan Text can't animate a picture: choose a video model that can"
+    assert len(env.graph.media_for_node(env.node.id)) == before
+
+
+def test_animate_without_model_skips_default_that_cannot_animate(env):
+    from primer.images.models import animate_model
+    t2v = _video_model(env, "wan2.2-t2v-a14b", "Wan Text")  # first video model: the video default
+    assert env.store.default_id("video") == t2v.id
+    broken = _video_model(env, "ltx-2.3", "LTX Broken")
+    Path(broken.files["vae"]).unlink()  # can animate, but doesn't validate: skipped
+    ti2v = _video_model(env, "wan2.2-ti2v-5b", "Wan Small")
+    assert animate_model(env.store).id == ti2v.id
+    src = _done_image(env)
+    svc = env.make()
+    with env.gate.page():
+        m = svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", animate_from=src.id)
+        assert m.model_id == ti2v.id
+        svc.cancel(m.id)
+    # a default that can animate is used as is
+    env.store.set_default(ti2v.id)
+    assert animate_model(env.store).id == ti2v.id
+
+
+def test_animate_without_model_falls_back_when_default_does_not_validate(env):
+    from primer.images.models import animate_model
+    broken = _video_model(env, "ltx-2.3", "LTX Broken")  # first video model: the video default
+    assert env.store.default_id("video") == broken.id
+    Path(broken.files["vae"]).unlink()  # can animate, but doesn't validate
+    ti2v = _video_model(env, "wan2.2-ti2v-5b", "Wan Small")
+    assert animate_model(env.store).id == ti2v.id
+    src = _done_image(env)
+    svc = env.make()
+    with env.gate.page():
+        m = svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", animate_from=src.id)
+        assert m.model_id == ti2v.id
+        svc.cancel(m.id)
+    # none validates: the default is reported, with its own reason
+    Path(ti2v.files["vae"]).unlink()
+    assert animate_model(env.store).id == broken.id
+    with pytest.raises(ValueError) as e:
+        svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", animate_from=src.id)
+    assert "vae: file not found" in str(e.value)
+
+
+def test_animate_without_any_capable_model_refused(env):
+    from primer.images.models import animate_model
+    _video_model(env, "wan2.2-t2v-a14b", "Wan Text")
+    src = _done_image(env)
+    svc = env.make()
+    assert animate_model(env.store) is None
+    with pytest.raises(ValueError) as e:
+        svc.create(env.node.id, "trebuchet", "a", kind="video", animate_from=src.id)
+    assert str(e.value) == "no video model that can animate a picture has been added"
+    assert svc.available("video") == (True, "")  # text-to-video is still fine
+
+
+def test_animate_refuses_drive_relative_file_name(env):
+    _video_model(env, "wan2.2-i2v-a14b", "Wan Animate")
+    svc = env.make()
+    src = _done_image(env, file="C:x.png")
+    with pytest.raises(ValueError, match="^the picture to animate is gone$"):
+        svc.create(env.node.id, "trebuchet", "a", kind="video", animate_from=src.id)
+
+
+def test_again_reuses_animate_from_settings(env):
+    """Again/Retry (Task 6): pass the row's settings["animate_from"] back as animate_from."""
+    _video_model(env, "wan2.2-i2v-a14b", "Wan Animate")
+    src = _done_image(env)
+    svc = env.make()
+    first = svc.create(env.node.id, "trebuchet", "a", prompt="a", kind="video", animate_from=src.id)
+    row = svc.job(first.id)
+    assert _wait_status(svc, first.id, "done", "failed")["status"] == "done"
+    again = svc.create(env.node.id, row["phrase"], "a", prompt=row["prompt"], kind="video",
+                       model_id=row["model_id"], animate_from=row["settings"]["animate_from"])
+    job = _wait_status(svc, again.id, "done", "failed")
+    assert job["status"] == "done" and job["settings"]["animate_from"] == src.id
+
+
+def test_two_stage_video_progress_reports_the_stage(env):
+    """sd-server counts each Wan 2.2 A14B stage on its own (0/4, 1/2, 2/2, then 1/4 .. 4/4):
+    the job says "high" until the low-noise stage starts."""
+    _video_model(env, "wan2.2-t2v-a14b", "Wan Big", steps=4, high_noise_steps=2)
+    script = "0/4,1/2,2/2,1/4,2/4,3/4,4/4"
+    svc = env.make(steps_delay=0.2, fake_args=("--script", script))
+    m = svc.create(env.node.id, "trebuchet", "v", prompt="v", kind="video")
+    seen = []
+    while _status(svc, m.id) not in ("done", "failed", "cancelled"):
+        p = svc.job(m.id).get("progress")
+        if p and (not seen or seen[-1] != p):
+            seen.append((p["step"], p["total"], p.get("stage")))
+        time.sleep(0.02)
+    assert _status(svc, m.id) == "done"
+    assert (2, 2, "high") in seen and (1, 2, "high") in seen
+    assert (1, 4, "low") in seen and (3, 4, "low") in seen
+    assert not [s for s in seen if s[:2] in ((1, 2), (2, 2)) and s[2] != "high"]
+    assert not [s for s in seen if s[0] >= 1 and s[1] == 4 and s[2] != "low"]
+    assert "progress" not in svc.job(m.id)  # finished: no live progress
+
+
+def test_single_stage_progress_has_no_stage(env):
+    svc = env.make(steps_delay=0.25)
+    m = svc.create(env.node.id, "trebuchet", "a", prompt="a", overrides={"steps": 4})
+    assert _until(lambda: svc.job(m.id).get("progress", {}).get("step", 0) >= 1), svc.job(m.id)
+    assert "stage" not in svc.job(m.id)["progress"]
+    _wait_status(svc, m.id, "done")
+
+
+@pytest.mark.parametrize("reports,stage", [
+    ([(0, 4)], "high"), ([(0, 4), (1, 2)], "high"), ([(0, 4), (1, 2), (2, 2)], "high"),
+    ([(0, 4), (1, 2), (2, 2), (1, 4)], "low"), ([(0, 4), (1, 4), (2, 4), (1, 4)], "low"),
+    ([(0, 4), (1, 1), (1, 4)], "low")])
+def test_next_stage(reports, stage):
+    live = {"step": 0, "total": 0, "stage": "high"}
+    for step, total in reports:
+        if live["stage"] == "high":
+            live["stage"] = service_mod.next_stage(live, {"step": step, "total_steps": total})
+        live["step"], live["total"] = step, total
+    assert live["stage"] == stage

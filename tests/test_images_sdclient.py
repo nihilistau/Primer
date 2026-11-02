@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from primer.images.sdclient import SdClient, SdError, to_params
-from tests.fake_sd_server import serve_fake_sd
+from primer.images.sdclient import SdClient, SdError, decode_video, to_params, to_video_params
+from tests.fake_sd_server import TINY_WEBM, serve_fake_sd
 
 
 @pytest.fixture
@@ -231,3 +231,50 @@ def test_preview_frame_when_mode_requested():
         assert not (j2["preview"] or {}).get("b64_json")
     finally:
         server.kill()
+
+
+_VS = {"width": 480, "height": 320, "seed": 7, "negative": "blurry", "steps": 20,
+       "sampler": "euler", "cfg": 6.0, "frames": 33, "fps": 16, "high_noise_steps": 10,
+       "high_noise_cfg": 3.0, "moe_boundary": 0.875, "vae_tiling": True}
+_LORA = [{"path": "a.safetensors", "multiplier": 0.8, "is_high_noise": True}]
+
+
+def test_to_video_params_full():
+    b = to_video_params("a fox", _VS, _LORA, "QUJD")
+    assert b == {
+        "prompt": "a fox", "negative_prompt": "blurry", "width": 480, "height": 320, "seed": 7,
+        "video_frames": 33, "fps": 16, "moe_boundary": 0.875,
+        "sample_params": {"sample_steps": 20, "sample_method": "euler",
+                          "guidance": {"txt_cfg": 6.0}},
+        "high_noise_sample_params": {"sample_steps": 10, "sample_method": "euler",
+                                    "guidance": {"txt_cfg": 3.0}},
+        "lora": _LORA, "init_image": "QUJD", "output_format": "webm",
+        "preview": "proj", "preview_interval": 1, "vae_tiling_params": {"enabled": True}}
+
+
+def test_to_video_params_omits_unset_high_noise():
+    b = to_video_params("a fox", {"width": 64, "frames": 9, "fps": 8}, [], None)
+    for k in ("high_noise_sample_params", "moe_boundary", "lora", "init_image",
+              "vae_tiling_params", "sample_params"):
+        assert k not in b
+    assert b["output_format"] == "webm" and b["video_frames"] == 9
+
+
+def test_submit_video_and_poll_with_fake(sd):
+    c = SdClient(sd.url)
+    jid = c.submit_video(to_video_params("a fox", _VS, _LORA, None))
+    job = _wait(c, jid, "completed")
+    assert job["kind"] == "vid_gen"
+    raw, meta = decode_video(job)
+    assert raw == TINY_WEBM
+    assert meta == {"mime": "video/webm", "fps": 16, "frame_count": 33}
+    assert sd.jobs[jid]["params"]["lora"] == _LORA
+
+
+def test_decode_video_rejects_wrong_mime():
+    ok = {"mime_type": "video/webm", "b64_json": base64.b64encode(b"x").decode()}
+    assert decode_video({"result": ok})[0] == b"x"
+    for bad in ({**ok, "mime_type": "video/mp4"}, {**ok, "b64_json": "!!notb64"},
+                {"mime_type": "video/webm"}, None):
+        with pytest.raises(ValueError):
+            decode_video({"result": bad})

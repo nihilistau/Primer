@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching and drawing with Primer. To install it and point it at your models,
+A guide to reading, branching, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -14,7 +14,7 @@ dock at the bottom opens:
 | Book | **New page**: a reader. You can open several readers side by side. |
 | Grid | **Map of where I've been**: every page you've opened, as a tree. |
 | Chip | **Engines**: the tier, the model servers and their states, and the GPU mode. |
-| Wrench | **Image models**: add, scan, edit and choose image models. |
+| Wrench | **Models**: add, scan, edit and choose picture and video models. |
 
 ## Reading
 
@@ -37,6 +37,7 @@ The buttons beside it rewrite the page you are on:
 | **Simpler** | The same topic, written more plainly. |
 | **Regenerate** | A fresh take on the page. |
 | **Image** | Draws a picture of the whole page (see [Pictures](#pictures)). |
+| **Video** | Makes a short clip of the whole page (see [Video](#video)). |
 
 **Back** and **forward** (the arrows at the left) move through the pages you've visited in this
 reader, like a browser. Going back shows the saved page instantly. It is never rewritten.
@@ -58,7 +59,7 @@ Click a card to open that page. Under the cards:
 - **Image** draws just this phrase.
 - **Ask about it** puts `Tell me about "<phrase>"` into the prompt box, so you can edit the
   question before sending it.
-- **Video** is shown but not available yet; it arrives in a later version.
+- **Video** makes a short clip of just this phrase.
 
 Press **Escape** or click elsewhere to close the fork without choosing.
 
@@ -91,6 +92,7 @@ An **Image window** opens at once and shows what is happening:
 | Waiting for the GPU | Another image is ahead of this one, or the GPU is being freed. |
 | Loading the model... | `sd-server` is starting and loading the model. The first image after a while takes longest. |
 | Step N of M | Drawing, with a live preview that sharpens as it goes. |
+| Decoding... | The last step is done and the result is being decoded; for a video this can take a while. |
 | Done | The picture, its prompt, the model and the settings used. |
 | Failed: ... / Cancelled | With the reason. A failed picture has a **Retry** button. |
 
@@ -107,30 +109,65 @@ In the Image window:
 Every picture records the seed it actually used, so you can reproduce one by running it again with
 that seed.
 
-## Image models
+## Video
 
-Open **Image models** from the dock.
+Video works like pictures, and a clip is always made in the background. There are four ways to
+ask for one:
 
-- **Scan a folder**: paste the absolute path of a folder holding image models and click **Scan**.
+1. **The Video button** in a page's header makes a clip of the whole page.
+2. **Video on a branch fork** makes a clip of a single phrase.
+3. **Animate** in a finished Image window brings that picture to life: the picture is the first
+   frame, and the model decides how it moves.
+4. **Typing a request** in the prompt box, such as:
+   - "animate a trebuchet firing"
+   - "make / create / generate a (short) video, clip or animation of a castle siege"
+   - "film the drawbridge rising"
+   - "show me a video of a catapult"
+
+   Questions that only mention these words ("how do I make a video?", "animated films",
+   "animate vs inanimate") are read as questions.
+
+A **Video window** opens at once, with the same statuses as the Image window. The fast model
+writes a prompt that describes the subject, the motion and the camera. When the clip is done it
+plays in a loop, with its prompt, model, settings, length (frames, frames per second and
+seconds) and seed. **Cancel**, **Again**, **Retry** and **Edit & run** work as they do for
+pictures; Again on an animated picture animates the same picture again.
+
+Clips appear as thumbnails at the bottom of their page, next to the pictures, marked with a play
+glyph.
+
+Making video is slow on a 12 GB card. Expect a few minutes for a 2 to 3 second clip (see
+[RUNNING.md](RUNNING.md#measured-video-speeds)).
+
+## Models
+
+Open **Models** from the dock. It has two lists, **Pictures** and **Videos**, each with its own
+default (the star).
+
+- **Scan a folder**: paste the absolute path of a folder holding picture or video models and click **Scan**.
   Primer reads the file headers (it never loads the models) and proposes each complete model it
   recognises, with its family and files. Click **Add** on the ones you want. A model that is
-  missing a file is shown with what is missing.
+  missing a file is shown with what is missing. Video models are found with their shared text
+  encoder and VAE, and any LoRAs in a `loras` folder beside them.
 - **New model**: choose a family and fill in the file paths yourself.
 - **Click a model** to edit its name, files and settings. Each file shows `found` or `missing`.
-- The **star** marks the default model, used for new pictures. The first model you add becomes
-  the default; choose another with **Make default**.
+- The **star** marks the default model of each list, used for new pictures or clips. The first
+  model you add to a list becomes its default; choose another with **Make default**.
 
 Settings per model:
 
 | Setting | Meaning |
 | --- | --- |
-| Width, Height | Picture size in pixels (256 to 2048; rounded to what the model needs). |
+| Width, Height | Size in pixels (256 to 2048 for pictures, 256 to 1280 for video; rounded to what the model needs). |
 | Steps | More is slower and finer. 20 is a good start. |
 | CFG | How closely to follow the prompt. SDXL likes about 5 to 7; Qwen-Image and MOSS-Image about 3 to 4. |
 | Sampler | The denoising method. `euler` works for all three families. |
 | Seed | Leave blank (or -1) for a new picture each time; set a number to repeat one. |
 | Avoid | Things to keep out of the picture (a negative prompt). |
 | Offload to CPU | Keeps parts of the model in system RAM. Slower, but lets big models fit a 12 GB card. |
+| Frames, FPS | Video only. The clip's length is frames ÷ FPS, shown as **Length**. Wan rounds frames to 4n+1 (33, 49, 81), LTX to 8n+1 (49, 97, 121). |
+| High-noise steps, High-noise CFG, MoE boundary | Wan 2.2 A14B only. These models draw in two stages, a high-noise model for the layout and a low-noise model for the detail. |
+| LoRAs | Small add-on files. Each has a strength (0 to 2) and, on two-stage models, a stage: high, low or both. All of a model's LoRAs must be in one folder. |
 
 The three supported families:
 
@@ -140,7 +177,18 @@ The three supported families:
 | Qwen-Image 2.1 | Diffusion model, Qwen3-VL-8B text encoder, Qwen-Image 2.1 VAE | Follows long prompts well. About 4 minutes per image on an RTX 2060. |
 | MOSS-Image | Diffusion model, Qwen3.5-9B text encoder, VAE, `tokenizer.json` | About 4.5 minutes per image on an RTX 2060. |
 
-Keep model files on an internal drive. Loading from an external hard disk can take many minutes.
+The video families:
+
+| Family | Files | Notes |
+| --- | --- | --- |
+| Wan 2.2 TI2V 5B | Diffusion model, UMT5-XXL text encoder, Wan 2.2 VAE | The lightest. Text or picture to video. |
+| Wan 2.2 T2V A14B | High-noise and low-noise diffusion models, UMT5-XXL, Wan 2.1 VAE | Text to video. With LightX2V's 4-step LoRAs it needs only a few steps. |
+| Wan 2.2 I2V A14B | As T2V, but the image-to-video models | Animate only: it needs a picture to start from. |
+| LTX-2.3 distilled | Diffusion model, Gemma 3 12B text encoder, embeddings connectors, LTX-2.3 video VAE | 8 steps at CFG 1. Text or picture to video. |
+| LTX-2.3 dev | As distilled | The full model: about 20 steps at CFG 3. |
+
+Keep model files, and `sd-server` itself, on an internal drive. Loading from an external hard disk
+can take many minutes, and a disk that drops off while a model is loaded makes `sd-server` crash.
 
 ## Engines and tiers
 
@@ -162,8 +210,8 @@ Primer starts when a picture is needed.
 
 With the GPU mode on **auto** (the default), when a picture needs the GPU, Primer pauses the writing
 model, draws, then shuts `sd-server` down and brings the writing model back (about 20 seconds). A
-page you ask for while a picture is drawing shows "paused for an image" and is written straight
-after. On LM Studio tiers, pausing unloads LM Studio's models, and the first page afterwards waits
+page you ask for while a picture or video is being made shows "paused for a picture or video" and
+is written straight after. On LM Studio tiers, pausing unloads LM Studio's models, and the first page afterwards waits
 while LM Studio loads the model again.
 
 With **manual** GPU mode, Primer leaves your servers alone and keeps `sd-server` loaded between
@@ -177,7 +225,7 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 - **Out of VRAM?** Turn on Offload to CPU, lower the size, or use auto GPU mode so the writing
   model steps aside.
 - **Your data** lives in `var/`: the concept graph (`primer.sqlite`), pictures (`var/media/`) and
-  your image models (`images.json`). Back up that folder to keep your book.
+  your models (`images.json`). Back up that folder to keep your book.
 
 ## Troubleshooting
 
@@ -190,3 +238,6 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 | A picture failed with "Primer restarted" | Primer was stopped while it was drawing. Click **Again**. |
 | "already answering" for the image server | Something else holds the image port, perhaps a leftover from a crash. Primer clears its own leftovers on the next start; otherwise stop it, or change `port` under `[images]`. |
 | Thumbnails show a red cross | That picture failed. Open it to see why. |
+| Video button disabled | Hover it for the reason: no video model added, or no default video model. |
+| Animate disabled | No video model that can start from a picture (Wan 2.2 TI2V 5B, Wan 2.2 I2V or LTX-2.3). |
+| `sd-server stopped while generating (exit code 3221225478)` | Windows couldn't read part of `sd-server` or a model file, usually an external disk that disconnected. Move them to an internal drive. |

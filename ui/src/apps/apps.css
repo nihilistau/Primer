@@ -21,7 +21,7 @@
 .en-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); margin-top: var(--sp-2); }
 .pn-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); padding: var(--sp-1) var(--sp-2); }
 
-/* the Image models window */
+/* the Models window */
 .imm-banner { display: flex; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-2) var(--sp-3);
   margin-bottom: var(--sp-2); background: var(--surface-0); border: 1px solid var(--warn); border-radius: var(--r-sm);
   color: var(--text-1); font: 400 var(--fs-12)/1.4 var(--font-ui); }
@@ -48,6 +48,12 @@
 .imm-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
 .imm-prop { padding: var(--sp-2) 0; border-bottom: 1px solid var(--hair); }
 .imm-prop-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.imm-length { font: 400 var(--fs-13)/1.6 var(--font-ui); color: var(--text-1); }
+.imm-loras { display: flex; flex-direction: column; gap: var(--sp-1); }
+.imm-lora { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.imm-lora-file { flex: 1 1 100%; min-width: 0; }
+.imm-lora-strength { flex: 0 0 4.5em; width: 4.5em; }
+.imm-lora-stage { flex: 0 0 11em; width: 11em; }
 
 /* Engines: the image server row */
 .en-paused { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); margin-top: var(--sp-1); }

@@ -45,7 +45,7 @@ function ImageServer({ im, avail, gpu }) {
       {name ? <div className="en-detail">{name}</div> : null}
       {im.state !== 'ready' && reason ? <div className="en-reason">{reason}</div> : null}
       {gpu && gpu.mode === 'auto' && gpu.text_paused
-        ? <div className="en-paused">Writing model paused for an image</div> : null}
+        ? <div className="en-paused">Writing model paused for a picture or video</div> : null}
     </div>
   )
 }

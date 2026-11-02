@@ -242,7 +242,7 @@ def test_open_emits_waiting_event_when_gate_busy(graph, text_engine, fast_engine
         s.shutdown()
     kinds = [k for k, _ in ev]
     assert kinds[:2] == ["node", "waiting"] and kinds.count("waiting") == 1
-    assert dict(ev)["waiting"] == {"reason": "paused for an image"}
+    assert dict(ev)["waiting"] == {"reason": "paused for a picture or video"}
     assert kinds[-2:] == ["done", "highlights"]
     assert "".join(d["text"] for k, d in ev if k == "delta") == MD
     assert calls == ["pause", "resume"] and gate.state()["holder"] is None

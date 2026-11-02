@@ -3,7 +3,8 @@
 **An offline illustrated primer: a book that writes itself as you read it.** Start from a loose
 interest, such as castles. Every phrase on the page can be clicked, and each one branches into a
 new page: one written in the context you came from, a general article, or a sideways jump.
-Any phrase can also be drawn as a picture. You keep reading while it renders.
+Any phrase can also be drawn as a picture or turned into a short clip, and any picture can be
+animated. You keep reading while they render.
 
 Primer runs on your own machine against local models (LM Studio, llama.cpp's `llama-server`, or a
 hosted OpenAI-compatible API if you choose). Everything you read and every picture it draws is
@@ -36,6 +37,15 @@ settings, and every image records its seed so it can be reproduced.
 
 ![The Trebuchet page with three image thumbnails, one marked failed, and an Image window showing a Qwen-Image 2.1 picture of a wooden trebuchet in golden morning haze before a castle](docs/screenshots/trebuchet-qwen.webp)
 
+**Video, and pictures that move.** Click **Video** on a page or a phrase, type "animate a
+trebuchet firing", or press **Animate** on a finished picture to use it as the first frame. Primer
+writes a prompt about the motion and the camera and makes the clip in the background with the same
+stable-diffusion.cpp server. Wan 2.2 (5B, and the two-stage 14B models with LightX2V's 4-step
+LoRAs) and LTX-2.3 are supported, with LoRAs per model. Clips loop in their own window and sit on
+the page next to its pictures.
+
+![A Video window playing a clip animated from a Qwen-Image picture of a trebuchet at dawn, its arm mid-swing, with the prompt, model, settings and length below it, beside the Trebuchet page whose thumbnail strip shows pictures and a clip](docs/screenshots/video-animate.webp)
+
 **A map of where you've been.** Every page you open joins a concept graph. The map shows the
 trail: which page you branched from, and how (in context, general, or sideways).
 
@@ -44,10 +54,10 @@ trail: which page you branched from, and how (in context, general, or sideways).
 **It looks after its own models.** Primer starts and stops the model servers it needs. On one
 GPU it shares the card for you: in auto GPU mode it pauses the writing model while an image is
 drawn, then brings it back, and a page asked for in the meantime waits its turn. The Engines window
-shows each server's state and why. The Image models window can scan a folder and find complete
+shows each server's state and why. The Models window can scan a folder and find complete
 models for you.
 
-![The Engines window showing the tier, text and fast model servers ready, the image server stopped, and the source and GPU modes, beside the Image models window listing SDXL, MOSS-Image and Qwen-Image 2.1 as ready, with the Qwen-Image editor open showing its three files found and its size, steps, CFG, sampler, seed and CPU offload settings](docs/screenshots/engines-and-image-models.webp)
+![The Engines window showing the tier, the text and fast model servers ready and the image server stopped, beside the Models window editing the Wan 2.2 T2V A14B 4-step video model: width, height, frames, FPS, steps, CFG, high-noise steps and CFG, MoE boundary, sampler and offload settings, a length of 2.1 seconds, and two LightX2V 4-step LoRAs, one for the high-noise stage and one for the low-noise stage](docs/screenshots/engines-and-models.webp)
 
 ## Install
 
@@ -62,9 +72,10 @@ with no dependencies and should run elsewhere too, but that hasn't been tried ye
   - [LM Studio](https://lmstudio.ai/) with its `lms` command on your PATH, or
   - [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` and a GGUF model, or
   - a hosted OpenAI-compatible API (bring your own key).
-- **For pictures (optional):** a
+- **For pictures and video (optional):** a
   [stable-diffusion.cpp release](https://github.com/leejet/stable-diffusion.cpp/releases) (CUDA,
-  Vulkan or CPU build) and at least one model: an SDXL checkpoint, Qwen-Image 2.1 or MOSS-Image.
+  Vulkan or CPU build) and at least one model: an SDXL checkpoint, Qwen-Image 2.1 or MOSS-Image
+  for pictures; Wan 2.2 or LTX-2.3 for video (see [docs/RUNNING.md](docs/RUNNING.md#video)).
 
 A good small setup is a 4B to 12B instruct model on the GPU for writing, plus a 1B to 2B model on
 the CPU for picking highlights. Measured on an RTX 2060 (12 GB), a page takes about a minute with
@@ -103,8 +114,8 @@ Then open **http://127.0.0.1:8810**. Primer starts the model servers its tier ma
 them when you quit. Without `--tier` it uses the tier you last chose, or suggests one from your
 GPU's memory.
 
-To add image models, open **Image models** from the dock, paste the folder that holds them into
-**Scan a folder**, and click **Add** on each model it finds.
+To add picture or video models, open **Models** from the dock, paste the folder that holds them
+into **Scan a folder**, and click **Add** on each model it finds.
 
 ## How to use it
 
@@ -114,7 +125,8 @@ The short version:
 2. Click any underlined phrase, then pick a branch.
 3. Use **back / forward**, **Deeper**, **Simpler** and **Regenerate** to move around.
 4. Click **Image**, or type "draw ...", for a picture. It renders while you keep reading.
-5. Open the **map** from the dock to see where you've been and jump back.
+5. Click **Video**, type "animate ...", or press **Animate** on a picture, for a short clip.
+6. Open the **map** from the dock to see where you've been and jump back.
 
 The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
 
@@ -128,7 +140,7 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.2**: pages, branching and images work. Video, grounding in an offline
+This is **v0.3**: pages, branching, pictures and video work. Grounding in an offline
 encyclopedia or the web, maps, narrated stories and an embedded browser are planned next. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).

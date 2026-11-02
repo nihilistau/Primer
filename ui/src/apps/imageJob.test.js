@@ -14,9 +14,19 @@ describe('describeJob', () => {
 
   it('reports generating progress as steps and a percentage', () => {
     expect(d('generating', { progress: { step: 7, total: 20 } })).toMatchObject({ label: 'Step 7 of 20', pct: 35 })
-    expect(d('generating', { progress: { step: 20, total: 20 } }).pct).toBe(100)
+    expect(d('generating', { progress: { step: 19, total: 20 } }).label).toBe('Step 19 of 20')
     expect(d('generating').label).toBe('Generating…')
     expect(d('generating', { progress: { step: 0, total: 0 } }).pct).toBe(0)
+  })
+
+  it('once the last step is done, says it is decoding with the bar full', () => {
+    expect(d('generating', { progress: { step: 2, total: 2, stage: 'high' } })).toMatchObject({ label: 'High-noise step 2 of 2', pct: 100, done: false })
+    expect(d('generating', { progress: { step: 1, total: 2, stage: 'high' } })).toMatchObject({ label: 'High-noise step 1 of 2', pct: 50 })
+    expect(d('generating', { progress: { step: 1, total: 4, stage: 'low' } })).toMatchObject({ label: 'Step 1 of 4', pct: 25 })
+    expect(d('generating', { progress: { step: 4, total: 4, stage: 'low' } })).toMatchObject({ label: 'Decoding…', pct: 100 })
+    expect(d('generating', { progress: { step: 20, total: 20 } })).toMatchObject({ label: 'Decoding…', pct: 100, done: false })
+    expect(d('generating', { progress: { step: 21, total: 20 } })).toMatchObject({ label: 'Decoding…', pct: 100 })
+    expect(d('generating', { progress: { step: 0, total: 0 } }).label).toBe('Generating…')
   })
 
   it('failed carries the reason and can retry', () => {

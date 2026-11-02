@@ -1,18 +1,19 @@
 /* ImageWindow — one image job. It opens the moment an image is asked for, shows live
  * progress (and sd-server's preview frame) while the job runs, then the picture with its
  * prompt, model, settings and seed. Again / Edit & run / another model each start a NEW
- * Image window and leave this one as it is. Props: { windowId, jobId, subject? }. */
+ * Image window and leave this one as it is; Animate starts a Video window that animates this
+ * picture. Props: { windowId, jobId, subject? }. */
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import * as wm from '../windowManager.js'
 import { Button, Chip, Select, TextArea } from '../kit/parts.jsx'
+import { openImageWindow, openVideoWindow } from '../openImage.js'
 import { describeJob, pollJob, previewUrl, settingsSummary } from './imageJob.js'
+import { animateButton } from './videoJob.js'
 import './images.css'
 
-const SIZE = [640, 720]
-
 /* the prompt as clickable words: punctuation stays out of the concept it opens */
-function Words({ text, onWord }) {
+export function Words({ text, onWord }) {
   const parts = text.split(/(\s+)/)
   return (
     <p className="im-words" aria-label="Prompt words">
@@ -32,6 +33,7 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
   const [pollErr, setPollErr] = useState('')
   const [models, setModels] = useState([])
   const [modelsErr, setModelsErr] = useState('')
+  const [anim, setAnim] = useState({ enabled: false, reason: 'Checking whether Animate is available…' })
   const [gone, setGone] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [edited, setEdited] = useState(false)
@@ -54,8 +56,16 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
     return () => ac.abort()
   }, [jobId])
 
-  useEffect(() => { api.imageModels().then(d => setModels(d.models || []))
-      .catch((e) => setModelsErr(e.message || 'Primer did not answer.')) }, [])
+  useEffect(() => {
+    let live = true
+    api.imageModels().then(d => { if (live) { setModels(d.models || []); setAnim(animateButton(d)) } })
+      .catch((e) => {
+        if (!live) return
+        setModelsErr(e.message || 'Primer did not answer.')
+        setAnim({ enabled: false, reason: `Couldn't check whether Animate is available: ${e.message || 'Primer did not answer.'}` })
+      })
+    return () => { live = false }
+  }, [])
 
   useEffect(() => {
     const t = subject || job?.phrase || (job?.prompt ? job.prompt.split(/\s+/).slice(0, 5).join(' ') : '')
@@ -64,7 +74,7 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
 
   const info = describeJob(job || { status: 'prompting' })
   const running = !!job && !info.done
-  const usable = models.filter(m => !(m.problems && m.problems.length) && m.id !== job?.model_id)
+  const usable = models.filter(m => m.kind !== 'video' && !(m.problems && m.problems.length) && m.id !== job?.model_id)
   const model = models.find(m => m.id === job?.model_id)
 
   // start a new job from this one's inputs and open its own window
@@ -76,7 +86,7 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
         model_id: job.model_id, overrides: { ...(job.settings || {}), seed: -1 }, prompt: job.prompt || undefined,
         ...extra,
       })
-      wm.open('image', { props: { jobId: m.id, subject }, w: SIZE[0], h: SIZE[1] })
+      openImageWindow(m.id, subject)
     } catch (e) { setErr(e.message || 'Could not start the image.') }
     setBusy(false)
   }
@@ -84,6 +94,17 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
   const editRun = () => spawn({ prompt: prompt.trim() })
   // another model brings its own settings (sizes and steps differ by family); the prompt stays
   const withModel = () => spawn({ model_id: other, overrides: { seed: -1 } })
+  // a short video that starts from this picture, on the model the server picks for Animate
+  const animate = async () => {
+    setBusy(true); setErr('')
+    const about = subject || job.phrase || (job.prompt || '').slice(0, 200)
+    try {
+      const m = await api.createImage({ node_id: job.node_id, phrase: job.phrase || '', subject: about,
+                                        kind: 'video', animate_from: jobId })
+      openVideoWindow(m.id, subject || job.phrase || '')
+    } catch (e) { setErr(e.message || 'Could not start the video.') }
+    setBusy(false)
+  }
   const cancel = async () => {
     setErr('')
     try { await api.cancelImage(jobId) } catch (e) { setErr(e.message || 'Could not cancel.') }
@@ -146,6 +167,10 @@ export default function ImageWindow({ windowId, jobId, subject = '' }) {
               {usable.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </Select>
             <Button size="sm" disabled={busy || !info.done || !other} onClick={withModel}>Run with it</Button>
+            <Button size="sm" disabled={busy || job.status !== 'done' || !anim.enabled}
+                    title={anim.enabled ? 'Make a short video that starts from this picture' : anim.reason}
+                    aria-label={anim.enabled ? 'Animate' : `Animate (unavailable: ${anim.reason})`}
+                    onClick={animate}>Animate</Button>
           </div>
           {noModels ? <div className="im-meta">{noModels}</div> : null}
           {err ? <div className="im-err">{err}</div> : null}

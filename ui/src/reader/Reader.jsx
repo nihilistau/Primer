@@ -3,14 +3,15 @@
  * always shows the prompt box. Props: { windowId, start? (an open-page body), onPick? }. */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
-import { mediaUrl } from '../api.js'
-import { openImageWindow } from '../openImage.js'
+import { mediaUrl, videoUrl } from '../api.js'
+import { MEDIA_EVENT, openImageWindow, openVideoWindow } from '../openImage.js'
 import * as wm from '../windowManager.js'
 import { Button, Chip, Input, State } from '../kit/parts.jsx'
 import BranchFork from '../fork/BranchFork.jsx'
 import { Markdown } from './markdown.jsx'
 import { createHistory } from './history.js'
 import { routePrompt, imageButton, imageChecking, imageCheckFailed, thumbState } from './imageRoute.js'
+import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import { retryBody } from './retry.js'
 import { streamEndError } from './streamEnd.js'
 import './reader.css'
@@ -36,9 +37,11 @@ export default function Reader({ windowId, start, onPick }) {
   const promptRef = useRef(null)
   const [fork, setFork] = useState(null)       // {phrase, anchor, container, node, key} while the fork is open
   nodeRef.current = view.nodeId
-  const [media, setMedia] = useState({ node: null, items: [] })   // this page's images
+  const [media, setMedia] = useState({ node: null, items: [] })   // this page's images and videos
   const [imgBtn, setImgBtn] = useState(imageChecking)
+  const [vidBtn, setVidBtn] = useState(videoChecking)
   const [imgErr, setImgErr] = useState('')
+  const [errTitle, setErrTitle] = useState('No image')
   const [mediaErr, setMediaErr] = useState('')
 
   const stop = () => { if (abort.current) abort.current.abort(); abort.current = null }
@@ -67,7 +70,7 @@ export default function Reader({ windowId, start, onPick }) {
           setView(v => ({ ...v, nodeId: data.id, title: data.title, sourceMode: data.source_mode || v.sourceMode }))
           tick(x => x + 1)
         } else if (event === 'waiting') {
-          setView(v => (v.markdown ? v : { ...v, waiting: data.reason || 'paused for an image' }))
+          setView(v => (v.markdown ? v : { ...v, waiting: data.reason || 'paused for a picture or video' }))
         } else if (event === 'delta') {
           setView(v => ({ ...v, waiting: '', markdown: v.markdown + data.text }))
         } else if (event === 'done') {
@@ -109,26 +112,29 @@ export default function Reader({ windowId, start, onPick }) {
   const back = () => go(hist.current.back())
   const forward = () => go(hist.current.forward())
 
-  /* Image requests make an image and leave the reader where it is; the rest open a page. */
+  /* Image and video requests make one and leave the reader where it is; the rest open a page. */
   const sendPrompt = async (e) => {
     e.preventDefault()
     const typed = text.trim()
     if (!typed) return
     setText('')
     const r = await routePrompt(typed, { nodeId: nodeRef.current })
-    if (r.kind === 'image') makeImage(r.body)
+    if (r.kind === 'image' || r.kind === 'video') makeImage(r.body)
     else run(r.body)
   }
 
-  /* Create an image job; its window opens only on success, a refusal shows in the reader. */
+  /* Create an image or video job (body.kind video); its window opens only on success, a
+   * refusal shows in the reader. */
   const makeImage = async (body) => {
+    const video = body.kind === 'video'
     setImgErr('')
     try {
       const m = await api.createImage(body)
-      openImageWindow(m.id, body.subject)
-      loadMedia(nodeRef.current)
+      if (video) openVideoWindow(m.id, body.subject)
+      else openImageWindow(m.id, body.subject)
     } catch (e) {
-      setImgErr(e.message || 'The image could not be started.')
+      setErrTitle(video ? 'No video' : 'No image')
+      setImgErr(e.message || (video ? 'The video could not be started.' : 'The image could not be started.'))
     }
   }
 
@@ -142,6 +148,12 @@ export default function Reader({ windowId, start, onPick }) {
       if (id === nodeRef.current) setMediaErr(`Couldn't refresh this page's images: ${e.message || 'Primer did not answer.'}`)
     }
   }, [])
+  // a job started anywhere (an Image or Video window's Again, Animate, …) may belong to this page
+  useEffect(() => {
+    const onMedia = () => loadMedia(nodeRef.current)
+    window.addEventListener(MEDIA_EVENT, onMedia)
+    return () => window.removeEventListener(MEDIA_EVENT, onMedia)
+  }, [loadMedia])
   const mediaItems = media.node === view.nodeId ? media.items : []
   const unfinished = mediaItems.some(m => thumbState(m) === 'busy')
   useEffect(() => { if (view.nodeId && !view.streaming) loadMedia(view.nodeId) }, [view.nodeId, view.streaming, loadMedia])
@@ -153,8 +165,8 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { setImgErr(''); setMediaErr('') }, [view.nodeId])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) setImgBtn(imageButton(st)) })
-      .catch(e => { if (live) setImgBtn(imageCheckFailed(e)) })
+    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)) } })
+      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
 
@@ -189,6 +201,11 @@ export default function Reader({ windowId, start, onPick }) {
     const phrase = fork.phrase, node = fork.node
     closeFork()
     makeImage({ node_id: node, phrase, subject: phrase })
+  }
+  const forkVideo = () => {
+    const phrase = fork.phrase, node = fork.node
+    closeFork()
+    makeImage({ node_id: node, phrase, subject: phrase, kind: 'video' })
   }
   const act = (kind) => {
     if (kind !== 'ask') return
@@ -235,6 +252,10 @@ export default function Reader({ windowId, start, onPick }) {
                   title={imgBtn.enabled ? 'Draw a picture of this page' : imgBtn.reason}
                   aria-label={imgBtn.enabled ? 'Image' : `Image (unavailable: ${imgBtn.reason})`}
                   onClick={() => makeImage({ node_id: view.nodeId, subject: view.title })}>Image</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !vidBtn.enabled}
+                  title={vidBtn.enabled ? 'Make a short video of this page' : vidBtn.reason}
+                  aria-label={vidBtn.enabled ? 'Video' : `Video (unavailable: ${vidBtn.reason})`}
+                  onClick={() => makeImage({ node_id: view.nodeId, subject: view.title, kind: 'video' })}>Video</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'deeper' })}>Deeper</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'simpler' })}>Simpler</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ regenerate: true })}>Regenerate</Button>
@@ -245,18 +266,24 @@ export default function Reader({ windowId, start, onPick }) {
         {hasPage ? (
           <div className="rd-article" ref={articleRef} tabIndex={-1} onMouseUp={onSelect}>
             <Markdown source={view.markdown} phrases={view.phrases} onPhrase={pick} />
-            {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for an image' : 'writing…'}</Chip></div> : null}
+            {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
             {mediaItems.length ? (
-              <ul className="rd-strip" aria-label="Images on this page">
+              <ul className="rd-strip" aria-label="Images and videos on this page">
                 {mediaItems.map(m => {
-                  const st = thumbState(m), url = st === 'done' ? mediaUrl(m.file) : ''
+                  const video = m.kind === 'video', what = video ? 'Video' : 'Image'
+                  const st = thumbState(m), url = st !== 'done' ? '' : video ? videoUrl(m.file) : mediaUrl(m.file)
+                  const open = video ? openVideoWindow : openImageWindow
                   return (
                     <li key={m.id}>
                       <button type="button" className={`rd-thumb rd-thumb-${st}`}
-                              title={m.phrase || m.prompt || 'Image'}
-                              aria-label={`Image: ${m.phrase || m.prompt || 'untitled'} (${st === 'busy' ? 'in progress' : st})`}
-                              onClick={() => openImageWindow(m.id, m.phrase || view.title)}>
-                        {url ? <img src={url} alt="" /> : <span className="rd-thumb-glyph" aria-hidden="true">{st === 'failed' ? '✕' : <span className="ui-spin" />}</span>}
+                              title={m.phrase || m.prompt || what}
+                              aria-label={`${what}: ${m.phrase || m.prompt || 'untitled'} (${st === 'busy' ? 'in progress' : st})`}
+                              onClick={() => open(m.id, m.phrase || view.title)}>
+                        {url && video
+                          ? <><video src={`${url}#t=0.1`} preload="metadata" muted playsInline aria-hidden="true" tabIndex={-1} />
+                              <span className="rd-thumb-play" aria-hidden="true">{'▶︎'}</span></>
+                          : url ? <img src={url} alt="" />
+                          : <span className="rd-thumb-glyph" aria-hidden="true">{st === 'failed' ? '✕' : <span className="ui-spin" />}</span>}
                       </button>
                       {m.phrase ? <span className="rd-thumb-cap">{m.phrase}</span> : null}
                     </li>
@@ -276,14 +303,14 @@ export default function Reader({ windowId, start, onPick }) {
         {fork ? (
           <div className="rd-fork" style={{ left: fork.at.x, top: fork.at.y }}>
             <BranchFork key={fork.key} anchor={fork.anchor} container={fork.container} node={fork.node}
-                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onClose={closeFork} />
+                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onClose={closeFork} />
           </div>
         ) : null}
       </div>
 
       {imgErr ? (
         <div className="rd-imgerr">
-          <State kind="error" title="No image" action={<Button size="sm" onClick={() => setImgErr('')}>Dismiss</Button>}>{imgErr}</State>
+          <State kind="error" title={errTitle} action={<Button size="sm" onClick={() => setImgErr('')}>Dismiss</Button>}>{imgErr}</State>
         </div>
       ) : null}
 

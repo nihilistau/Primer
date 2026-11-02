@@ -72,7 +72,7 @@ class PageService:
                 turn = self.gate.page() if self.gate else nullcontext()
                 if self.gate and not turn.try_enter():  # a miss queues the turn (pages first)
                     try:
-                        yield ("waiting", {"reason": "paused for an image"})
+                        yield ("waiting", {"reason": "paused for a picture or video"})
                     except BaseException:  # closed at this yield: give up the queued turn
                         turn.cancel()
                         raise

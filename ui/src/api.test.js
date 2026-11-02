@@ -116,6 +116,13 @@ describe('image calls', () => {
     }
   })
 
+  it('videoUrl accepts only <sha256>.webm names', () => {
+    const ok64 = 'b'.repeat(64) + '.webm'
+    expect(api.videoUrl(ok64)).toBe('/v1/media/' + ok64)
+    for (const bad of ['b'.repeat(64) + '.png', 'x.webm', '../' + ok64, '', null]) expect(api.videoUrl(bad)).toBe('')
+    expect(api.mediaUrl(ok64)).toBe('')
+  })
+
   it('a failed request carries its HTTP status', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404, json: async () => ({ error: 'not found' }) })))
     await expect(api.imageJob('x')).rejects.toMatchObject({ message: 'not found', status: 404 })

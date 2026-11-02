@@ -1,6 +1,6 @@
 """A fake sd-server (native /sdcpp/v1 API) for tests. Also runs as a script, standing in
 for sd-server in launch commands: python tests/fake_sd_server.py --listen-port P
-[--listen-ip IP] [--steps-delay S] [--fail-polls N]; every other sd-server flag is ignored."""
+[--listen-ip IP] [--steps-delay S] [--fail-polls N] [--script 0/4,1/2,...]; every other sd-server flag is ignored."""
 from __future__ import annotations
 
 import argparse
@@ -16,12 +16,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==")
 
+# a hand-built minimal WebM: EBML header (doctype "webm") and an empty Segment; tests check the
+# bytes round-trip, not playback
+TINY_WEBM = bytes.fromhex(
+    "1a45dfa3" "a0" "4286810" "1" "42f78101" "42f28104" "42f38108" "4282847765626d"
+    "42878104" "42858102" "18538067" "8000000000000000")
+
 PREVIEW_B64 = base64.b64encode(PNG_1X1).decode()
 
 # exactly the request fields the client sends (types per sd-server's api.md)
 _FIELDS = {"prompt": str, "negative_prompt": str, "width": int, "height": int, "seed": int,
            "sample_params": dict, "preview": str, "preview_interval": int,
            "vae_tiling_params": dict, "output_format": str}
+_VIDEO_FIELDS = {**_FIELDS, "video_frames": int, "fps": int, "moe_boundary": (int, float),
+                 "init_image": str, "lora": list, "high_noise_sample_params": dict}
 _PREVIEW_MODES = ("none", "proj", "tae", "vae")
 _DONE = ("completed", "failed", "cancelled")
 
@@ -83,7 +91,8 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b""
         parts = self.path.split("/")
-        if self.path == "/sdcpp/v1/img_gen":
+        if self.path in ("/sdcpp/v1/img_gen", "/sdcpp/v1/vid_gen"):
+            kind = self.path.rsplit("/", 1)[1]
             if srv.fail_on == "submit":
                 return self._bad(500, "boom")
             if srv.fail_on == "queue_full":
@@ -92,17 +101,17 @@ class _Handler(BaseHTTPRequestHandler):
                 params = json.loads(raw or b"{}")
             except ValueError:
                 return self._bad(400, "invalid JSON")
-            err = _check(params)
+            err = _check(params, _VIDEO_FIELDS if kind == "vid_gen" else _FIELDS)
             if err:
                 return self._bad(400, err)
             jid = uuid.uuid4().hex
-            job = {"id": jid, "kind": "img_gen", "status": "queued", "created": _now_ms(),
+            job = {"id": jid, "kind": kind, "status": "queued", "created": _now_ms(),
                    "params": params, "cancel": False, "preview": None, "result": None,
                    "error": None, "started": None, "completed": None}
             with srv.lock:
                 srv.jobs[jid] = job
             threading.Thread(target=_run, args=(srv, job), daemon=True).start()
-            self._json({"id": jid, "kind": "img_gen", "status": "queued",
+            self._json({"id": jid, "kind": kind, "status": "queued",
                         "created": job["created"], "poll_url": f"/sdcpp/v1/jobs/{jid}"}, 202)
         elif len(parts) == 6 and parts[:4] == ["", "sdcpp", "v1", "jobs"] and parts[5] == "cancel":
             if srv.cancel_status:
@@ -124,15 +133,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._bad(404, "not found")
 
 
-def _check(p) -> str:
+def _check(p, fields=_FIELDS) -> str:
     if not isinstance(p, dict):
         return "body must be an object"
     for k, v in p.items():
-        t = _FIELDS.get(k)
+        t = fields.get(k)
         if t is None:
             return f"unknown field {k}"
-        if not isinstance(v, t) or (t is int and isinstance(v, bool)):
-            return f"field {k} must be {t.__name__}"
+        if not isinstance(v, t) or isinstance(v, bool):
+            return f"field {k} must be {t if isinstance(t, tuple) else t.__name__}"
     if "prompt" not in p:
         return "prompt required"
     if "preview" in p and p["preview"] not in _PREVIEW_MODES:
@@ -164,18 +173,25 @@ def _run(srv, job: dict) -> None:
         if job["status"] != "queued":      # cancelled while queued
             return
         job["status"], job["started"] = "generating", _now_ms()
-    for step in range(1, steps + 1):
+    seq = srv.script or [(n, steps) for n in range(1, steps + 1)]
+    for step, total in seq:
         if srv.steps_delay:
             time.sleep(srv.steps_delay)
         with srv.lock:
             if job["cancel"]:
                 _cancelled(job)
                 return
-            job["preview"] = {"pass": 1, "step": step, "total_steps": steps}
+            job["preview"] = {"pass": 1, "step": step, "total_steps": total}
             if job["params"].get("preview", "none") != "none":
                 job["preview"]["b64_json"] = PREVIEW_B64
     with srv.lock:
         job["status"], job["completed"] = "completed", _now_ms()
+        if job["kind"] == "vid_gen":
+            p = job["params"]
+            job["result"] = {"output_format": "webm", "mime_type": "video/webm",
+                             "fps": p.get("fps", 16), "frame_count": p.get("video_frames", 33),
+                             "b64_json": base64.b64encode(TINY_WEBM).decode()}
+            return
         job["result"] = {"output_format": "png", "images": [
             {"index": 0, "b64_json": base64.b64encode(PNG_1X1).decode()}]}
 
@@ -193,6 +209,7 @@ class FakeSd(ThreadingHTTPServer):
         self.truncate = False              # job GETs hang up mid-body
         self.cancel_status = 0             # force this status on cancel
         self.raw_status = None             # tests may set a non-default status body
+        self.script: list[tuple[int, int]] = []  # (step, total) reports to make instead of 1..steps
         self.fail_polls = 0                # this many job GETs answer 503 first
 
     @property
@@ -217,9 +234,11 @@ if __name__ == "__main__":
     ap.add_argument("--listen-port", type=int, default=8820)
     ap.add_argument("--steps-delay", type=float, default=0.0)
     ap.add_argument("--fail-polls", type=int, default=0)
+    ap.add_argument("--script", default="")
     args, _ = ap.parse_known_args()      # other sd-server flags are ignored
     srv = FakeSd(args.listen_port, args.steps_delay, None, args.listen_ip)
     srv.fail_polls = args.fail_polls
+    srv.script = [tuple(map(int, x.split("/"))) for x in args.script.split(",") if x]
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

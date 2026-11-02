@@ -1,7 +1,7 @@
 import pytest
 
 from primer.images.families import FAMILIES
-from primer.images.prompting import (image_prompt_messages, match_image_request,
+from primer.images.prompting import (image_prompt_messages, match_image_request, match_video_request,
                                      parse_image_prompt)
 
 YES = {
@@ -128,3 +128,43 @@ def test_parse_image_prompt_article_shaped_answers():
     assert parse_image_prompt(body, "fb") == "Scene\nA trebuchet at dawn, misty."
     assert parse_image_prompt("a **moat**, _ink_", "fb") == "a moat, ink"
     assert parse_image_prompt("# \n\n", "fb") == "fb"
+
+
+VIDEO_YES = {
+    "animate a trebuchet firing": "a trebuchet firing",
+    "Animate the drawbridge rising": "the drawbridge rising",
+    "make a video of a castle siege": "a castle siege",
+    "create a clip of a knight charging": "a knight charging",
+    "generate an animation of a waterwheel turning": "a waterwheel turning",
+    "show me a video of a catapult": "a catapult",
+    "film a falconer releasing a hawk": "a falconer releasing a hawk",
+    "can you make a short video of a moat filling": "a moat filling",
+    "give me a clip of a blacksmith at work": "a blacksmith at work",
+    "I want a video of a portcullis dropping": "a portcullis dropping",
+    "render a video of a ship at sea": "a ship at sea",
+    "hey, animate two knights jousting please": "two knights jousting",
+    "make a quick clip of: a dragon landing, please?": "a dragon landing",
+    "film the siege of Acre": "the siege of Acre",
+}
+VIDEO_NO = [
+    "how do I make a video?", "how to make a video", "animate vs inanimate", "animated films",
+    "the animation of Disney films", "animation", "video games", "film history", "film noir",
+    "what is a video codec", "make a video call", "animate objects in powerpoint",
+    "the film of the book", "animate", "film", "film noir classics", "animate a shape in PowerPoint",
+    "make a video of", "trebuchets",
+]
+
+
+@pytest.mark.parametrize("text,subject", VIDEO_YES.items())
+def test_match_video_request_yes(text, subject):
+    assert match_video_request(text) == subject
+
+
+@pytest.mark.parametrize("text", VIDEO_NO)
+def test_match_video_request_no(text):
+    assert match_video_request(text) is None
+
+
+def test_match_video_request_cases():
+    assert len(VIDEO_YES) >= 12 and len(VIDEO_NO) >= 12
+    assert len(match_video_request("make a video of " + "x" * 400)) == 300

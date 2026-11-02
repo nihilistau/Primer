@@ -20,12 +20,14 @@ from primer.engines import make_engine
 from primer.gpu import GpuGate
 from primer.graph import clean_typed
 from primer.hardware import Hardware, suggest_tier
-from primer.images.families import FAMILIES
-from primer.images.models import (NETWORK_PATH, ImageModel, ModelStore, StoreCorrupt, effective_settings,
-                                  is_network_or_device, validate_model)
-from primer.images.prompting import match_image_request
+from primer.images.families import FAMILIES, SETTINGS, TWO_STAGE_SETTINGS, VIDEO_SETTINGS
+from primer.images.models import (NETWORK_PATH, ImageModel, ModelStore, StoreCorrupt, animate_model,
+                                  can_animate, effective_settings, is_network_or_device, kind_of,
+                                  only_animates_reason, validate_model)
+from primer.images.prompting import match_image_request, match_video_request
 from primer.images.scan import scan_folder_capped
-from primer.images.service import NOT_CONFIGURED, SHUT_DOWN_REASON, ImageService
+from primer.images.service import (KINDS, NO_ANIMATE_MODEL, NOT_CONFIGURED, SHUT_DOWN_REASON,
+                                   ImageService)
 from primer.pages import OpenRequest, PageService
 from primer.servers import ManagedServer, ServerManager
 
@@ -41,9 +43,11 @@ UI_NOT_BUILT = {"error": "UI not built: run npm run build in ui/"}
 # send (the UI sends it on every request; a fetch that adds it gets a preflight, which fails)
 PRIMER_HEADER = "X-Primer"
 NEEDS_PRIMER_HEADER = ("/v1/branches",)
-MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.png")
+MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm)")
+MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm"}
+RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
 MAX_SCAN_FILES = 2000
-MODEL_FIELDS = ("id", "name", "family", "files", "settings")  # all a client may set on a model
+MODEL_FIELDS = ("id", "name", "family", "files", "settings", "loras")  # all a client may set on a model
 RESUME_POLL_S = 0.1
 
 
@@ -193,11 +197,25 @@ class App:
                 "hardware": asdict(self.hardware), "servers": self.servers.statuses(),
                 "source_mode": self.tier.source_mode, "gpu_mode": self.tier.gpu_mode,
                 "images": self.images.server_status(), "image_available": self.image_available(),
-                "gpu": self.gate.state()}
+                "video_available": self.image_available("video"),
+                "animate_available": self.animate_available(), "gpu": self.gate.state()}
 
-    def image_available(self) -> dict:
-        ok, reason = self.images.available()
+    def image_available(self, kind: str = "image") -> dict:
+        ok, reason = self.images.available(kind)
         return {"ok": ok, "reason": reason}
+
+    def animate_available(self) -> dict:
+        """Whether Animate can run, on which model, else the reason it can't."""
+        if self.images.images is None:
+            return {"ok": False, "reason": NOT_CONFIGURED, "model_id": None}
+        try:
+            model = animate_model(self.store)
+        except StoreCorrupt as e:
+            return {"ok": False, "reason": str(e), "model_id": None}
+        if model is None:
+            return {"ok": False, "reason": NO_ANIMATE_MODEL, "model_id": None}
+        reasons = validate_model(model)
+        return {"ok": not reasons, "reason": reasons[0] if reasons else "", "model_id": model.id}
 
 
 def make_gate(tier: Tier, servers: ServerManager) -> tuple[TextPause, GpuGate]:
@@ -207,6 +225,26 @@ def make_gate(tier: Tier, servers: ServerManager) -> tuple[TextPause, GpuGate]:
 
 class _BadRequest(Exception):
     pass
+
+
+def _family_settings(fam) -> list[str]:
+    """The setting keys a family takes (clean_settings drops the others)."""
+    return [k for k in SETTINGS if k not in VIDEO_SETTINGS or (
+        fam.kind == "video" and (k not in TWO_STAGE_SETTINGS or fam.two_stage))]
+
+
+def _byte_range(header: str, size: int) -> tuple[int, int] | None:
+    """(first, last) byte of a single `bytes=a-b`, `bytes=a-` or `bytes=-n` range, clipped to
+    the file; None when it is malformed, a multi-range or unsatisfiable (answered 416)."""
+    m = RANGE_RE.fullmatch(header.strip())
+    if m is None or (not m[1] and not m[2]):
+        return None
+    if not m[1]:  # the last n bytes
+        n = int(m[2])
+        return (max(0, size - n), size - 1) if n and size else None
+    start = int(m[1])
+    end = min(int(m[2]), size - 1) if m[2] else size - 1
+    return (start, end) if start <= end and start < size else None
 
 
 class _HttpError(Exception):
@@ -225,10 +263,12 @@ def _make_handler(app: App):
             pass
 
         # responses
-        def _send(self, status: int, body: bytes, ctype: str) -> None:
+        def _send(self, status: int, body: bytes, ctype: str, headers: dict | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
@@ -367,7 +407,8 @@ def _make_handler(app: App):
                     text = body.get("text")
                     if not isinstance(text, str):
                         raise _BadRequest("text must be a string")
-                    self._json({"image": match_image_request(text)})
+                    video = match_video_request(text)
+                    self._json({"image": None if video else match_image_request(text), "video": video})
                 elif path == "/v1/images":
                     self._create_image(body)
                 elif path.startswith("/v1/images/") and path.endswith("/cancel"):
@@ -470,11 +511,16 @@ def _make_handler(app: App):
 
         # images
         def _image_models(self) -> None:
-            families = {fid: {"label": f.label, "slots": [asdict(s) for s in f.slots],
-                              "defaults": f.defaults} for fid, f in FAMILIES.items()}
-            self._json({"models": [{**asdict(m), "problems": validate_model(m)} for m in app.store.list()],
-                        "default": app.store.default_id(), "families": families,
-                        "available": app.image_available()})
+            families = {fid: {"label": f.label, "kind": f.kind, "needs_init": f.needs_init,
+                              "can_animate": f.can_animate, "frame_step": f.frame_step,
+                              "slots": [asdict(s) for s in f.slots], "defaults": f.defaults,
+                              "fast_defaults": f.fast_defaults, "settings": _family_settings(f)}
+                        for fid, f in FAMILIES.items()}
+            models = [{**asdict(m), "kind": kind_of(m), "problems": validate_model(m)} for m in app.store.list()]
+            self._json({"models": models, "default": app.store.default_id(),
+                        "video_default": app.store.default_id("video"), "families": families,
+                        "available": app.image_available(), "video_available": app.image_available("video"),
+                        "animate_available": app.animate_available()})
 
         def _save_model(self, body: dict) -> None:
             raw = body.get("model")
@@ -485,9 +531,12 @@ def _make_handler(app: App):
             files, settings = fields["files"] or {}, fields["settings"] or {}
             if not isinstance(files, dict) or not isinstance(settings, dict):
                 raise _BadRequest("files and settings must be objects")
+            loras = fields["loras"]  # [{file, strength, stage}]: the store shape-checks each one
+            if loras is not None and not isinstance(loras, list):
+                raise _BadRequest("loras must be a list")
             try:
-                saved = app.store.save(ImageModel(id=fields["id"], name=fields["name"],
-                                                  family=fields["family"], files=files, settings=settings))
+                saved = app.store.save(ImageModel(id=fields["id"], name=fields["name"], family=fields["family"],
+                                                  files=files, settings=settings, loras=loras or []))
             except ValueError as e:
                 raise _BadRequest(str(e)) from None
             self._json(asdict(saved))
@@ -508,15 +557,24 @@ def _make_handler(app: App):
                 raise _BadRequest(f"cannot scan {folder}: {e}") from None
             self._json({"proposals": proposals, "truncated": truncated})
 
-        def _image_model(self, model_id) -> ImageModel:
-            """The model a new job would use; _HttpError 409 with the reason when it can't run."""
+        def _image_model(self, model_id, kind: str = "image", animating: bool = False) -> ImageModel:
+            """The model a new job would use: _HttpError 409 with the reason when it can't run,
+            400 when the request asks a model for what it can't do."""
             if app.images.images is None:
                 raise _HttpError(409, NOT_CONFIGURED)
-            if model_id is None:
-                ok, reason = app.images.available()
+            if model_id is None and animating:  # never text-to-video: a model that takes a picture
+                try:
+                    picked = animate_model(app.store)
+                except StoreCorrupt as e:
+                    raise _HttpError(409, str(e)) from None
+                if picked is None:
+                    raise _HttpError(409, NO_ANIMATE_MODEL)
+                model_id = picked.id
+            elif model_id is None:
+                ok, reason = app.images.available(kind)
                 if not ok:
                     raise _HttpError(409, reason)
-                model_id = app.store.default_id()
+                model_id = app.store.default_id(kind)
             if not isinstance(model_id, str):
                 raise _BadRequest("model_id must be a string")
             try:
@@ -524,16 +582,33 @@ def _make_handler(app: App):
             except StoreCorrupt as e:
                 raise _HttpError(409, str(e)) from None
             if model is None:
-                raise _HttpError(409, f"unknown image model {model_id!r}")
+                raise _HttpError(409, f"unknown {kind} model {model_id!r}")
+            if kind_of(model) != kind:
+                raise _BadRequest(f"{model.name} is {'an image' if kind_of(model) == 'image' else 'a video'} model")
             reasons = validate_model(model)
             if reasons:
                 raise _HttpError(409, reasons[0])
+            fam = FAMILIES[model.family]
+            if animating and not can_animate(model):
+                raise _BadRequest(f"{model.name} can't animate a picture: choose a video model that can")
+            if not animating and fam.needs_init:
+                raise _BadRequest(only_animates_reason(fam))
             return model
 
         def _create_image(self, body: dict) -> None:
+            """An image or video job. Retry and Again are the UI posting the request again; a
+            video Again/Retry of an Animate job must send animate_from from the old job's
+            settings (GET /v1/images/<id> returns them), or it becomes a text-to-video job."""
             node_id, concept = body.get("node_id"), body.get("concept")
             phrase, subject, prompt = body.get("phrase", ""), body.get("subject", ""), body.get("prompt")
             overrides = body.get("overrides")
+            kind, animate_from = body.get("kind", "image"), body.get("animate_from")
+            if kind not in KINDS:
+                raise _BadRequest(f"kind must be one of {', '.join(KINDS)}")
+            if animate_from is not None and (not isinstance(animate_from, str) or not animate_from):
+                raise _BadRequest("animate_from must be a media id")
+            if animate_from is not None and kind != "video":
+                raise _BadRequest("animate_from needs kind video")
             if any(v is not None and not isinstance(v, str) for v in (node_id, concept, phrase, subject, prompt)):
                 raise _BadRequest("node_id, concept, phrase, subject and prompt must be strings")
             if overrides is not None and not isinstance(overrides, dict):
@@ -545,7 +620,7 @@ def _make_handler(app: App):
                     raise _HttpError(404, "page not found")
             elif not clean_typed(concept or ""):
                 raise _BadRequest("node_id or concept is required")
-            model = self._image_model(body.get("model_id"))
+            model = self._image_model(body.get("model_id"), kind, animate_from is not None)
             try:
                 effective_settings(model, overrides)
             except ValueError as e:
@@ -558,20 +633,41 @@ def _make_handler(app: App):
                 except ValueError as e:
                     raise _BadRequest(str(e)) from None
             try:
-                media = app.images.create(node_id, phrase or "", subject or "", model.id, overrides, prompt)
-            except ValueError as e:  # e.g. the model changed or Primer is shutting down meanwhile
-                raise _HttpError(409, str(e)) from None
+                media = app.images.create(node_id, phrase or "", subject or "", model.id, overrides, prompt,
+                                          kind=kind, animate_from=animate_from)
+            except ValueError as e:
+                if kind == "video" and str(e) != SHUT_DOWN_REASON:  # e.g. the picture to animate
+                    raise _BadRequest(str(e)) from None
+                raise _HttpError(409, str(e)) from None  # the model changed or Primer is shutting down
             self._json(asdict(media))
 
         def _media(self, name: str) -> None:
-            """A generated image: var/media/<sha256>.png only, contained like the static UI."""
+            """A generated image or video: var/media/<sha256>.png|.webm only, contained like the
+            static UI. A video answers a single byte Range (browsers seek a video with one)."""
             name = unquote(name)
             root = (Path(app.var_dir) / "media").resolve()
             target = (root / name).resolve() if MEDIA_NAME.fullmatch(name) else None
             if target is None or target.parent != root or not target.is_file():
                 self._json({"error": "not found"}, 404)
                 return
-            self._send(200, target.read_bytes(), "image/png")
+            ctype = MEDIA_TYPES[Path(name).suffix]
+            if ctype != "video/webm":
+                self._send(200, target.read_bytes(), ctype)
+                return
+            asked, size = self.headers.get("Range"), target.stat().st_size
+            if asked is None:
+                self._send(200, target.read_bytes(), ctype, {"Accept-Ranges": "bytes"})
+                return
+            span = _byte_range(asked, size)
+            if span is None:
+                self._send(416, b"", ctype, {"Content-Range": f"bytes */{size}"})
+                return
+            start, end = span
+            with target.open("rb") as f:
+                f.seek(start)
+                data = f.read(end - start + 1)
+            self._send(206, data, ctype, {"Accept-Ranges": "bytes",
+                                          "Content-Range": f"bytes {start}-{start + len(data) - 1}/{size}"})
 
         # static UI
         def _static(self, raw_path: str) -> None:

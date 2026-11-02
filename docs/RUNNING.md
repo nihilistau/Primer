@@ -3,7 +3,7 @@
 This is the setup and configuration reference. For how to use Primer, see [USING.md](USING.md).
 
 Phase 1 is "pages and branching": open a concept, click phrases to branch, go back and forward,
-browse the concept graph. Phase 2 adds images (see [Images](#images)). Everything runs on your machine; the server binds to `127.0.0.1` only.
+browse the concept graph. Phase 2 adds images (see [Images](#images)) and Phase 3 video (see [Video](#video)). Everything runs on your machine; the server binds to `127.0.0.1` only.
 The API answers only Primer's own page: the `Host` must be `127.0.0.1:<port>` or
 `localhost:<port>`, a POST must be JSON, an `Origin` on any API request must be Primer itself, a browser's
 `Sec-Fetch-Site` must be `same-origin` or `none`, and `/v1/branches` needs the `X-Primer: 1`
@@ -120,7 +120,7 @@ path has not been run against a real daemon.
 
 Phase 2 draws pictures with [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp).
 Primer launches its `sd-server` when an image is needed and stops it afterwards; you never run it
-yourself. Video is Phase 3 and is not part of this.
+yourself.
 
 ### Install stable-diffusion.cpp
 
@@ -139,9 +139,9 @@ stall_timeout_s = 1800     # a running job with no progress this long is marked 
 Without `sd_server`, image generation shows as unavailable with its reason. Measured with
 stable-diffusion.cpp master-1031 (Windows CUDA 12 build).
 
-### Add models (Image models window)
+### Add models (Models window)
 
-Open the Image models window and use **Scan folder** to find models in a folder, or **Add** to
+Open the Models window and use **Scan folder** to find models in a folder, or **Add** to
 register one by hand. Each model has its own settings (size, steps, cfg, sampler, seed and so on,
 with defaults per family), and one model is the **default** used for new requests. Files must be
 local: network and device paths are refused, and **pickle files (`.ckpt`, `.pt`, `.pth`, `.bin`)
@@ -170,8 +170,8 @@ is shown as failed ("Primer restarted") after the next start.
 With `gpu_mode = "auto"` (the default) and a tier whose text server uses the GPU, Primer stops the
 writing model for the image, then stops `sd-server` and brings the writing model back. Measured:
 the writing model (gemma-4-E4B) went from 5.1 GB of VRAM to 1.0 GB while drawing and was ready again
-about 20 s after the image finished. A page requested during an image waits ("paused for an image")
-and is written right after. With `gpu_mode = "manual"`, Primer leaves your servers alone and
+about 20 s after the image finished. A page requested during an image or video waits ("paused for a
+picture or video") and is written right after. With `gpu_mode = "manual"`, Primer leaves your servers alone and
 `sd-server` stays loaded; tiers with no GPU text servers also keep `sd-server` loaded.
 
 A text server with a `pause` command is paused by running that command instead of being stopped.
@@ -191,6 +191,53 @@ On one machine (RTX 2060, 12 GB), 1024x1024, 20 steps. Your hardware will differ
 | SDXL checkpoint | about 1.3 s/step, about 40 s per image once the model is loaded |
 | MOSS-Image SFT (UD-Q4_K_XL, Qwen3.5-9B Q8_0 encoder, CPU offload) | about 5.4 s/step with the GPU to itself (about 17 s/step when other apps held about 5.5 GB of VRAM); first image about 4.5 min including the load |
 | Qwen-Image 2.1 Q4_K_M with Qwen3-VL-8B INT8 (CPU offload) | about 11 s/step through Primer with the writing model paused; 234 s for one image (about 23 s/step when other apps held about 5.5 GB of VRAM) |
+
+## Video
+
+Phase 3 makes short clips with the same `sd-server` (its native `vid_gen` API, WebM output). No
+extra setup is needed beyond the `[images]` block: add a video model in the Models window and it
+becomes the default video model. Pictures and clips share one queue, one GPU and the same auto
+GPU mode.
+
+### Video models
+
+| Family | Files | Where to get them (examples) |
+| --- | --- | --- |
+| Wan 2.2 TI2V 5B | diffusion GGUF, UMT5-XXL encoder, Wan 2.2 VAE | `QuantStack/Wan2.2-TI2V-5B-GGUF` (model and `VAE/Wan2.2_VAE.safetensors`), `city96/umt5-xxl-encoder-gguf` |
+| Wan 2.2 T2V A14B | high-noise and low-noise GGUFs, UMT5-XXL, Wan 2.1 VAE, optional LoRAs | `QuantStack/Wan2.2-T2V-A14B-GGUF`, 4-step LoRAs from `lightx2v/Wan2.2-Distill-Loras` |
+| Wan 2.2 I2V A14B | as T2V, image-to-video models | `QuantStack/Wan2.2-I2V-A14B-GGUF` (or a finetune), `lightx2v/Wan2.2-Distill-Loras` i2v LoRAs |
+| LTX-2.3 distilled / dev | diffusion GGUF, Gemma 3 12B GGUF, embeddings connectors, video VAE | `unsloth/LTX-2.3-GGUF`, a Gemma 3 12B instruct GGUF |
+
+A layout the folder scan understands, with encoders shared between models:
+
+```
+video/
+  shared/umt5-xxl-encoder-Q5_K_M.gguf
+  shared/VAE/Wan2.1_VAE.safetensors
+  wan22-ti2v-5b/Wan2.2-TI2V-5B-Q6_K.gguf, VAE/Wan2.2_VAE.safetensors
+  wan22-t2v-a14b/HighNoise/…, LowNoise/…, loras/…
+  ltx23-distilled/distilled-1.1/…, text_encoders/…, vae/…, gemma-3-12b-….gguf
+```
+
+LoRAs must be `.safetensors`, all of one model's LoRAs in one folder (Primer starts `sd-server`
+with `--lora-model-dir` set to it). When a scanned model has LightX2V or other few-step LoRAs,
+its proposal comes with matching settings (for Wan 2.2 A14B: 4 steps, 2 of them high-noise, CFG 1).
+
+Animate sends the finished picture to `sd-server` as the clip's first frame. Primer reads it from
+its own `var/media/`; no path or upload is accepted from the browser.
+
+### Measured video speeds
+
+On one machine (RTX 2060 12 GB, 32 GB RAM), models and `sd-server` on an internal SSD, CPU offload
+and VAE tiling on.
+
+| Model | Clip | Time |
+| --- | --- | --- |
+| Wan 2.2 TI2V 5B Q6_K, 20 steps, CFG 5 | 832x480, 49 frames (2 s at 24 fps) | about 6 min: 10 s/step, 2 min 15 s to decode |
+| Wan 2.2 T2V A14B Q4_K_M with the LightX2V 4-step LoRAs: 2 high-noise + 4 low-noise steps, CFG 1 | 832x480, 33 frames (2 s at 16 fps) | about 6.5 min: 47 s/step (both 14B halves are swapped through RAM), 51 s to decode; noticeably sharper than the 5B |
+
+Kijai's Wan 2.2 5B Turbo LoRA at 8 steps and CFG 1 took half the time but ignored the prompt, so
+it isn't recommended.
 
 ## Tests
 

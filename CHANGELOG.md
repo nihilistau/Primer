@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.3.0: video (2026-11-02)
+
+Primer can now make short clips of what you are reading.
+
+### Added
+
+- **Video from any page or phrase.** Use the Video button on a page or a branch fork, or type a
+  request such as "animate a trebuchet firing", "make a video of a castle siege" or "film the
+  drawbridge rising". The fast model writes a prompt that describes the motion and the camera.
+- **Animate.** A finished picture can be brought to life: Animate in the Image window uses it as
+  the first frame of a clip.
+- **Video window.** Live progress, then the clip playing in a loop, with its prompt, model,
+  settings, length and seed. **Cancel**, **Again**, **Retry** and **Edit & run**, as for pictures.
+- **Video thumbnails** on the page beside the pictures.
+- **Five video model families** through the same stable-diffusion.cpp `sd-server`: Wan 2.2 TI2V
+  5B, Wan 2.2 T2V A14B and I2V A14B (two-stage), LTX-2.3 distilled and LTX-2.3 dev.
+- **LoRAs per model**, including LightX2V's 4-step LoRAs for Wan 2.2 A14B, with a separate stage
+  (high noise, low noise or both) for two-stage models.
+- **Models window** (was Image models): Pictures and Videos, each with its own default, video
+  settings (frames, FPS, high-noise steps and CFG, MoE boundary) and the clip length.
+- **Scan finds video models**, read from their file headers: Wan 5B, T2V and I2V are told apart
+  by the model itself, encoders shared between models are found, and LoRAs beside a model are
+  attached with the few-step settings they need.
+
+### Changed
+
+- Pictures and clips share one queue and one GPU. Auto GPU mode pauses the writing model for
+  either.
+- Media files are served with HTTP range requests, so clips can be scrubbed.
+
 ## v0.2.0: images (2026-11-02)
 
 Primer can now draw what you are reading.

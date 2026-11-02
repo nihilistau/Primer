@@ -71,11 +71,53 @@ def match_image_request(text: str) -> str | None:
     return subject[:_MAX_SUBJECT].strip()
 
 
+_VNOUN = r"(?:(?:short|quick|little|brief)\s+)?(?:video|clip|animation|film)"
+_VVERB_OF = r"(?:generate|create|make|render|show|give|produce)"
+# Groups: a = "<verb> [me] [a] <video noun> of X", b = "animate|film X" (X must be article- or number-led),
+# d = "give me / I want / I'd like [a] <video noun> of X".
+_VIDEO_REQUEST = re.compile(
+    rf"^{_HEY}(?:"
+    rf"{_POLITE}{_VVERB_OF}(?:\s+me)?{_SEP}{_ART}{_VNOUN}{_OF}(?P<a>.+)"
+    rf"|{_POLITE}(?:animate|film){_SEP}(?P<b>.+)"
+    rf"|{_POLITE}(?:give\s+me|i['’]d\s+like|i\s+would\s+like|i\s+want)\s+(?:an?\s+)?{_VNOUN}{_OF}(?P<d>.+)"
+    rf")$",
+    re.IGNORECASE)
+# "animate X in powerpoint" / "film X with css" are how-tos, not requests
+_NOT_VIDEO = re.compile(
+    r"\b(?:in|with|using|on)\s+(?:power\s*point|keynote|after\s+effects|blender|unity|unreal(?:\s+engine)?|"
+    r"maya|premiere|css|javascript|js|figma|canva|html|react|powerpoint)$|\bin\s+words$",
+    re.IGNORECASE)
+
+
+def match_video_request(text: str) -> str | None:
+    """The subject of a typed video request, or None when the text isn't one."""
+    lines = text[:5000].strip().splitlines()
+    if not lines:
+        return None
+    m = _VIDEO_REQUEST.match(lines[0][:2000].strip().rstrip(_TRIM))
+    if not m:
+        return None
+    kind = m.lastgroup
+    subject = m.group(kind).strip()
+    if kind == "b":
+        subject = re.sub(r"^me\s+", "", subject, flags=re.IGNORECASE)
+        if not _ARTICLE_LED.match(subject):
+            return None
+    for _ in range(2):
+        subject = _TAIL.sub("", subject).rstrip(_TRIM)
+    if not subject or subject.casefold() == "me" or _NOT_VIDEO.search(subject):
+        return None
+    return subject[:_MAX_SUBJECT].strip()
+
+
 _STYLE = {
     "tags": ("Write one Stable Diffusion prompt: comma-separated visual tags "
              "(subject, setting, style, lighting), at most 60 words. Output only the prompt."),
     "prose": ("Write one image prompt as one or two vivid descriptive sentences "
               "(subject, setting, composition, style), at most 80 words. Output only the prompt."),
+    "motion": ("Write one short-video prompt as one or two sentences describing the subject, its "
+               "action and motion, and the camera movement, at most 80 words. "
+               "Output only the prompt."),
 }
 _HOUSE = ("Unless the subject asks for another style, make it look like an illustrated primer / "
           "encyclopedia plate.")

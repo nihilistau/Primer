@@ -1,4 +1,4 @@
-"""Image jobs: write the prompt, run it on a Primer-managed sd-server, save the PNG.
+"""Image and video jobs: write the prompt, run it on a Primer-managed sd-server, save the file.
 
 One worker thread runs one job at a time, taking turns with page writing through the GpuGate.
 The sd-server stays up between jobs and is relaunched when a job needs another model."""
@@ -24,9 +24,11 @@ from ..graph import Graph, Media
 from ..prompts import sentence_around
 from ..servers import ManagedServer
 from .families import FAMILIES
-from .models import ImageModel, ModelStore, StoreCorrupt, build_flags, effective_settings, validate_model
+from .models import (ImageModel, ModelStore, StoreCorrupt, animate_model, available_for, build_flags,
+                     can_animate, effective_settings, kind_of, lora_entries, only_animates_reason,
+                     validate_model)
 from .prompting import image_prompt_messages, parse_image_prompt
-from .sdclient import SdClient, SdError, to_params
+from .sdclient import SdClient, SdError, decode_video, to_params, to_video_params
 
 log = logging.getLogger(__name__)
 
@@ -45,9 +47,12 @@ _EXCERPT = 600
 _FINAL = ("done", "failed", "cancelled")
 NOT_CONFIGURED = "sd-server not configured in this tier"
 NO_MODEL = "no image model set up"
-NO_DEFAULT = "no default image model (choose one in Image models)"
+NO_DEFAULT = "no default image model (choose one in Models)"
 SHUT_DOWN = "Primer shut down"
 SHUT_DOWN_REASON = "image jobs are shut down"
+KINDS = ("image", "video")
+ANIMATE_GONE = "the picture to animate is gone"
+NO_ANIMATE_MODEL = "no video model that can animate a picture has been added"
 
 
 class _Failed(Exception):
@@ -60,6 +65,10 @@ class _Failed(Exception):
 
 class _Cancelled(Exception):
     pass
+
+
+def _a(kind: str) -> str:
+    return "an image" if kind == "image" else f"a {kind}"
 
 
 def _default_server(spec: EngineSpec) -> ManagedServer:
@@ -83,6 +92,19 @@ def decode_png(job: dict) -> bytes:
     if len(data) == len(PNG_SIG):
         raise ValueError("sd-server returned an empty image")
     return data
+
+
+def next_stage(live: dict, preview: dict) -> str:
+    """The stage of a two-stage (Wan 2.2 A14B) job after a progress report. sd-server counts each
+    stage on its own: high-noise 0/N..H/H, then low-noise 1/N..N/N. The job stays "high" until
+    the high stage has reported a step >= 1 and then the step goes backwards or the total
+    changes (a first 0/N report before the high stage begins is not a switch)."""
+    step, total = preview.get("step"), preview.get("total_steps")
+    if not isinstance(step, int) or live.get("step", 0) < 1:
+        return "high"
+    if step < live["step"] or (isinstance(total, int) and total != live.get("total")):
+        return "low"
+    return "high"
 
 
 class ImageService:
@@ -131,35 +153,65 @@ class ImageService:
                 return
         self._stop_server("")
 
-    def available(self) -> tuple[bool, str]:
+    def available(self, kind: str = "image") -> tuple[bool, str]:
         if self.images is None:
             return False, NOT_CONFIGURED
+        if kind != "image":
+            return available_for(self.store, kind)
         try:
             default = self.store.default_id()
             model = self.store.get(default) if default else None
             if model is None:
-                return False, NO_DEFAULT if self.store.list() else NO_MODEL
+                return False, NO_DEFAULT if any(kind_of(m) == "image" for m in self.store.list()) else NO_MODEL
         except StoreCorrupt as e:
             return False, str(e)
         reasons = validate_model(model)
         return (False, reasons[0]) if reasons else (True, "")
 
     def create(self, node_id: str, phrase: str, subject: str, model_id: str | None = None,
-               overrides: dict | None = None, prompt: str | None = None) -> Media:
-        model = self._model_for(model_id)
+               overrides: dict | None = None, prompt: str | None = None, kind: str = "image",
+               animate_from: str | None = None) -> Media:
+        if kind not in KINDS:
+            raise ValueError(f"kind must be one of {', '.join(KINDS)}")
+        animating = animate_from is not None
+        if animating and kind != "video":
+            raise ValueError("only a video can animate a picture")
+        if animating and model_id is None and self.images is not None:
+            # never fall back to text-to-video: pick a model that takes a start image
+            try:
+                picked = animate_model(self.store)
+            except StoreCorrupt as e:
+                raise ValueError(str(e)) from e
+            if picked is None:
+                raise ValueError(NO_ANIMATE_MODEL)
+            model_id = picked.id
+        model = self._model_for(model_id, kind)
+        source = None
+        if animating:
+            if not can_animate(model):
+                raise ValueError(f"{model.name} can't animate a picture: choose a video model that can")
+            source = self._animate_source(animate_from)
+        elif FAMILIES[model.family].needs_init:
+            raise ValueError(only_animates_reason(FAMILIES[model.family]))
         if overrides is not None and not isinstance(overrides, dict):
             raise ValueError("overrides must be an object")
         settings = effective_settings(model, overrides)
         if settings.get("seed", -1) == -1:  # random: pick it here so the row records what ran
             settings["seed"] = secrets.randbelow(2**31 - 1)
+        if source is not None:  # Again/Retry read it back to animate the same picture
+            settings["animate_from"] = source.id
         subject = (subject or "").strip() if isinstance(subject, str) else ""
         given = prompt.strip()[:_PROMPT_CAP] if isinstance(prompt, str) else ""
         if not subject and not given:
             raise ValueError("subject is required")
+        if source is not None and not given:  # the prompt writer is told it animates a picture
+            subject = (f"{subject} (this animates the given picture"
+                       + (f", whose prompt was: {source.prompt[:_EXCERPT]}" if source.prompt else "")
+                       + ")")
         with self._lock:
             if self._closed:
                 raise ValueError(SHUT_DOWN_REASON)
-            media = self.graph.add_media(node_id, phrase or "", "image", model.id, given, settings)
+            media = self.graph.add_media(node_id, phrase or "", kind, model.id, given, settings)
             if given:
                 media = self.graph.update_media(media.id, status="queued")
                 self._queued.add(media.id)
@@ -175,10 +227,15 @@ class ImageService:
         if media is None:
             raise KeyError(id)
         out = asdict(media)
+        if media.kind == "video":  # what was made: known once the job is done
+            out["fps"] = media.settings.get("result_fps")
+            out["frames"] = media.settings.get("result_frames")
         with self._lock:
             live = dict(self._live.get(id) or {})
         if media.status == "generating" and live:
             out["progress"] = {"step": live.get("step", 0), "total": live.get("total", 0)}
+            if live.get("stage"):  # two-stage video models: "high" then "low"
+                out["progress"]["stage"] = live["stage"]
             if live.get("preview_b64"):
                 out["preview_b64"] = live["preview_b64"]
         return out
@@ -247,24 +304,64 @@ class ImageService:
         self.gate.release_idle()  # resume text servers paused for the cancelled job
 
     # internals
-    def _model_for(self, model_id: str | None) -> ImageModel:
+    def _model_for(self, model_id: str | None, kind: str = "image") -> ImageModel:
         if self.images is None:
             raise ValueError(NOT_CONFIGURED)
         if model_id is None:
-            ok, reason = self.available()
+            ok, reason = self.available(kind)
             if not ok:
                 raise ValueError(reason)
-            model_id = self.store.default_id()
+            model_id = self.store.default_id(kind)
         try:
             model = self.store.get(model_id) if isinstance(model_id, str) else None
         except StoreCorrupt as e:
             raise ValueError(str(e)) from e
         if model is None:
-            raise ValueError(f"unknown image model {model_id!r}")
+            raise ValueError(f"unknown {kind} model {model_id!r}")
+        if kind_of(model) != kind:
+            raise ValueError(f"{model.name} is {_a(kind_of(model))} model")
         reasons = validate_model(model)
         if reasons:
             raise ValueError(reasons[0])
         return model
+
+    def _animate_source(self, media_id) -> Media:
+        """The finished image an Animate job starts from; ValueError says why it can't be used."""
+        src = self.graph.get_media(media_id) if isinstance(media_id, str) and media_id else None
+        if src is None:
+            raise ValueError("unknown picture to animate")
+        if src.kind != "image":
+            raise ValueError("only a picture can be animated")
+        if src.status != "done":
+            raise ValueError("the picture to animate isn't finished")
+        self._source_path(src)
+        return src
+
+    def _source_path(self, src: Media) -> Path:
+        """The source image's file, which must be a bare name directly inside media_dir."""
+        name = src.file
+        if (not isinstance(name, str) or not name or name in (".", "..")
+                or any(c in name for c in "/\\:\0")):
+            raise ValueError(ANIMATE_GONE)
+        root = self.media_dir.resolve()
+        path = (self.media_dir / name).resolve()
+        if path.parent != root or not path.is_file():
+            raise ValueError(ANIMATE_GONE)
+        return path
+
+    def _init_b64(self, media: Media) -> str:
+        """Base64 of the Animate source PNG, read now (it may have gone since the job was made)."""
+        src = self.graph.get_media(media.settings.get("animate_from"))
+        try:
+            if src is None or src.kind != "image" or src.status != "done":
+                raise ValueError(ANIMATE_GONE)
+            data = self._source_path(src).read_bytes()
+        except (ValueError, OSError) as e:
+            raise _Failed(str(e) if isinstance(e, ValueError) else f"{ANIMATE_GONE}: {e}",
+                          stop_server=False) from e
+        if not data.startswith(PNG_SIG):
+            raise _Failed("the picture to animate is not a PNG", stop_server=False)
+        return base64.b64encode(data).decode()
 
     def _finish(self, mid: str, status: str, error: str | None = None, **fields) -> None:
         """Set a final status unless the row already has one. Call with self._lock held."""
@@ -403,15 +500,31 @@ class ImageService:
         except StoreCorrupt as e:
             raise _Failed(str(e)) from e
         if model is None:
-            raise _Failed(f"image model {media.model_id!r} no longer exists")
+            raise _Failed(f"{media.kind} model {media.model_id!r} no longer exists")
+        if kind_of(model) != media.kind:
+            raise _Failed(f"{model.name} is now {_a(kind_of(model))} model", stop_server=False)
+        video = media.kind == "video"
+        init_b64 = self._init_b64(media) if video and media.settings.get("animate_from") else None
+        if init_b64 is not None and not can_animate(model):  # never a silent text-to-video
+            raise _Failed(f"{model.name} can't animate a picture: choose a video model that can",
+                          stop_server=False)
+        if video and init_b64 is None and FAMILIES[model.family].needs_init:
+            raise _Failed(only_animates_reason(FAMILIES[model.family]), stop_server=False)
         self._check_cancel()
         client = self._ensure_server(mid, model)
         self._check_cancel()
-        sd_job = client.submit(to_params(media.prompt, media.settings))
+        if video:
+            sd_job = client.submit_video(to_video_params(media.prompt, media.settings,
+                                                         lora_entries(model), init_b64))
+        else:
+            sd_job = client.submit(to_params(media.prompt, media.settings))
         with self._lock:
             self._sd_job = sd_job
             cancelled = self._cancel_current
             self._live[mid] = {"step": 0, "total": media.settings.get("steps", 0)}
+            two_stage = video and FAMILIES[model.family].two_stage
+            if two_stage:
+                self._live[mid]["stage"] = "high"
             self.graph.update_media(mid, status="generating")
         if cancelled:  # cancel() ran before the job id was known
             self._cancel_running(sd_job, None, client)
@@ -445,6 +558,8 @@ class ImageService:
             preview = job.get("preview") if isinstance(job.get("preview"), dict) else {}
             with self._lock:
                 live = self._live.setdefault(mid, {})
+                if two_stage and live.get("stage") == "high":
+                    live["stage"] = next_stage(live, preview)
                 if isinstance(preview.get("step"), int):
                     live["step"] = preview["step"]
                 if isinstance(preview.get("total_steps"), int):
@@ -474,6 +589,9 @@ class ImageService:
             elif now - last_change >= stall:
                 raise _Failed(f"sd-server stopped making progress (no update for {stall:g}s)")
             self._stop.wait(POLL_S)
+        if video:
+            self._finish_video(mid, media, job)
+            return
         try:
             data = decode_png(job)
         except ValueError as e:
@@ -484,6 +602,25 @@ class ImageService:
             raise _Failed(f"could not save the image: {e}", stop_server=False) from e
         with self._lock:
             self._finish(mid, "done", None, file=name)
+
+    def _finish_video(self, mid: str, media: Media, job: dict) -> None:
+        try:
+            data, info = decode_video(job)
+        except ValueError as e:
+            raise _Failed(f"sd-server returned a bad video: {e}") from e
+        try:
+            name = self._save(data, ".webm")
+        except OSError as e:  # our disk, not sd-server: keep the server up
+            raise _Failed(f"could not save the video: {e}", stop_server=False) from e
+
+        def made(v, asked):  # the server's figure when it gives one, else what was asked for
+            return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else asked
+
+        settings = {**media.settings,
+                    "result_fps": made(info.get("fps"), media.settings.get("fps")),
+                    "result_frames": made(info.get("frame_count"), media.settings.get("frames"))}
+        with self._lock:
+            self._finish(mid, "done", None, file=name, settings=settings)
 
     def _server_alive(self) -> bool:
         """Is the sd-server process we launched still running?"""
@@ -555,9 +692,9 @@ class ImageService:
                 self._server, self._server_key = None, None
                 self._server_reason = reason
 
-    def _save(self, data: bytes) -> str:
-        """Write the PNG as var/media/<sha256>.png (atomically); identical bytes share a file."""
-        name = hashlib.sha256(data).hexdigest() + ".png"
+    def _save(self, data: bytes, ext: str = ".png") -> str:
+        """Write the file as var/media/<sha256><ext> (atomically); identical bytes share a file."""
+        name = hashlib.sha256(data).hexdigest() + ext
         self.media_dir.mkdir(parents=True, exist_ok=True)
         path = self.media_dir / name
         if path.is_file():

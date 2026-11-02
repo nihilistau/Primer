@@ -68,3 +68,5 @@ export const setDefaultImageModel = (id) => j('POST', '/v1/image-models/default'
 export const scanFolder = (folder) => j('POST', '/v1/image-models/scan', { folder })
 /* only a <sha256>.png name is a media file; anything else is no URL at all */
 export const mediaUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.png$/.test(file) ? `/v1/media/${file}` : '')
+/* likewise a <sha256>.webm name for a video */
+export const videoUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.webm$/.test(file) ? `/v1/media/${file}` : '')
