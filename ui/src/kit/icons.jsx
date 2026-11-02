@@ -62,6 +62,8 @@ export const GLYPHS = {
            'M9.5 9.5h5v5h-5z'],
   // a framed picture with a hill and a sun (Task 10, the Image window)
   image: ['M5.5 5h13a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM3.5 16l5-5 4 4 2.5-2.5 5.5 5.5', 'M15.5 9h.01'],
+  // a folded map with a pin (Phase 5, the Map window)
+  map: ['M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2zM9 4.5v13M15 6.5v13', 'M12 10.5h.01'],
   // the Reader's history arrows (Task 9): a chevron, its shaft as the detail
   back: ['M14.5 6l-6 6 6 6', 'M9 12h10'],
   forward: ['M9.5 6l6 6-6 6', 'M15 12H5'],

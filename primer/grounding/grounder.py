@@ -28,9 +28,12 @@ _OWN = "written from the model's own knowledge."
 _CHANGE = " Change the default source in Engines."
 
 
-def _plain(title: str) -> str:
+def plain_title(title: str) -> str:
     """A title as plain one-line text: no tags (kiwix highlights matches), entities unescaped."""
     return " ".join(html.unescape(_TAGS.sub("", title or "")).split())
+
+
+_plain = plain_title  # the older private name
 
 
 def _reason(exc: Exception) -> str:

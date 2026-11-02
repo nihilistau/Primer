@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching, grounding, drawing and animating with Primer. To install it and point it at your models,
+A guide to reading, branching, grounding, mapping, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -39,6 +39,7 @@ The buttons beside it rewrite the page you are on:
 | **Regenerate** | A fresh take on the page. |
 | **Image** | Draws a picture of the whole page (see [Pictures](#pictures)). |
 | **Video** | Makes a short clip of the whole page (see [Video](#video)). |
+| **Map** | Pins the places the page names on a map (see [Maps](#maps)). |
 
 **Back** and **forward** (the arrows at the left) move through the pages you've visited in this
 reader, like a browser. Going back shows the saved page instantly. It is never rewritten.
@@ -61,6 +62,7 @@ Click a card to open that page. Under the cards:
 - **Ask about it** puts `Tell me about "<phrase>"` into the prompt box, so you can edit the
   question before sending it.
 - **Video** makes a short clip of just this phrase.
+- **Map** pins just this phrase on a map, if it's a place.
 
 Press **Escape** or click elsewhere to close the fork without choosing.
 
@@ -168,6 +170,37 @@ glyph.
 Making video is slow on a 12 GB card. Expect a few minutes for a 2 to 3 second clip (see
 [RUNNING.md](RUNNING.md#measured-video-speeds)).
 
+## Maps
+
+Click **Map** in a page's header. A **Map window** opens and says what it is doing: "Finding
+places…" while the fast model reads the page for the places it names, then "Locating places…"
+while each one is looked up. Then the places appear as pins on a map of the world, and as a list
+under it, each with what kind of place it is.
+
+- **Click a pin, or a place in the list,** to open that place's page in the reader (shift-click
+  or middle-click for a new reader). It's recorded as a General branch from the page you mapped.
+- **Zoom** with the mouse wheel or the + and − buttons. The world map has detail down to about
+  city level; closer in, roads and labels stretch rather than add detail.
+- **Again** finds and locates the places afresh.
+- Places that couldn't be located are listed as "not found". Primer never guesses where a place
+  is: every pin comes from a Wikipedia article's coordinates (or, online, from Wikidata).
+
+You can also:
+
+- click **Map** on a branch fork to pin just that phrase, or
+- type a request such as "show me Bodiam Castle on a map", "map of Normandy" or "Hadrian's Wall
+  on a map". Primer opens the page and its map together.
+
+Maps are saved with the page. They appear in the page's thumbnail strip with a map glyph; click
+one to open it again.
+
+Places are looked up first in the offline encyclopedia. When the place's description names where
+it is ("river in Warwickshire"), Primer tries that article first ("River Avon (Warwickshire)")
+so the pin lands on the right one. If web search is on in your tier, Wikipedia and Wikidata
+online fill the gaps, for example for counties and regions whose articles carry no coordinates.
+
+To set the map up, see [RUNNING.md](RUNNING.md#maps).
+
 ## Models
 
 Open **Models** from the dock. It has two lists, **Pictures** and **Videos**, each with its own
@@ -271,6 +304,9 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 | "already answering" for the image server | Something else holds the image port, perhaps a leftover from a crash. Primer clears its own leftovers on the next start; otherwise stop it, or change `port` under `[images]`. |
 | Thumbnails show a red cross | That picture failed. Open it to see why. |
 | Video button disabled | Hover it for the reason: no video model added, or no default video model. |
+| Map button disabled | Hover it for the reason: no `[map]` in the tier, the map file can't be read, or no way to look places up (no offline encyclopedia and web search off). |
+| A place is "not found" | Its article has no coordinates, or there's no article. With web search on, Primer also asks Wikipedia and Wikidata online. |
+| "Some map tiles could not be loaded" | The map file or the fonts folder in `[map]` has moved, or Primer stopped. |
 | Animate disabled | No video model that can start from a picture (Wan 2.2 TI2V 5B, Wan 2.2 I2V or LTX-2.3). |
 | A grounded page came out as `storyteller` | Read the line under the header: no source was found, or the encyclopedia or web couldn't be reached. Check the Reference server in Engines. |
 | The Reference server `failed` | Check `kiwix_serve` and `zims` in the tier: the paths must exist, and each file must be a complete ZIM (compare its `.sha256`). |

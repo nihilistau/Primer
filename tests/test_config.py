@@ -233,3 +233,23 @@ def test_engine_extra_table(tmp_path):
         '[text.extra]\nmessages = []\n')
     with pytest.raises(ConfigError, match="messages"):
         load_tier("z", tiers_dir=tmp_path)
+
+
+def test_map_config_requires_both(tmp_path):
+    assert load_tier("q", tiers_dir=_tier(tmp_path, "q", "")).map is None
+    for i, body in enumerate(['pmtiles="w.pmtiles"\n', 'assets="a"\n', 'pmtiles=""\nassets="a"\n',
+                              'pmtiles="w.pmtiles"\nassets=3\n']):
+        (tmp_path / f"m{i}.toml").write_text(_TEXT + "[map]\n" + body)
+        with pytest.raises(ConfigError, match="map"):
+            load_tier(f"m{i}", tiers_dir=tmp_path)
+    (tmp_path / "bad.toml").write_text('map = "x"\n' + _TEXT)
+    with pytest.raises(ConfigError, match="map"):
+        load_tier("bad", tiers_dir=tmp_path)
+    (tmp_path / "ok.toml").write_text(_TEXT + '[map]\npmtiles="D:/maps/w.pmtiles"\nassets="D:/maps/assets"\n')
+    m = load_tier("ok", tiers_dir=tmp_path).map
+    assert (m.pmtiles, m.assets) == ("D:/maps/w.pmtiles", "D:/maps/assets")
+
+
+def _tier(tmp_path, name, extra):
+    (tmp_path / f"{name}.toml").write_text(_TEXT + extra)
+    return tmp_path

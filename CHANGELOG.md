@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.5.0: the map lens (2026-11-03)
+
+The places a page names can now be pinned on a map, offline.
+
+### Added
+
+- **Map** on any page, and on a branch fork for one phrase, opens a **Map window**: the places
+  the page names, pinned on a dark world map, with a list saying what each one is. Click a pin or
+  a place to open its page. **Again** finds them afresh.
+- **Typed map requests**: "show me Bodiam Castle on a map", "map of Normandy", "X on a map".
+- **An offline world map**: a Protomaps PMTiles file (OpenStreetMap data) read and served by
+  Primer, drawn with MapLibre GL. No tile server is used.
+- **`tools/map_extract.py`** makes the map file from Protomaps' public build: the world to a
+  chosen zoom (zoom 9 is about 1.6 GB), optionally with one region in more detail. Standard
+  library only, resumable.
+- **Places located from Wikipedia, never guessed**: the offline encyclopedia first (using the
+  place's description to pick the right one of several same-named articles), then, when web
+  search is on, Wikipedia and Wikidata online. Lookups are cached.
+- **Maps are saved with the page** and appear in its thumbnail strip.
+
+### Changed
+
+- The shipped tiers turn LFM3's thinking off for the fast model
+  (`chat_template_kwargs = { enable_thinking = false }`). With thinking on, LFM3 spent its whole
+  budget thinking and Primer's short jobs came back empty. LFM3-1.7B with thinking off writes far
+  better branch cards and highlights than LFM2.5-1.2B did.
+
+### Measured
+
+A page's map in about 20 seconds (LFM3-1.7B on the CPU finding the places, the two Wikipedia
+ZIMs locating them); one place in about 9 seconds.
+
 ## v0.4.0: grounding (2026-11-03)
 
 Pages can now be written from sources: an offline copy of Wikipedia, or the live web.

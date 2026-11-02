@@ -176,3 +176,38 @@ def test_add_version_with_sources_roundtrip(g):
                    Source(2, "Whales", "web", "", "", "", "https://example.com/w", "example.com")]
     v2 = g.add_version(node.id, "# Whale 2", "storyteller", "normal")
     assert g.sources(node.id, v2.n) == [] and len(g.sources(node.id, v.n)) == 2
+
+
+def test_map_roundtrip(g):
+    from primer.maps import Place
+    n = g.node_for("Castles", "concept")
+    mid = g.add_map(n.id, 1, "")
+    assert len(mid) == 16 and g.get_map(mid)["status"] == "finding" and g.get_map(mid)["places"] == []
+    g.set_map_places(mid, [Place("A", "x", 1.0, 2.0, "A", "web"), Place("B")])
+    g.update_map(mid, status="done")
+    m = g.get_map(mid)
+    assert m["status"] == "done" and m["error"] is None
+    assert [p["name"] for p in m["places"]] == ["A", "B"] and m["places"][1]["lat"] is None
+    assert m["places"][0] == {"name": "A", "what": "x", "lat": 1.0, "lon": 2.0, "title": "A", "source": "web"}
+    other = g.add_map(n.id, 1, "p")
+    listed = g.maps_for(n.id)
+    assert [x["id"] for x in listed] == [other, mid] and "places" not in listed[0]
+    assert g.get_map("nope") is None
+    with pytest.raises(ValueError):
+        g.update_map(mid, status="weird")
+    with pytest.raises(ValueError):
+        g.update_map("nope", status="done")
+
+
+def test_update_map_keeps_error_and_failed(g):
+    n = g.node_for("Castles", "concept")
+    mid = g.add_map(n.id, 1, "")
+    g.update_map(mid, status="failed", error="why")
+    g.update_map(mid, status="done")  # a late writer cannot revive a failed map
+    assert g.get_map(mid)["status"] == "failed" and g.get_map(mid)["error"] == "why"
+    m2 = g.add_map(n.id, 1, "")
+    g.update_map(m2, error="note")
+    g.update_map(m2, status="locating")  # no error given: the old one stays
+    assert g.get_map(m2)["error"] == "note"
+    g.update_map(m2, status="done", error=None)  # explicit None clears
+    assert g.get_map(m2)["error"] is None

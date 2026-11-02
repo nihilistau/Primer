@@ -8,6 +8,9 @@ base_url = "http://127.0.0.1:8081"
 model = "lfm3"
 managed = true
 launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]
+# LFM3 thinks before answering by default, which leaves short jobs empty: turn it off
+[text.extra]
+chat_template_kwargs = { enable_thinking = false }
 
 # Web search for the "web" source: "duckduckgo" (default), "searxng", "brave" or "off".
 # [web]

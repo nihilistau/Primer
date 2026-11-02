@@ -59,3 +59,52 @@
 /* Engines: the image server row */
 .en-paused { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); margin-top: var(--sp-1); }
 .imm-nowrap { white-space: nowrap; flex: none; }
+
+/* the Map window */
+.mp { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface-1); }
+.mp-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--hair); }
+.mp-label { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); display: flex; align-items: center; gap: var(--sp-2); }
+.mp-label-err, .mp-err, .mp-note-err { color: var(--err); }
+.mp-err { font: 400 var(--fs-12)/1.4 var(--font-ui); padding: var(--sp-1) var(--sp-3); }
+.mp-main { flex: 1; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+.mp-stage { position: relative; flex: 1 1 60%; min-height: 160px; background: var(--surface-0); }
+/* .mp-stage .mp-canvas outranks maplibre-gl.css (loaded later), which sets .maplibregl-map { position: relative } */
+.mp-stage .mp-canvas { position: absolute; inset: 0; }
+.mp-note { position: absolute; left: var(--sp-3); bottom: var(--sp-5); max-width: 80%; padding: var(--sp-1) var(--sp-2);
+  background: rgba(var(--surface-1-rgb), .9); border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+  color: var(--text-2); font: 400 var(--fs-12)/1.4 var(--font-ui); pointer-events: none; }
+.mp-list { list-style: none; margin: 0; padding: var(--sp-2); flex: 0 1 40%; min-height: 0; overflow-y: auto;
+  border-top: 1px solid var(--hair); display: flex; flex-direction: column; gap: 2px; }
+.mp-item { display: flex; align-items: flex-start; gap: var(--sp-2); width: 100%; box-sizing: border-box; text-align: left;
+  padding: var(--sp-2); background: none; border: 0; border-radius: var(--r-sm); color: var(--text-1); cursor: pointer;
+  font: 400 var(--fs-13)/1.3 var(--font-ui); }
+.mp-item:hover, .mp-item:focus-visible, .mp-item-on { background: var(--hover-tint); outline: none; }
+.mp-item-on { color: var(--warm); }
+.mp-item-text { display: flex; flex-direction: column; min-width: 0; }
+.mp-item b { font-weight: 500; }
+.mp-what { font: 400 var(--fs-12)/1.3 var(--font-ui); color: var(--text-3); }
+.mp-item-off { cursor: default; color: var(--text-3); }
+.mp-item-off:hover { background: none; }
+@container (min-width: 640px) {
+  .mp-main { flex-direction: row; }
+  .mp-stage { flex: 1 1 auto; }
+  .mp-list { flex: 0 0 220px; border-top: 0; border-left: 1px solid var(--hair); }
+}
+/* pins: the kit accent, the selected one warm */
+.mp-pin { position: relative; width: 14px; height: 14px; padding: 0; border-radius: 50%; cursor: pointer;
+  background: var(--accent); border: 2px solid var(--surface-0); box-shadow: 0 0 0 1px var(--accent), var(--el-1); }
+.mp-pin:hover, .mp-pin:focus-visible, .mp-pin-on { background: var(--warm); box-shadow: 0 0 0 1px var(--warm), var(--el-1); outline: none; }
+.mp-pin-label { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); white-space: nowrap; pointer-events: none;
+  padding: 1px var(--sp-1); border-radius: var(--r-sm); background: rgba(var(--surface-1-rgb), .85); color: var(--text-1);
+  font: 500 var(--fs-12)/1.3 var(--font-ui); }
+.mp-pin-on { z-index: 2; }
+/* MapLibre own attribution and zoom buttons, in the kit colours */
+.mp .mp-stage .maplibregl-ctrl.maplibregl-ctrl-attrib { background: rgba(var(--surface-1-rgb), .85); color: var(--text-3);
+  font: 400 var(--fs-11)/1.4 var(--font-ui); margin: 0; padding: 0 var(--sp-2); border-top-left-radius: var(--r-sm); }
+.mp .mp-stage .maplibregl-ctrl-attrib a, .mp .mp-stage .maplibregl-ctrl-attrib a:visited { color: var(--accent); text-decoration: none; }
+.mp .mp-stage .maplibregl-ctrl-attrib a:hover { color: var(--accent-hover); text-decoration: underline; }
+.mp .mp-stage .maplibregl-ctrl-attrib-inner { display: inline; }
+.mp .maplibregl-ctrl-group { background: var(--surface-2); border: 1px solid var(--hair-strong); box-shadow: none; }
+.mp .maplibregl-ctrl-group button + button { border-top: 1px solid var(--hair); }
+.mp .maplibregl-ctrl-icon { filter: invert(1) hue-rotate(180deg); }

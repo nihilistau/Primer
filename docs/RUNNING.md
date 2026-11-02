@@ -324,6 +324,69 @@ On the same machine, writing with gemma-4-E4B (Q6_K, thinking off) on llama-serv
 | Offline reference (`wikipedia_en_top_nopic`) | 0.3 s | about 9 s |
 | Web (DuckDuckGo, three pages) | about 6.5 s | about 15 s |
 
+## Maps
+
+Phase 5 adds the map lens: the places a page names, pinned on an offline map. It needs two things
+on disk, both named in the tier's `[map]` table:
+
+```toml
+[map]
+pmtiles = "D:/Reference/maps/world-z9.pmtiles"
+assets = "D:/Reference/maps/basemaps-assets"
+```
+
+### The map file
+
+A [PMTiles](https://docs.protomaps.com/pmtiles/) vector map from
+[Protomaps](https://protomaps.com/), OpenStreetMap data. Primer reads it itself and serves its
+tiles; nothing is fetched from a tile server. `tools/map_extract.py` cuts one out of Protomaps'
+public daily build (139 GB, of which it downloads only what you ask for):
+
+```bash
+python tools/map_extract.py --out D:/Reference/maps/world-z9.pmtiles --maxzoom 9 --dry-run
+python tools/map_extract.py --out D:/Reference/maps/world-z9.pmtiles --maxzoom 9
+```
+
+| Max zoom | Size | Detail |
+| --- | --- | --- |
+| 8 | about 560 MB | regions and large towns |
+| 9 | about 1.6 GB | towns, main roads (recommended) |
+| 10 | about 3.8 GB | small towns, more roads |
+
+To add more detail for one region, give a box and a deeper zoom for it, for example England and
+Wales to zoom 12:
+
+```bash
+python tools/map_extract.py --out D:/Reference/maps/world-z9-uk-z12.pmtiles --maxzoom 9 --bbox -6.5,49.8,2.0,55.9 --region-maxzoom 12
+```
+
+The tool resumes if interrupted, and needs about two to three times the finished file's size
+free while it runs. `--dry-run` prints the size first.
+
+### Fonts and icons
+
+Labels and map icons come from Protomaps'
+[basemaps-assets](https://github.com/protomaps/basemaps-assets) (the fonts are under the SIL Open
+Font License). Download the repository as a zip, unpack it, and point `assets` at the folder
+holding `fonts/` and `sprites/`.
+
+### How places are found
+
+The fast model reads the page and lists up to 12 places it names, each with what kind of place
+it is. Each is then located from a Wikipedia article's coordinates, in this order:
+
+1. Places already located before (kept in `var/primer.sqlite`).
+2. The offline encyclopedia (`[reference]`), trying a qualified title first ("River Avon
+   (Warwickshire)" for "a river in Warwickshire").
+3. When `[web]` search isn't `off`: Wikipedia's API, then Wikidata's coordinates for articles
+   without any (counties and regions often have none). Only the place's name is sent.
+
+A place with no coordinates anywhere is listed as not found. The model's own idea of where a
+place is is never used. Lookups stop after 30 seconds and show what was found.
+
+With LFM3-1.7B as the fast model (on the CPU) and the two Wikipedia ZIMs, a page's map takes
+about 20 seconds; a single place, about 9 seconds including the page.
+
 ## Tests
 
 ```

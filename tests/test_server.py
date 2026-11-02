@@ -377,6 +377,7 @@ def _grounded(tmp_path, g, tier, settings=None, replies=None):
         server.shutdown()
         server.server_close()
         app.pages.shutdown()
+        app.shutdown_maps()
     return app, Client(server.server_address[1]), close
 
 
@@ -603,3 +604,372 @@ def test_managed_reference_passes_book_order(tmp_path):
     assert App.make_grounder(Tier("t", _spec(), _spec(), reference=ref)).book_order == ["b_book", "a_book"]
     ext = ReferenceConfig(base_url="http://127.0.0.1:9")
     assert App.make_grounder(Tier("t", _spec(), _spec(), reference=ext)).book_order == []
+
+
+# --- Phase 5: map tiles, assets and map jobs ---
+import gzip
+import http.client as _hc
+
+from primer.config import MapConfig
+from primer.maps.pmtiles import write_archive, zxy_to_tileid
+
+TILE = gzip.compress(b"mvt-bytes")
+
+
+def _archive(tmp_path, name="m.pmtiles", compression=2):
+    p = tmp_path / name
+    tiles = [(zxy_to_tileid(0, 0, 0), TILE), (zxy_to_tileid(1, 0, 0), TILE), (zxy_to_tileid(1, 1, 1), TILE)]
+    write_archive(p, tiles, {"name": "t", "vector_layers": [{"id": "water"}]}, tile_compression=compression,
+                  min_zoom=0, max_zoom=1, bounds=(-10.0, -20.0, 30.0, 40.0), center=(1.0, 2.0, 1))
+    return p
+
+
+def _mapped(tmp_path, g, reference=None, search="off", pmtiles=None, assets=None, with_map=True):
+    assets = assets if assets is not None else tmp_path / "assets"
+    assets.mkdir(exist_ok=True)
+    pm = pmtiles if pmtiles is not None else _archive(tmp_path)
+    tier = Tier("t", _spec(), _spec(), reference=reference, web=WebConfig(search=search),
+                map=MapConfig(str(pm), str(assets)) if with_map else None)
+    return _grounded(tmp_path, g, tier)
+
+
+def _get(client, path, headers=None):
+    c = _hc.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    try:
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{client.port}", **(headers or {})})
+        r = c.getresponse()
+        return r.status, dict(r.getheaders()), r.read()
+    finally:
+        c.close()
+
+
+def test_tiles_served_gzip_and_204(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        status, h, body = _get(client, "/v1/map/tiles/1/1/1.mvt")
+        assert status == 200 and body == TILE
+        assert h["Content-Encoding"] == "gzip"
+        assert h["Content-Type"] == "application/vnd.mapbox-vector-tile"
+        assert h["Cache-Control"] == "max-age=86400"
+        status, h, body = _get(client, "/v1/map/tiles/1/0/1.mvt")
+        assert status == 204 and body == b""
+    finally:
+        close()
+
+
+def test_tiles_uncompressed_archive_has_no_content_encoding(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g, pmtiles=_archive(tmp_path, "raw.pmtiles", compression=1))
+    try:
+        status, h, _ = _get(client, "/v1/map/tiles/0/0/0.mvt")
+        assert status == 200 and "Content-Encoding" not in h
+    finally:
+        close()
+
+
+def test_tiles_bad_coords_400(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        for p in ("/v1/map/tiles/1/2/0.mvt", "/v1/map/tiles/0/0/1.mvt", "/v1/map/tiles/40/0/0.mvt",
+                  "/v1/map/tiles/99999999999/0/0.mvt"):
+            assert _get(client, p)[0] == 400, p
+        for p in ("/v1/map/tiles/a/0/0.mvt", "/v1/map/tiles/1/0/0.png", "/v1/map/tiles/1/0.mvt"):
+            assert _get(client, p)[0] == 404, p
+    finally:
+        close()
+
+
+def test_tiles_unavailable_503(tmp_path, g):
+    bad = tmp_path / "bad.pmtiles"
+    bad.write_bytes(b"PMTiles\x03" + b"\0" * 20)  # truncated
+    for i, kw in enumerate(({"with_map": False}, {"pmtiles": bad}, {"pmtiles": tmp_path / "missing.pmtiles"})):
+        sub = tmp_path / f"s{i}"
+        sub.mkdir()
+        app, client, close = _mapped(sub, g, **kw)
+        try:
+            status, _, body = _get(client, "/v1/map/tiles/0/0/0.mvt")
+            assert status == 503 and json.loads(body)["error"]
+            assert _get(client, "/v1/map/tilejson")[0] == 503
+        finally:
+            close()
+
+
+def test_tilejson_from_archive(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        status, h, body = _get(client, "/v1/map/tilejson")
+        tj = json.loads(body)
+        assert status == 200 and tj["tilejson"] == "3.0.0"
+        assert tj["tiles"] == [f"http://127.0.0.1:{client.port}/v1/map/tiles/{{z}}/{{x}}/{{y}}.mvt"]
+        assert (tj["minzoom"], tj["maxzoom"]) == (0, 1)
+        assert tj["bounds"] == pytest.approx([-10.0, -20.0, 30.0, 40.0])
+        assert tj["center"] == pytest.approx([1.0, 2.0, 1])
+        assert tj["attribution"] == "© OpenStreetMap contributors · Protomaps"
+        assert tj["vector_layers"] == [{"id": "water"}]
+    finally:
+        close()
+
+
+def test_map_assets_confined(tmp_path, g):
+    assets = tmp_path / "assets"
+    (assets / "fonts" / "Noto").mkdir(parents=True)
+    (assets / "fonts" / "Noto" / "0-255.pbf").write_bytes(b"pbf")
+    (assets / "sprites.json").write_text("{}")
+    (assets / "sprites.png").write_bytes(b"png")
+    (assets / "notes.txt").write_text("no")
+    (tmp_path / "secret.json").write_text('{"secret": 1}')
+    (tmp_path / "var").mkdir(exist_ok=True)
+    (tmp_path / "var" / "primer.json").write_text("{}")
+    app, client, close = _mapped(tmp_path, g, assets=assets)
+    try:
+        status, h, body = _get(client, "/v1/map/assets/fonts/Noto/0-255.pbf")
+        assert (status, body, h["Content-Type"]) == (200, b"pbf", "application/x-protobuf")
+        assert h["Cache-Control"] == "max-age=86400"
+        assert _get(client, "/v1/map/assets/sprites.json")[2] == b"{}"
+        assert _get(client, "/v1/map/assets/sprites.json")[1]["Content-Type"] == "application/json"
+        assert _get(client, "/v1/map/assets/sprites.png")[1]["Content-Type"] == "image/png"
+        for p in ("/v1/map/assets/notes.txt", "/v1/map/assets/missing.json", "/v1/map/assets/",
+                  "/v1/map/assets/fonts", "/v1/map/assets/../secret.json", "/v1/map/assets/%2e%2e/secret.json",
+                  "/v1/map/assets/..%2fsecret.json", "/v1/map/assets/%2e%2e%2f%2e%2e%2fvar/primer.json",
+                  "/v1/map/assets//etc/passwd", "/v1/map/assets/" + str(tmp_path / "secret.json").replace("\\", "/"),
+                  "/v1/map/assets/..\\secret.json", "/v1/map/assets/%5c..%5csecret.json",
+                  "/v1/map/assets/C:/Windows/win.ini", "/v1/map/assets/sprites.json%00.png",
+                  "/v1/map/assets/fonts/Noto/../../../secret.json",
+                  "/v1/map/assets/sprites.json:hid.json", "/v1/map/assets/sprites.json::$DATA",
+                  "/v1/map/assets/fonts:x/y.pbf"):
+            status, _, body = _get(client, p)
+            assert status == 404 and b"secret" not in body, p
+    finally:
+        close()
+
+
+def test_map_assets_404_without_map(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g, with_map=False)
+    try:
+        assert _get(client, "/v1/map/assets/sprites.json")[0] == 404
+    finally:
+        close()
+
+
+def test_worker_style_request_without_origin_is_allowed(tmp_path, g):
+    """MapLibre fetches tiles and glyphs from a web worker: same-origin, no Origin header."""
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        for p in ("/v1/map/tiles/0/0/0.mvt", "/v1/map/tilejson"):
+            assert _get(client, p, {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"})[0] == 200, p
+            assert _get(client, p, {"Sec-Fetch-Site": "same-origin", "Origin": f"http://127.0.0.1:{client.port}"})[0] == 200
+            assert _get(client, p, {"Sec-Fetch-Site": "cross-site"})[0] == 403
+            assert _get(client, p, {"Origin": "http://evil.example"})[0] == 403
+    finally:
+        close()
+
+
+def test_map_available_reasons(tmp_path, g):
+    kiwix, url = fake_kiwix_server.serve()
+    app, client, close = _mapped(tmp_path, g, with_map=False)
+    try:
+        assert client.get("/v1/status")["map_available"] == {"ok": False, "reason": "No [map] section in this tier"}
+    finally:
+        close()
+    sub = tmp_path / "a"
+    sub.mkdir()
+    app, client, close = _mapped(sub, g, pmtiles=sub / "nope.pmtiles")
+    try:
+        m = client.get("/v1/status")["map_available"]
+        assert m["ok"] is False and m["reason"].startswith("The map file can't be read (") and m["reason"].endswith(")")
+    finally:
+        close()
+    sub = tmp_path / "b"
+    sub.mkdir()
+    app, client, close = _mapped(sub, g)  # no reference, web off
+    try:
+        assert client.get("/v1/status")["map_available"] == {
+            "ok": False, "reason": "No way to look places up: no offline reference and web search is off"}
+    finally:
+        close()
+    sub = tmp_path / "c"
+    sub.mkdir()
+    app, client, close = _mapped(sub, g, search="duckduckgo")  # web on, no reference
+    try:
+        assert client.get("/v1/status")["map_available"] == {"ok": True, "reason": ""}
+    finally:
+        close()
+    sub = tmp_path / "d"
+    sub.mkdir()
+    app, client, close = _mapped(sub, g, reference=ReferenceConfig(base_url=url))  # reference up
+    try:
+        assert client.get("/v1/status")["map_available"] == {"ok": True, "reason": ""}
+        kiwix.kill()
+        app._forget_reference()
+        assert client.get("/v1/status")["map_available"] == {
+            "ok": False, "reason": "The reference server isn't running and web search is off"}
+    finally:
+        close()
+    sub = tmp_path / "e"
+    sub.mkdir()
+    app, client, close = _mapped(sub, g, reference=ReferenceConfig(base_url=url), search="duckduckgo")
+    try:  # reference down but web on: still a way
+        assert client.get("/v1/status")["map_available"] == {"ok": True, "reason": ""}
+    finally:
+        close()
+
+
+def _page_node(g):
+    n = g.node_for("Castles", "concept")
+    g.add_version(n.id, "Kenilworth Castle stands near Coventry.", "storyteller", "normal")
+    return n
+
+
+def _wait_map(client, mid, timeout=10.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        m = client.get(f"/v1/maps/{mid}")
+        if m["status"] in ("done", "failed"):
+            return m
+        time.sleep(0.05)
+    raise AssertionError("map job did not finish")
+
+
+def test_maps_api_create_get_again(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g, search="duckduckgo")
+    node = _page_node(g)
+    app.maps.shutdown()
+    from primer.maps import Place
+    from primer.maps.service import MapService
+
+    class Geo:
+        clock = time.monotonic
+
+        def locate(self, name, deadline, what=""):
+            return Place(name=name, lat=52.3, lon=-1.6, title=name, source="reference")
+
+    app.maps = MapService(g, FakeEngine([]), lambda refresh=False: Geo())
+    try:
+        r = client.post("/v1/maps", {"node_id": node.id, "phrase": "Kenilworth Castle"}, expect=202)
+        done = _wait_map(client, r["id"])
+        assert done["status"] == "done" and done["phrase"] == "Kenilworth Castle"
+        assert [p["name"] for p in done["places"]] == ["Kenilworth Castle"]
+        again = client.post(f"/v1/maps/{r['id']}/again", {}, expect=202)
+        assert again["id"] != r["id"]
+        assert _wait_map(client, again["id"])["places"][0]["lat"] == 52.3
+        client.get("/v1/maps/nope", expect=404)
+        client.post("/v1/maps/nope/again", {}, expect=404)
+        client.post("/v1/maps", {"node_id": "nope"}, expect=404)
+        client.post("/v1/maps", {}, expect=400)
+        client.post("/v1/maps", {"node_id": 5}, expect=400)
+        client.post("/v1/maps", {"node_id": node.id, "phrase": 5}, expect=400)
+        empty = g.node_for("Empty", "concept")  # no page written yet
+        client.post("/v1/maps", {"node_id": empty.id}, expect=404)
+    finally:
+        close()
+        app.maps.shutdown()
+
+
+def test_maps_api_refused_when_unavailable(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)  # no reference, web off
+    node = _page_node(g)
+    try:
+        err = client.post("/v1/maps", {"node_id": node.id}, expect=409)
+        assert err["error"].startswith("No way to look places up")
+        mid = g.add_map(node.id, 1, "")
+        assert client.post(f"/v1/maps/{mid}/again", {}, expect=409)["error"]
+        assert len(g.maps_for(node.id)) == 1  # nothing new was created
+    finally:
+        close()
+
+
+def test_page_lists_maps(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    node = _page_node(g)
+    try:
+        assert client.get(f"/v1/pages/{node.id}")["maps"] == []
+        mid = g.add_map(node.id, 1, "Coventry")
+        maps = client.get(f"/v1/pages/{node.id}")["maps"]
+        assert [m["id"] for m in maps] == [mid] and maps[0]["phrase"] == "Coventry"
+    finally:
+        close()
+
+
+def test_tier_reload_closes_old_map_service_and_archive(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        assert _get(client, "/v1/map/tiles/0/0/0.mvt")[0] == 200
+        old_maps, old_archive = app.maps, app._archive
+        assert old_archive is not None
+        (tmp_path / "tiers" / "other.toml").write_text(
+            '[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\nmodel="m"\n'
+            '[fast]\nkind="openai"\nbase_url="http://127.0.0.1:1"\nmodel="m"\n')
+        client.post("/v1/tier", {"name": "other"})
+        assert old_maps._closed and app.maps is not old_maps
+        assert old_archive._f.closed and app._archive is None
+        assert client.get("/v1/status")["map_available"]["reason"] == "No [map] section in this tier"
+        assert _get(client, "/v1/map/tiles/0/0/0.mvt")[0] == 503
+    finally:
+        close()
+        app.shutdown_maps()
+
+
+def test_intent_map(client):
+    assert client.post("/v1/intent", {"text": "show me Warwick Castle on a map"})["map"] == "Warwick Castle"
+    r = client.post("/v1/intent", {"text": "what is a map projection?"})
+    assert r["map"] is None and "image" in r and "video" in r
+    assert client.post("/v1/intent", {"text": "draw a moat"})["map"] is None
+
+
+def test_unsupported_tile_compression_is_unavailable(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g, search="duckduckgo",
+                                 pmtiles=_archive(tmp_path, "br.pmtiles", compression=3))
+    try:
+        status, _, body = _get(client, "/v1/map/tiles/0/0/0.mvt")
+        assert status == 503 and "unsupported tile compression" in json.loads(body)["error"]
+        assert "unsupported tile compression" in client.get("/v1/status")["map_available"]["reason"]
+        assert _get(client, "/v1/map/tilejson")[0] == 503
+    finally:
+        close()
+
+
+def test_tier_reload_mid_request_does_not_leave_old_archive_open(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        (tmp_path / "tiers" / "other.toml").write_text(
+            '[text]' + chr(10) + 'kind="openai"' + chr(10) + 'base_url="http://127.0.0.1:1"' + chr(10)
+            + 'model="m"' + chr(10) + '[fast]' + chr(10) + 'kind="openai"' + chr(10)
+            + 'base_url="http://127.0.0.1:1"' + chr(10) + 'model="m"' + chr(10))
+        gate, entered = threading.Event(), threading.Event()
+        real_stop = app.servers.stop_all
+
+        def slow_stop():
+            entered.set()
+            gate.wait(10)
+            real_stop()
+        app.servers.stop_all = slow_stop
+        t = threading.Thread(target=lambda: app.reload_tier("other"))
+        t.start()
+        assert entered.wait(10)  # shutdown_maps has run; the old tier is still current
+        assert _get(client, "/v1/map/tiles/0/0/0.mvt")[0] == 200  # reopens the old file
+        reopened = app._archive
+        assert reopened is not None
+        gate.set()
+        t.join(10)
+        assert reopened._f.closed and app._archive is None
+    finally:
+        gate.set()
+        close()
+
+
+def test_archive_reopened_when_tier_points_elsewhere(tmp_path, g):
+    app, client, close = _mapped(tmp_path, g)
+    try:
+        first = app.map_archive()
+        other = _archive(tmp_path, "other.pmtiles")
+        app.tier = Tier("t", _spec(), _spec(), map=MapConfig(str(other), str(tmp_path / "assets")))
+        second = app.map_archive()
+        assert second is not first and first._f.closed and str(second.path) == str(other)
+    finally:
+        close()
+
+
+def test_intent_map_wins_over_image_and_video(client):
+    for text in ("draw a map of England", "show me a picture of Paris on a map",
+                 "make a map of the Roman Empire"):
+        r = client.post("/v1/intent", {"text": text})
+        assert r["map"] and r["image"] is None and r["video"] is None, text

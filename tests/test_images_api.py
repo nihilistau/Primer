@@ -99,14 +99,14 @@ def _page(env):
 
 def test_intent_returns_video(env):
     c = env.client
-    assert c.post("/v1/intent", {"text": "animate a trebuchet firing"}) == {"image": None, "video": "a trebuchet firing"}
+    assert c.post("/v1/intent", {"text": "animate a trebuchet firing"}) == {"image": None, "video": "a trebuchet firing", "map": None}
     assert c.post("/v1/intent", {"text": "make a video of a moat"})["image"] is None
 
 
 def test_intent_route(env):
     c = env.client
-    assert c.post("/v1/intent", {"text": "draw a picture of a trebuchet"}) == {"image": "a trebuchet", "video": None}
-    assert c.post("/v1/intent", {"text": "trebuchets"}) == {"image": None, "video": None}
+    assert c.post("/v1/intent", {"text": "draw a picture of a trebuchet"}) == {"image": "a trebuchet", "video": None, "map": None}
+    assert c.post("/v1/intent", {"text": "trebuchets"}) == {"image": None, "video": None, "map": None}
     assert c.post("/v1/intent", {"text": 7}, expect=400)["error"]
     assert c.post("/v1/intent", {}, expect=400)["error"]
 

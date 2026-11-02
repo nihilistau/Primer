@@ -29,6 +29,9 @@ base_url = "http://127.0.0.1:8081"
 model = "lfm3"
 managed = true
 launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]
+# LFM3 thinks before answering by default, which leaves short jobs empty: turn it off
+[fast.extra]
+chat_template_kwargs = { enable_thinking = false }
 
 # Image generation (stable-diffusion.cpp). Uncomment and set sd_server to your own
 # sd-server executable; until then image generation shows as unavailable.
@@ -49,6 +52,13 @@ launch = ["llama-server","-m","models/lfm3.gguf","--port","8081","-ngl","0"]
 # external kiwix-serve:
 # [reference]
 # base_url = "http://127.0.0.1:8830"
+
+# Offline map (a PMTiles v3 vector map file plus Protomaps basemaps-assets for glyphs and
+# sprites). Uncomment and edit; until then the Map button shows as unavailable. Places are
+# looked up through the offline reference or web search above.
+# [map]
+# pmtiles = "C:/path/to/maps/world-z9.pmtiles"
+# assets = "C:/path/to/maps/basemaps-assets"
 
 # Web search for the "web" source: "duckduckgo" (default), "searxng", "brave" or "off".
 # [web]

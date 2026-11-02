@@ -4,13 +4,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { mediaUrl, videoUrl } from '../api.js'
-import { MEDIA_EVENT, openImageWindow, openVideoWindow } from '../openImage.js'
+import { MEDIA_EVENT, OPEN_PLACE_EVENT, openImageWindow, openMapWindow, openVideoWindow } from '../openImage.js'
 import * as wm from '../windowManager.js'
 import { Button, Chip, Input, State } from '../kit/parts.jsx'
+import { Icon } from '../kit/icons.jsx'
 import BranchFork from '../fork/BranchFork.jsx'
 import { Markdown } from './markdown.jsx'
 import { createHistory } from './history.js'
-import { routePrompt, imageButton, imageChecking, imageCheckFailed, thumbState } from './imageRoute.js'
+import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState } from './imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import { safeHref } from './citations.js'
 import { badgeLabel, rewriteOptions } from './sourceMode.js'
@@ -39,8 +40,9 @@ export default function Reader({ windowId, start, onPick }) {
   const promptRef = useRef(null)
   const [fork, setFork] = useState(null)       // {phrase, anchor, container, node, key} while the fork is open
   nodeRef.current = view.nodeId
-  const [media, setMedia] = useState({ node: null, items: [] })   // this page's images and videos
+  const [media, setMedia] = useState({ node: null, items: [], maps: [] })   // this page's images, videos and maps
   const [imgBtn, setImgBtn] = useState(imageChecking)
+  const [mapBtn, setMapBtn] = useState(mapChecking)
   const [vidBtn, setVidBtn] = useState(videoChecking)
   const [imgErr, setImgErr] = useState('')
   const [errTitle, setErrTitle] = useState('No image')
@@ -52,7 +54,7 @@ export default function Reader({ windowId, start, onPick }) {
   /* Stream a page into this window. mode: 'push' adds a history entry, 'replace' swaps the
    * current one (Deeper, Simpler, Regenerate, Retry). Opening a page aborts the one in
    * flight; the server still finishes and saves it. */
-  const run = async (body, mode = 'push') => {
+  const run = async (body, mode = 'push', after) => {
     stop()
     const ac = new AbortController()
     abort.current = ac
@@ -98,6 +100,7 @@ export default function Reader({ windowId, start, onPick }) {
     if (live()) setView(v => ({ ...v, streaming: false, waiting: '', grounding: '' }))
     // the stream's sources carry no links; reload them from the saved page
     if (live() && ended.done) refreshSources(nodeId, ac)
+    if (live() && ended.done && !ended.error && nodeId && after) after(nodeId)   // e.g. a typed map request
   }
 
   const refreshSources = async (id, ac) => {
@@ -139,6 +142,8 @@ export default function Reader({ windowId, start, onPick }) {
     setText('')
     const r = await routePrompt(typed, { nodeId: nodeRef.current })
     if (r.kind === 'image' || r.kind === 'video') makeImage(r.body)
+    // a typed map request: the place's page first, then its map once the page is written
+    else if (r.kind === 'map') run(r.body, 'push', (id) => makeMap(typedMapBody(id, r.body.concept)))
     else run(r.body)
   }
 
@@ -157,12 +162,27 @@ export default function Reader({ windowId, start, onPick }) {
     }
   }
 
+  /* Create a map job (a page, or a phrase on it); the Map window opens only on success. */
+  const makingMap = useRef(false)
+  const makeMap = async (body) => {
+    if (makingMap.current) return              // a double click must not start two jobs
+    makingMap.current = true
+    setImgErr('')
+    try {
+      const m = await api.createMap(body)
+      openMapWindow(m.id, body.subject, body.node_id)
+    } catch (e) {
+      setErrTitle('No map')
+      setImgErr(e.message || 'The map could not be started.')
+    } finally { makingMap.current = false }
+  }
+
   const loadMedia = useCallback(async (id) => {
     if (!id) return
     try {
       const p = await api.page(id)
       if (id !== nodeRef.current) return              // the reader moved on: this page's images are stale
-      setMedia({ node: id, items: p.media || [] }); setMediaErr('')
+      setMedia({ node: id, items: p.media || [], maps: p.maps || [] }); setMediaErr('')
     } catch (e) {
       if (id === nodeRef.current) setMediaErr(`Couldn't refresh this page's images: ${e.message || 'Primer did not answer.'}`)
     }
@@ -174,7 +194,8 @@ export default function Reader({ windowId, start, onPick }) {
     return () => window.removeEventListener(MEDIA_EVENT, onMedia)
   }, [loadMedia])
   const mediaItems = media.node === view.nodeId ? media.items : []
-  const unfinished = mediaItems.some(m => thumbState(m) === 'busy')
+  const mapItems = media.node === view.nodeId ? media.maps : []
+  const unfinished = mediaItems.concat(mapItems).some(m => thumbState(m) === 'busy')
   useEffect(() => { if (view.nodeId && !view.streaming) loadMedia(view.nodeId) }, [view.nodeId, view.streaming, loadMedia])
   useEffect(() => {
     if (!unfinished) return
@@ -184,8 +205,8 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { setImgErr(''); setMediaErr('') }, [view.nodeId])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)) } })
-      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)) } })
+    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)) } })
+      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
 
@@ -195,6 +216,22 @@ export default function Reader({ windowId, start, onPick }) {
     if (newWindow) wm.open('reader', { props: { start: body } })
     else run(body)
   }
+
+  /* A place chosen on a Map window for the page this reader shows: open it here. */
+  const runRef = useRef(null)
+  runRef.current = run
+  const streamingRef = useRef(false)
+  streamingRef.current = view.streaming
+  useEffect(() => {
+    const onPlace = (e) => {
+      const d = e.detail
+      if (!d || d.handled || !d.body || d.body.from_id !== nodeRef.current || streamingRef.current) return
+      d.handled = true
+      runRef.current(d.body)
+    }
+    window.addEventListener(OPEN_PLACE_EVENT, onPlace)
+    return () => window.removeEventListener(OPEN_PLACE_EVENT, onPlace)
+  }, [])
 
   /* The fork lives in the reader body's visible area (an overlay at the current scroll
    * offset), so the viewport rect becomes body-relative; scrolling the article closes it. */
@@ -225,6 +262,11 @@ export default function Reader({ windowId, start, onPick }) {
     const phrase = fork.phrase, node = fork.node
     closeFork()
     makeImage({ node_id: node, phrase, subject: phrase, kind: 'video' })
+  }
+  const forkMap = () => {
+    const phrase = fork.phrase, node = fork.node
+    closeFork()
+    makeMap({ node_id: node, phrase, subject: phrase })
   }
   const act = (kind) => {
     if (kind !== 'ask') return
@@ -319,6 +361,10 @@ export default function Reader({ windowId, start, onPick }) {
                   title={vidBtn.enabled ? 'Make a short video of this page' : vidBtn.reason}
                   aria-label={vidBtn.enabled ? 'Video' : `Video (unavailable: ${vidBtn.reason})`}
                   onClick={() => makeImage({ node_id: view.nodeId, subject: view.title, kind: 'video' })}>Video</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !mapBtn.enabled}
+                  title={mapBtn.enabled ? 'Show the places this page names on a map' : mapBtn.reason}
+                  aria-label={mapBtn.enabled ? 'Map' : `Map (unavailable: ${mapBtn.reason})`}
+                  onClick={() => makeMap({ node_id: view.nodeId, subject: view.title })}>Map</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'deeper' })}>Deeper</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'simpler' })}>Simpler</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ regenerate: true })}>Regenerate</Button>
@@ -333,8 +379,8 @@ export default function Reader({ windowId, start, onPick }) {
             {view.grounding && !view.markdown ? <div className="rd-grounding" role="status">{view.grounding}</div> : null}
             <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} />
             {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
-            {mediaItems.length ? (
-              <ul className="rd-strip" aria-label="Images and videos on this page">
+            {mediaItems.length || mapItems.length ? (
+              <ul className="rd-strip" aria-label="Images, videos and maps on this page">
                 {mediaItems.map(m => {
                   const video = m.kind === 'video', what = video ? 'Video' : 'Image'
                   const st = thumbState(m), url = st !== 'done' ? '' : video ? videoUrl(m.file) : mediaUrl(m.file)
@@ -352,6 +398,22 @@ export default function Reader({ windowId, start, onPick }) {
                           : <span className="rd-thumb-glyph" aria-hidden="true">{st === 'failed' ? '✕' : <span className="ui-spin" />}</span>}
                       </button>
                       {m.phrase ? <span className="rd-thumb-cap">{m.phrase}</span> : null}
+                    </li>
+                  )
+                })}
+                {mapItems.map(m => {
+                  const st = thumbState(m)
+                  return (
+                    <li key={m.id}>
+                      <button type="button" className={`rd-thumb rd-thumb-map rd-thumb-${st}`}
+                              title={m.phrase || 'Map of this page'}
+                              aria-label={`Map: ${m.phrase || view.title || 'this page'} (${st === 'busy' ? 'in progress' : st})`}
+                              onClick={() => openMapWindow(m.id, m.phrase || view.title, m.node_id || view.nodeId)}>
+                        <span className="rd-thumb-glyph" aria-hidden="true">
+                          {st === 'busy' ? <span className="ui-spin" /> : st === 'failed' ? '✕' : <Icon name="map" size={32} />}
+                        </span>
+                      </button>
+                      <span className="rd-thumb-cap">{m.phrase || 'Map'}</span>
                     </li>
                   )
                 })}
@@ -384,7 +446,7 @@ export default function Reader({ windowId, start, onPick }) {
         {fork ? (
           <div className="rd-fork" style={{ left: fork.at.x, top: fork.at.y }}>
             <BranchFork key={fork.key} anchor={fork.anchor} container={fork.container} node={fork.node}
-                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onClose={closeFork} />
+                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onMap={forkMap} onClose={closeFork} />
           </div>
         ) : null}
       </div>

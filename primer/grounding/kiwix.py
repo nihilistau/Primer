@@ -93,5 +93,9 @@ class KiwixClient:
         raw = self._get(f"/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}")
         return html_to_text(raw.decode("utf-8", "replace"))
 
+    def article_html(self, book: str, path: str) -> str:
+        raw = self._get(f"/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}")
+        return raw.decode("utf-8", "replace")
+
     def href(self, book: str, path: str) -> str:
         return f"{self.base_url}/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}"

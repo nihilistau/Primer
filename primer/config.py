@@ -72,6 +72,12 @@ class ReferenceConfig:
         return bool(self.kiwix_serve)
 
 
+@dataclass(frozen=True)
+class MapConfig:
+    pmtiles: str  # the PMTiles v3 map file
+    assets: str  # folder of glyphs and sprites (Protomaps basemaps-assets)
+
+
 WEB_SEARCHES = ("duckduckgo", "searxng", "brave", "off")
 SOURCE_MODES = ("storyteller", "reference", "web")
 
@@ -93,6 +99,7 @@ class Tier:
     images: ImagesConfig | None = None
     reference: ReferenceConfig | None = None
     web: WebConfig = field(default_factory=WebConfig)
+    map: MapConfig | None = None
 
 
 def _engine(raw: object, where: str) -> EngineSpec:
@@ -196,6 +203,15 @@ def _web(raw: object, where: str) -> WebConfig:
     return WebConfig(search=search, searxng_url=url, api_key_file=key)
 
 
+def _map(raw: object, where: str) -> MapConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected a table")
+    pmtiles, assets = raw.get("pmtiles"), raw.get("assets")
+    if not isinstance(pmtiles, str) or not pmtiles or not isinstance(assets, str) or not assets:
+        raise ConfigError(f"{where}: pmtiles and assets are both required path strings")
+    return MapConfig(pmtiles=pmtiles, assets=assets)
+
+
 def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     # only a plain name listed in tiers_dir: a path here would run another file's launch command
     if not isinstance(name, str) or not TIER_NAME.fullmatch(name) or name not in list_tiers(tiers_dir):
@@ -217,6 +233,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
         raise ConfigError(f"{name}: source_mode must be one of {SOURCE_MODES}, got {source_mode!r}")
     reference = _reference(data["reference"], f"{name}.reference") if "reference" in data else None
     web = _web(data["web"], f"{name}.web") if "web" in data else WebConfig()
+    map_ = _map(data["map"], f"{name}.map") if "map" in data else None
     return Tier(
         name=str(data.get("name", name)),
         text=text,
@@ -226,6 +243,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
         images=images,
         reference=reference,
         web=web,
+        map=map_,
     )
 
 

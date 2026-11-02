@@ -52,6 +52,7 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     children.use_ledger(var_dir)
     graph = Graph(var_dir / "primer.sqlite")
     graph.fail_unfinished_media("Primer restarted")
+    graph.fail_unfinished_maps("Primer restarted")
     store = ModelStore(var_dir)
     servers = ServerManager(tier)
     text_pause, gate = make_gate(tier, servers)
@@ -61,7 +62,8 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     images = ImageService(graph, store, tier.images, fast, gate, var_dir / "media")
     return App(tier=tier, servers=servers, pages=pages, graph=graph,
                hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,
-               tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause)
+               tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause,
+               maps=App.make_maps(graph, tier, fast))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         server = make_server(app, "127.0.0.1", args.port)
     except OSError as e:
         app.shutdown_images()
+        app.shutdown_maps()
         app.pages.shutdown(drain=False)
         print(f"error: cannot listen on port {args.port}: {e}", file=sys.stderr)
         return 2
@@ -102,7 +105,10 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 app.shutdown_images()
             finally:
-                app.servers.stop_all()
+                try:
+                    app.shutdown_maps()
+                finally:
+                    app.servers.stop_all()
         finally:
             server.server_close()
             app.pages.shutdown(drain=False)

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let impl
 vi.mock('../api.js', () => ({ intent: (...a) => impl(...a) }))
-import { routePrompt, imageButton, thumbState, imageChecking, imageCheckFailed } from './imageRoute.js'
+import { routePrompt, mapButton, typedMapBody, imageButton, thumbState, imageChecking, imageCheckFailed } from './imageRoute.js'
 
 beforeEach(() => { impl = null })
 
@@ -24,6 +24,13 @@ describe('routePrompt', () => {
     impl = async () => ({ video: 'a mill', image: 'a mill' })
     expect(await routePrompt('animate a mill', { nodeId: null }))
       .toEqual({ kind: 'video', body: { concept: 'a mill', subject: 'a mill', kind: 'video' } })
+  })
+  it('routes a map request to the place as a typed page, then its map', async () => {
+    impl = async () => ({ map: 'Warwick', image: null, video: null })
+    expect(await routePrompt('show Warwick on a map', { nodeId: 'n1' }))
+      .toEqual({ kind: 'map', body: { concept: 'Warwick', via: 'typed', from_id: 'n1' } })
+    expect(await routePrompt('map of Warwick', { nodeId: null }))
+      .toEqual({ kind: 'map', body: { concept: 'Warwick', via: 'typed' } })
   })
   it('routes anything else to a page, with from_id when there is a node', async () => {
     impl = async () => ({ image: null })
@@ -69,5 +76,22 @@ describe('thumbState', () => {
     expect(thumbState({ status: 'failed' })).toBe('failed')
     expect(thumbState({ status: 'cancelled' })).toBe('failed')
     for (const s of ['prompting', 'queued', 'loading', 'generating']) expect(thumbState({ status: s })).toBe('busy')
+  })
+})
+
+describe('mapButton', () => {
+  it('is enabled when the map is available', () => {
+    expect(mapButton({ map_available: { ok: true, reason: '' } })).toEqual({ enabled: true, reason: '' })
+  })
+  it('carries the reason when it is not', () => {
+    expect(mapButton({ map_available: { ok: false, reason: 'No map file.' } })).toEqual({ enabled: false, reason: 'No map file.' })
+    expect(mapButton({}).enabled).toBe(false)
+    expect(mapButton({}).reason).toMatch(/not available/)
+  })
+})
+
+describe('typedMapBody', () => {
+  it('is a phrase map of the typed subject', () => {
+    expect(typedMapBody('n2', 'Paris')).toEqual({ node_id: 'n2', phrase: 'Paris', subject: 'Paris' })
   })
 })

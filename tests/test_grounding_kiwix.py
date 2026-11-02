@@ -67,3 +67,11 @@ def test_kiwix_down_raises():
 
 def test_kiwix_href_quotes_the_book(kiwix):
     assert kiwix.href("a b/c?d", "X") == f"{kiwix.base_url}/content/a%20b%2Fc%3Fd/X"
+
+
+def test_kiwix_article_html():
+    server, url = serve({"b": {"P": ("P", '<html><a href="geo:1,2">x</a></html>')}})
+    try:
+        assert 'href="geo:1,2"' in KiwixClient(url).article_html("b", "P")
+    finally:
+        server.kill()

@@ -33,6 +33,12 @@ from primer.images.prompting import match_image_request, match_video_request
 from primer.images.scan import scan_folder_capped
 from primer.images.service import (KINDS, NO_ANIMATE_MODEL, NOT_CONFIGURED, SHUT_DOWN_REASON,
                                    ImageService)
+from primer.maps.geocode import Geocoder
+from primer.maps.intent import match_map_request
+from primer.maps.pmtiles import Archive, PMTilesError
+from primer.maps.service import SHUT_DOWN as MAPS_SHUT_DOWN
+from primer.maps.service import TIER_SWITCH as MAPS_TIER_SWITCH
+from primer.maps.service import MapService
 from primer.pages import OpenRequest, PageService
 from primer.servers import ManagedServer, ServerManager
 
@@ -51,6 +57,15 @@ NEEDS_PRIMER_HEADER = ("/v1/branches",)
 MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm)")
 MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm"}
 RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
+MAP_TILE = re.compile(r"/v1/map/tiles/([0-9]{1,12})/([0-9]{1,12})/([0-9]{1,12})\.mvt")
+MAP_ASSET_TYPES = {".pbf": "application/x-protobuf", ".json": "application/json", ".png": "image/png"}
+MAP_CACHE = {"Cache-Control": "max-age=86400"}
+MAP_ATTRIBUTION = "© OpenStreetMap contributors · Protomaps"
+MAX_TILE_ZOOM = 26
+TILE_ENCODINGS = {1: None, 2: "gzip"}  # PMTiles tile compression -> Content-Encoding; others unsupported
+NO_MAP = "No [map] section in this tier"
+NO_LOOKUP = "No way to look places up: no offline reference and web search is off"
+REFERENCE_DOWN_WEB_OFF = "The reference server isn't running and web search is off"
 MAX_SCAN_FILES = 2000
 MODEL_FIELDS = ("id", "name", "family", "files", "settings", "loras")  # all a client may set on a model
 RESUME_POLL_S = 0.1
@@ -142,10 +157,13 @@ class App:
     gate: GpuGate | None = None
     images: ImageService | None = None
     text_pause: TextPause | None = None
+    maps: MapService | None = None
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
+    _map_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _archive: Archive | None = field(default=None, repr=False)  # opened on first use
 
     def __post_init__(self) -> None:
         """Fill in what wasn't passed: the model store, a gate over these servers (also given
@@ -163,6 +181,14 @@ class App:
             self.images = self.make_images(self.tier, self.gate, self.pages.fast)
         if self.text_pause is not None:
             self.text_pause.release_gpu = self.images.release_gpu
+        if self.maps is None:
+            self.maps = self.make_maps(self.graph, self.tier, self.pages.fast)
+
+    @staticmethod
+    def make_maps(graph, tier: Tier, fast) -> MapService:
+        ref, web = tier.reference, tier.web.search != "off"
+        return MapService(graph, fast, lambda refresh=False: Geocoder(
+            graph, KiwixClient(ref.url) if ref is not None else None, web, refresh=refresh))
 
     def make_images(self, tier: Tier, gate: GpuGate, fast) -> ImageService:
         extra = {"make_server": self.make_sd_server} if self.make_sd_server else {}
@@ -202,12 +228,60 @@ class App:
             self.text_pause.retire()
         self.images.shutdown()
 
+    def shutdown_maps(self, reason: str = MAPS_SHUT_DOWN) -> None:
+        """Stop map jobs (unfinished ones fail with `reason`) and close the map file."""
+        try:
+            if self.maps is not None:
+                self.maps.shutdown(reason)
+        finally:
+            self._close_archive()
+
+    def _close_archive(self) -> None:
+        with self._map_lock:
+            archive, self._archive = self._archive, None
+        if archive is not None:
+            archive.close()
+
+    def map_archive(self) -> Archive:
+        """The tier's map file, opened on first use. PMTilesError if there is none or it can't be
+        read (tried again next time, so a file put in place later is picked up)."""
+        with self._map_lock:
+            cfg = self.tier.map
+            if self._archive is not None and (cfg is None or self._archive.path != Path(cfg.pmtiles)):
+                self._archive.close()  # opened for a tier that is no longer current
+                self._archive = None
+            if cfg is None:
+                raise PMTilesError(NO_MAP)
+            if self._archive is None:
+                archive = Archive(cfg.pmtiles)
+                if archive.header["tile_compression"] not in TILE_ENCODINGS:
+                    archive.close()
+                    raise PMTilesError("unsupported tile compression")
+                self._archive = archive
+            return self._archive
+
+    def map_available(self) -> dict:
+        if self.tier.map is None:
+            return {"ok": False, "reason": NO_MAP}
+        try:
+            self.map_archive()
+        except PMTilesError as e:
+            return {"ok": False, "reason": f"The map file can't be read ({e})"}
+        ref, web = self.tier.reference, self.tier.web.search != "off"
+        if not web:
+            if ref is None:
+                return {"ok": False, "reason": NO_LOOKUP}
+            if self._cached_books(ref.url) is None:  # the status check's cached answer
+                return {"ok": False, "reason": REFERENCE_DOWN_WEB_OFF}
+        return {"ok": True, "reason": ""}
+
     def reload_tier(self, name: str) -> None:
         """Switch tiers. Raises ConfigError, changing nothing, if the tier is unknown or invalid."""
         tier = load_tier(name, self.tiers_dir)
         self._forget_reference()
         with self._lock:
             self.shutdown_images()
+            self.shutdown_maps(MAPS_TIER_SWITCH)
             self.servers.stop_all()
             self.pages.shutdown(drain=False)  # queued prefetch is for the old tier's servers
             servers = ServerManager(tier)
@@ -220,6 +294,8 @@ class App:
             text_pause.release_gpu = images.release_gpu
             self.tier, self.pages, self.servers = tier, pages, servers
             self.text_pause, self.gate, self.images = text_pause, gate, images
+            self.maps = self.make_maps(self.graph, tier, fast)
+            self._close_archive()  # a tile request during the switch may have reopened the old file
             try:
                 settings = read_settings(self.var_dir)
             except ConfigError:
@@ -245,7 +321,8 @@ class App:
                 "gpu_mode": self.tier.gpu_mode,
                 "images": self.images.server_status(), "image_available": self.image_available(),
                 "video_available": self.image_available("video"),
-                "animate_available": self.animate_available(), "gpu": self.gate.state()}
+                "animate_available": self.animate_available(), "gpu": self.gate.state(),
+                "map_available": self.map_available()}
 
     def sources_status(self) -> dict:
         """Which source modes can be used now, and why not. One quick call to kiwix-serve,
@@ -485,7 +562,8 @@ def _make_handler(app: App):
                                    "sources": app.page_sources(node.id, page["version"].n)}
                         self._json({"node": asdict(node), "version": version,
                                     "versions": page["versions"], "highlights": page["highlights"],
-                                    "media": [asdict(m) for m in app.graph.media_for_node(node.id)]})
+                                    "media": [asdict(m) for m in app.graph.media_for_node(node.id)],
+                                    "maps": app.graph.maps_for(node.id)})
                 elif path == "/v1/image-models":
                     self._image_models()
                 elif path.startswith("/v1/images/") and "/" not in path[len("/v1/images/"):]:
@@ -495,10 +573,24 @@ def _make_handler(app: App):
                         self._json({"error": "not found"}, 404)
                 elif path.startswith("/v1/media/"):
                     self._media(path[len("/v1/media/"):])
+                elif path.startswith("/v1/map/tiles/"):
+                    self._map_tile(path)
+                elif path == "/v1/map/tilejson":
+                    self._map_tilejson()
+                elif path.startswith("/v1/map/assets/"):
+                    self._map_asset(path[len("/v1/map/assets/"):])
+                elif path.startswith("/v1/maps/") and "/" not in path[len("/v1/maps/"):]:
+                    job = app.maps.get(unquote(path[len("/v1/maps/"):]))
+                    if job is None:
+                        self._json({"error": "not found"}, 404)
+                    else:
+                        self._json(job)
                 elif path.startswith("/v1/"):
                     self._json({"error": "not found"}, 404)
                 else:
                     self._static(path)
+            except _HttpError as e:
+                self._json({"error": str(e)}, e.status)
             except StoreCorrupt as e:
                 self._json({"error": str(e)}, 500)
             except Exception:
@@ -528,7 +620,16 @@ def _make_handler(app: App):
                     if not isinstance(text, str):
                         raise _BadRequest("text must be a string")
                     video = match_video_request(text)
-                    self._json({"image": None if video else match_image_request(text), "video": video})
+                    place = match_map_request(text)
+                    if place:  # a map request is not also a picture or clip request
+                        self._json({"image": None, "video": None, "map": place})
+                    else:
+                        self._json({"image": None if video else match_image_request(text), "video": video,
+                                    "map": None})
+                elif path == "/v1/maps":
+                    self._create_map(body)
+                elif path.startswith("/v1/maps/") and path.endswith("/again"):
+                    self._again_map(unquote(path[len("/v1/maps/"):-len("/again")]))
                 elif path == "/v1/images":
                     self._create_image(body)
                 elif path.startswith("/v1/images/") and path.endswith("/cancel"):
@@ -790,6 +891,102 @@ def _make_handler(app: App):
                 data = f.read(end - start + 1)
             self._send(206, data, ctype, {"Accept-Ranges": "bytes",
                                           "Content-Range": f"bytes {start}-{start + len(data) - 1}/{size}"})
+
+        # maps
+        def _map_error(self, e: Exception) -> _HttpError:
+            if isinstance(e, PMTilesError):
+                return _HttpError(503, f"The map file can't be read ({e})" if app.tier.map else NO_MAP)
+            return _HttpError(503, "The map is being reloaded")  # closed by a tier switch mid-request
+
+        def _map_tile(self, path: str) -> None:
+            m = MAP_TILE.fullmatch(path)
+            if m is None:
+                self._json({"error": "not found"}, 404)
+                return
+            z, x, y = (int(v) for v in m.groups())
+            if z > MAX_TILE_ZOOM or x >= 1 << z or y >= 1 << z:
+                self._json({"error": "tile coordinates out of range"}, 400)
+                return
+            try:
+                archive = app.map_archive()
+                data = archive.tile(z, x, y)
+                encoding = TILE_ENCODINGS[archive.header["tile_compression"]]
+            except (PMTilesError, ValueError, OSError) as e:
+                raise self._map_error(e) from None
+            if data is None:
+                self._send(204, b"", "application/vnd.mapbox-vector-tile", MAP_CACHE)
+                return
+            headers = dict(MAP_CACHE)
+            if encoding:
+                headers["Content-Encoding"] = encoding
+            self._send(200, data, "application/vnd.mapbox-vector-tile", headers)
+
+        def _map_tilejson(self) -> None:
+            try:
+                archive = app.map_archive()
+                h, meta = archive.header, archive.metadata()
+            except (PMTilesError, ValueError, OSError) as e:
+                raise self._map_error(e) from None
+            host = self.headers.get("Host")  # already checked against 127.0.0.1/localhost:port
+            tj = {"tilejson": "3.0.0", "tiles": [f"http://{host}/v1/map/tiles/{{z}}/{{x}}/{{y}}.mvt"],
+                  "minzoom": h["min_zoom"], "maxzoom": h["max_zoom"], "bounds": list(h["bounds"]),
+                  "center": list(h["center"]), "attribution": MAP_ATTRIBUTION}
+            layers = meta.get("vector_layers")
+            if isinstance(layers, list):
+                tj["vector_layers"] = layers
+            self._send(200, json.dumps(tj).encode("utf-8"), "application/json", MAP_CACHE)
+
+        def _map_asset(self, name: str) -> None:
+            """A glyph range or sprite from the tier's assets folder: .pbf, .json, .png only,
+            and the resolved path must stay inside the folder."""
+            cfg = app.tier.map
+            name = unquote(name)
+            ctype = MAP_ASSET_TYPES.get(Path(name).suffix.lower())
+            data = None
+            if cfg is not None and ctype is not None and "\0" not in name and ":" not in name:
+                try:
+                    root = Path(cfg.assets).resolve()
+                    target = (root / name.lstrip("/\\")).resolve()
+                    if (root in target.parents and target.suffix.lower() in MAP_ASSET_TYPES
+                            and target.is_file()):
+                        data = target.read_bytes()
+                except (OSError, ValueError):
+                    data = None
+            if data is None:
+                self._json({"error": "not found"}, 404)
+                return
+            self._send(200, data, ctype, MAP_CACHE)
+
+        def _check_map(self) -> None:
+            status = app.map_available()
+            if not status["ok"]:
+                raise _HttpError(409, status["reason"])
+
+        def _create_map(self, body: dict) -> None:
+            node_id, phrase = body.get("node_id"), body.get("phrase", "")
+            if not isinstance(node_id, str) or not node_id:
+                raise _BadRequest("node_id is required")
+            if not isinstance(phrase, str):
+                raise _BadRequest("phrase must be a string")
+            phrase = clean_typed(phrase) if phrase.strip() else ""
+            if app.graph.get_node(node_id) is None or app.graph.latest_version(node_id) is None:
+                raise _HttpError(404, "page not found")
+            self._check_map()
+            try:
+                mid = app.maps.create(node_id, phrase)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == MAPS_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": mid}, 202)
+
+        def _again_map(self, map_id: str) -> None:
+            if app.maps.get(map_id) is None:
+                raise _HttpError(404, "not found")
+            self._check_map()
+            try:
+                mid = app.maps.again(map_id)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == MAPS_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": mid}, 202)
 
         # static UI
         def _static(self, raw_path: str) -> None:

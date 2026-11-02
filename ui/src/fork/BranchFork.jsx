@@ -1,12 +1,12 @@
 /* BranchFork — curved lines grow from a clicked phrase to "in this context / general /
  * sideways" cards, with Image and Video (each live when available, else disabled with the
  * reason) and Ask about it.
- * Props: { anchor, container, node, phrase, onChoose(card, {newWindow}), onAction(kind), onImage(), onVideo(), onClose }.
+ * Props: { anchor, container, node, phrase, onChoose(card, {newWindow}), onAction(kind), onImage(), onVideo(), onMap(), onClose }.
  * It is positioned in the coordinates of `container` ({w, h}); its parent places it. */
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { layoutFork } from './geometry.js'
-import { imageButton, imageChecking, imageCheckFailed } from '../reader/imageRoute.js'
+import { imageButton, imageChecking, imageCheckFailed, mapButton, mapChecking, mapCheckFailed } from '../reader/imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import './fork.css'
 
@@ -14,9 +14,10 @@ const TAGS = { context: 'in this context', general: 'general', sideways: 'sidewa
 const KINDS = ['context', 'general', 'sideways']
 const CARD_H = 80
 
-export default function BranchFork({ anchor, container, node, phrase, onChoose, onAction, onImage, onVideo, onClose }) {
+export default function BranchFork({ anchor, container, node, phrase, onChoose, onAction, onImage, onVideo, onMap, onClose }) {
   const [img, setImg] = useState(imageChecking)
   const [vid, setVid] = useState(videoChecking)
+  const [map, setMap] = useState(mapChecking)
   const [state, setState] = useState({ cards: null, error: '' })
   const [attempt, setAttempt] = useState(0)
   const root = useRef(null)
@@ -34,8 +35,8 @@ export default function BranchFork({ anchor, container, node, phrase, onChoose, 
   // availability changes (a model added, the GPU busy): read it fresh each time the fork opens
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setImg(imageButton(st)); setVid(videoButton(st)) } })
-      .catch(e => { if (live) { setImg(imageCheckFailed(e)); setVid(videoCheckFailed(e)) } })
+    api.status().then(st => { if (live) { setImg(imageButton(st)); setVid(videoButton(st)); setMap(mapButton(st)) } })
+      .catch(e => { if (live) { setImg(imageCheckFailed(e)); setVid(videoCheckFailed(e)); setMap(mapCheckFailed(e)) } })
     return () => { live = false }
   }, [])
 
@@ -127,6 +128,11 @@ export default function BranchFork({ anchor, container, node, phrase, onChoose, 
             ? <button type="button" className="fk-chip" onClick={() => onVideo()}>Video</button>
             : <button type="button" className="fk-chip" aria-disabled="true" aria-describedby={uid + "-video"}
                       aria-busy={vid.checking || undefined} title={vid.reason} onClick={e => e.preventDefault()}>Video</button>}
+          {map.enabled ? null : <span id={uid + "-map"} className="fk-sr">{map.reason}</span>}
+          {map.enabled
+            ? <button type="button" className="fk-chip" onClick={() => onMap()}>Map</button>
+            : <button type="button" className="fk-chip" aria-disabled="true" aria-describedby={uid + "-map"}
+                      aria-busy={map.checking || undefined} title={map.reason} onClick={e => e.preventDefault()}>Map</button>}
           <button type="button" className="fk-chip" onClick={() => onAction('ask')}>Ask about it</button>
         </div>
       )}

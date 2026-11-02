@@ -5,7 +5,8 @@ interest, such as castles. Every phrase on the page can be clicked, and each one
 new page: one written in the context you came from, a general article, or a sideways jump.
 Any phrase can also be drawn as a picture or turned into a short clip, and any picture can be
 animated. You keep reading while they render. A page can be the model's own telling, or grounded
-in an offline copy of Wikipedia or the live web, with citations you can follow.
+in an offline copy of Wikipedia or the live web, with citations you can follow. The places a page
+names can be pinned on an offline map, and every pin opens its own page.
 
 Primer runs on your own machine against local models (LM Studio, llama.cpp's `llama-server`, or a
 hosted OpenAI-compatible API if you choose). Everything you read and every picture it draws is
@@ -57,6 +58,14 @@ source can be found, Primer says so and writes the page from the model's own kno
 
 ![A page about Leonardo da Vinci in offline reference mode, with small numbered citations in the text, a Sources list of three Wikipedia articles at the end, and the badge's Rewrite from menu open with Storyteller, Offline reference and Web, beside the Engines window showing the reference server ready and the default source set to Offline reference](docs/screenshots/grounded-sources.webp)
 
+**Places on a map.** Click **Map** on a page and Primer pins the places it names on a real map
+of the world, drawn offline from a map file on your disk (OpenStreetMap data from
+[Protomaps](https://protomaps.com/)). The places are found by the fast model and located from
+Wikipedia, never guessed. Click a pin, or a place in the list, to open its page. Type "show me
+Bodiam Castle on a map" to go straight there.
+
+![The Warwick Castle page beside a Map window showing Warwick Castle, Warwickshire and the River Avon pinned on a dark map of the English Midlands, with the list of places and what each one is](docs/screenshots/map-lens.webp)
+
 **A map of where you've been.** Every page you open joins a concept graph. The map shows the
 trail: which page you branched from, and how (in context, general, or sideways).
 
@@ -93,6 +102,9 @@ with no dependencies and should run elsewhere too, but that hasn't been tried ye
   `wikipedia_en_top_nopic` (2.6 GB, the 50,000 most-read articles in full) or
   `wikipedia_en_all_mini` (13 GB, the opening of every article). See
   [docs/RUNNING.md](docs/RUNNING.md#grounding).
+- **For the map (optional):** a Protomaps map file. `tools/map_extract.py` makes one for you
+  (the whole world in about 1.6 GB), plus Protomaps' free fonts and icons. See
+  [docs/RUNNING.md](docs/RUNNING.md#maps).
 
 A good small setup is a 4B to 12B instruct model on the GPU for writing, plus a 1B to 2B model on
 the CPU for picking highlights. Measured on an RTX 2060 (12 GB), a page takes about a minute with
@@ -120,7 +132,7 @@ Pick a tier in `tiers/` and edit it to name the models you have:
 The model names in the shipped tiers are placeholders; they must match what your server reports
 (`lms ls` for LM Studio). To draw pictures, uncomment the `[images]` block and set `sd_server`
 to the path of `sd-server`. For the offline encyclopedia, uncomment `[reference]` and set
-`kiwix_serve` and `zims`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
+`kiwix_serve` and `zims`. For the map, uncomment `[map]`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
 
 ### 4. Run it
 
@@ -144,9 +156,10 @@ The short version:
 3. Use **back / forward**, **Deeper**, **Simpler** and **Regenerate** to move around.
 4. Click **Image**, or type "draw ...", for a picture. It renders while you keep reading.
 5. Click **Video**, type "animate ...", or press **Animate** on a picture, for a short clip.
-6. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
+6. Click **Map** to see the places a page names, pinned on a map. Click a pin to open its page.
+7. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
    encyclopedia or the web. Choose the default for new pages in **Engines**.
-7. Open the **map** from the dock to see where you've been and jump back.
+8. Open **Map of where I've been** from the dock to see your trail and jump back.
 
 The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
 
@@ -157,6 +170,9 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 - Nothing leaves your machine unless you choose a hosted tier or web mode. In web mode the page's
   title is sent to the search engine (DuckDuckGo by default) and the top results are fetched;
   pages on local or private network addresses are never fetched.
+- The map is drawn from the file on your disk. Places are located from the offline encyclopedia,
+  or, if web search is on in your tier, from Wikipedia and Wikidata online (only the place's name
+  is sent).
 - Fetched pages and encyclopedia articles are treated as reference text, never as instructions
   to the model, and are never shown as HTML inside Primer.
 - Model files must be local `.safetensors` or `.gguf` files. Pickle formats (`.ckpt`, `.pt`,
@@ -164,8 +180,8 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.4**: pages, branching, pictures, video, and grounding in an offline encyclopedia or
-the web work. Maps, narrated stories and an embedded browser are planned next. The
+This is **v0.5**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, and the map work. Narrated stories and an embedded browser are planned next. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

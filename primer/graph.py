@@ -82,6 +82,11 @@ class Media:
 _MEDIA_STATUSES = ("prompting", "queued", "loading", "generating", "done", "failed", "cancelled")
 _MEDIA_FINAL = ("done", "failed", "cancelled")
 _MEDIA_UPDATABLE = ("status", "prompt", "file", "error", "settings")
+_KEEP = object()
+_MAP_STATUSES = ("finding", "locating", "done", "failed")
+_MAP_FINAL = ("done", "failed")
+_MAP_COLS = "id, node_id, n, phrase, status, error"
+_MAP_KEYS = ("id", "node_id", "n", "phrase", "status", "error")
 
 
 _SCHEMA = """
@@ -106,6 +111,16 @@ CREATE TABLE IF NOT EXISTS media(
     id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), phrase TEXT NOT NULL,
     kind TEXT NOT NULL, model_id TEXT NOT NULL, prompt TEXT NOT NULL, settings_json TEXT NOT NULL,
     status TEXT NOT NULL, file TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS maps(
+    id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), n INTEGER NOT NULL,
+    phrase TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at REAL NOT NULL,
+    updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS map_places(
+    map_id TEXT NOT NULL, idx INTEGER NOT NULL, name TEXT NOT NULL, what TEXT NOT NULL,
+    lat REAL, lon REAL, title TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(map_id, idx));
+CREATE TABLE IF NOT EXISTS place_cache(
+    key TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+    title TEXT NOT NULL, source TEXT NOT NULL, at REAL NOT NULL);
 """
 
 _NODE_COLS = "id, kind, concept, title, parent_id"
@@ -272,6 +287,86 @@ class Graph:
                 f"UPDATE media SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
                 (reason, time.time(), *_MEDIA_FINAL))
         return cur.rowcount
+
+    # maps
+    def add_map(self, node_id: str, n: int, phrase: str) -> str:
+        map_id = uuid.uuid4().hex[:16]
+        now = time.time()
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO maps(id, node_id, n, phrase, status, error, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?)", (map_id, node_id, n, phrase, "finding", None, now, now))
+        return map_id
+
+    def update_map(self, id: str, status: str | None = None, error=_KEEP) -> None:
+        """Change a map's status and/or error. A failed map stays failed (a late writer, such
+        as a job running through shutdown, cannot revive it) and a done map stays done; an error is kept unless given."""
+        if status is not None and status not in _MAP_STATUSES:
+            raise ValueError(f"unknown map status {status!r}")
+        with self._lock, self._db:
+            row = self._db.execute("SELECT status, error FROM maps WHERE id=?", (id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown map {id!r}")
+            if row[0] == "failed" and status != "failed":
+                return
+            if row[0] == "done" and status == "failed":  # a finished map is not un-finished by a late failure
+                return
+            self._db.execute("UPDATE maps SET status=?, error=?, updated_at=? WHERE id=?",
+                             (status or row[0], row[1] if error is _KEEP else error, time.time(), id))
+
+    def set_map_places(self, id: str, places) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM map_places WHERE map_id=?", (id,))
+            self._db.executemany(
+                "INSERT INTO map_places(map_id, idx, name, what, lat, lon, title, source) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                [(id, i, p.name, p.what, p.lat, p.lon, p.title, p.source) for i, p in enumerate(places)])
+
+    def get_map(self, id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_MAP_COLS} FROM maps WHERE id=?", (id,)).fetchone()
+            if row is None:
+                return None
+            places = self._db.execute(
+                "SELECT name, what, lat, lon, title, source FROM map_places WHERE map_id=? ORDER BY idx",
+                (id,)).fetchall()
+        out = dict(zip(_MAP_KEYS, row))
+        out["places"] = [dict(zip(("name", "what", "lat", "lon", "title", "source"), p)) for p in places]
+        return out
+
+    def maps_for(self, node_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_MAP_COLS} FROM maps WHERE node_id=? ORDER BY created_at DESC, rowid DESC",
+                (node_id,)).fetchall()
+        return [dict(zip(_MAP_KEYS, r)) for r in rows]
+
+    def fail_unfinished_maps(self, reason: str) -> int:
+        marks = ",".join("?" * len(_MAP_FINAL))
+        with self._lock, self._db:
+            cur = self._db.execute(
+                f"UPDATE maps SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
+                (reason, time.time(), *_MAP_FINAL))
+        return cur.rowcount
+
+    # located places (only hits are cached)
+    def cached_place(self, key: str):
+        from .maps import Place
+        with self._lock:
+            row = self._db.execute(
+                "SELECT name, lat, lon, title, source FROM place_cache WHERE key=?", (key,)).fetchone()
+        return Place(name=row[0], lat=row[1], lon=row[2], title=row[3], source=row[4]) if row else None
+
+    def cache_place(self, key: str, place) -> None:
+        if place.lat is None or place.lon is None:
+            return
+        with self._lock, self._db:
+            self._db.execute("INSERT OR REPLACE INTO place_cache VALUES(?,?,?,?,?,?,?)",
+                             (key, place.name, place.lat, place.lon, place.title, place.source, time.time()))
+
+    def forget_place(self, key: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM place_cache WHERE key=?", (key,))
 
     # history and map
     def recent_titles(self, limit: int = 30) -> list[str]:

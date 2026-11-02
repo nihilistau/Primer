@@ -71,3 +71,9 @@ export const scanFolder = (folder) => j('POST', '/v1/image-models/scan', { folde
 export const mediaUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.png$/.test(file) ? `/v1/media/${file}` : '')
 /* likewise a <sha256>.webm name for a video */
 export const videoUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.webm$/.test(file) ? `/v1/media/${file}` : '')
+
+/* maps */
+export const createMap = (body) => j('POST', '/v1/maps', body)
+export const mapJob = (id) => j('GET', `/v1/maps/${encodeURIComponent(id)}`)
+export const mapAgain = (id) => j('POST', `/v1/maps/${encodeURIComponent(id)}/again`)
+export const mapTileJson = () => j('GET', '/v1/map/tilejson')
