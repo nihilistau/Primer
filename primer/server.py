@@ -39,6 +39,11 @@ from primer.maps.pmtiles import Archive, PMTilesError
 from primer.maps.service import SHUT_DOWN as MAPS_SHUT_DOWN
 from primer.maps.service import TIER_SWITCH as MAPS_TIER_SWITCH
 from primer.maps.service import MapService
+from primer.stories.intent import match_story_request
+from primer.stories.service import KINDS as STORY_KINDS
+from primer.stories.service import SHUT_DOWN as STORIES_SHUT_DOWN
+from primer.stories.service import StoryService
+from primer.voice.client import VoiceError, make_voice
 from primer.pages import OpenRequest, PageService
 from primer.servers import ManagedServer, ServerManager
 
@@ -54,8 +59,8 @@ UI_NOT_BUILT = {"error": "UI not built: run npm run build in ui/"}
 # send (the UI sends it on every request; a fetch that adds it gets a preflight, which fails)
 PRIMER_HEADER = "X-Primer"
 NEEDS_PRIMER_HEADER = ("/v1/branches",)
-MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm)")
-MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm"}
+MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm|wav)")
+MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm", ".wav": "audio/wav"}
 RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
 MAP_TILE = re.compile(r"/v1/map/tiles/([0-9]{1,12})/([0-9]{1,12})/([0-9]{1,12})\.mvt")
 MAP_ASSET_TYPES = {".pbf": "application/x-protobuf", ".json": "application/json", ".png": "image/png"}
@@ -64,6 +69,11 @@ MAP_ATTRIBUTION = "© OpenStreetMap contributors · Protomaps"
 MAX_TILE_ZOOM = 26
 TILE_ENCODINGS = {1: None, 2: "gzip"}  # PMTiles tile compression -> Content-Encoding; others unsupported
 NO_MAP = "No [map] section in this tier"
+NO_VOICE = "No [voice] section in this tier"
+VOICE_DOWN = "The voice server isn't running"
+VOICE_STARTING = "The voice server is starting"
+STORIES_TIER_SWITCH = "Primer switched tiers"
+VOICE_STATUS_TTL_S = 5.0
 NO_LOOKUP = "No way to look places up: no offline reference and web search is off"
 REFERENCE_DOWN_WEB_OFF = "The reference server isn't running and web search is off"
 MAX_SCAN_FILES = 2000
@@ -158,12 +168,15 @@ class App:
     images: ImageService | None = None
     text_pause: TextPause | None = None
     maps: MapService | None = None
+    stories: StoryService | None = None
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
     _map_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _archive: Archive | None = field(default=None, repr=False)  # opened on first use
+    _voice_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _voice_cache: tuple | None = field(default=None, repr=False)  # (expires, url, healthy)
 
     def __post_init__(self) -> None:
         """Fill in what wasn't passed: the model store, a gate over these servers (also given
@@ -183,6 +196,17 @@ class App:
             self.text_pause.release_gpu = self.images.release_gpu
         if self.maps is None:
             self.maps = self.make_maps(self.graph, self.tier, self.pages.fast)
+        if self.stories is None:
+            self.stories = self.make_stories(self.tier, self.pages, self.images, self.gate)
+
+    def make_stories(self, tier: Tier, pages: PageService, images: ImageService, gate: GpuGate) -> StoryService:
+        def voice():
+            if tier.voice is None:
+                raise VoiceError(NO_VOICE)
+            return make_voice(tier.voice)
+        return StoryService(self.graph, pages.text, pages.fast, voice, images, gate,
+                            Path(self.var_dir) / "media",
+                            voice_name=tier.voice.voice if tier.voice is not None else "")
 
     @staticmethod
     def make_maps(graph, tier: Tier, fast) -> MapService:
@@ -236,6 +260,11 @@ class App:
         finally:
             self._close_archive()
 
+    def shutdown_stories(self, reason: str = STORIES_SHUT_DOWN) -> None:
+        """Stop story jobs; unfinished stories fail with `reason`."""
+        if self.stories is not None:
+            self.stories.shutdown(reason)
+
     def _close_archive(self) -> None:
         with self._map_lock:
             archive, self._archive = self._archive, None
@@ -275,6 +304,34 @@ class App:
                 return {"ok": False, "reason": REFERENCE_DOWN_WEB_OFF}
         return {"ok": True, "reason": ""}
 
+    def voice_available(self) -> dict:
+        """Whether Listen and Story can run now. A launched server's state says so; one that
+        wasn't launched by Primer is asked (briefly, and at most every VOICE_STATUS_TTL_S)."""
+        cfg = self.tier.voice
+        if cfg is None:
+            return {"ok": False, "reason": NO_VOICE}
+        server = self.servers._servers.get("voice")
+        state = server.status()["state"] if server is not None else "stopped"
+        if state == "ready":
+            if cfg.managed and not server.alive():
+                return {"ok": False, "reason": VOICE_DOWN}  # it died after becoming ready
+            return {"ok": True, "reason": ""}
+        if cfg.managed and state != "external":
+            return {"ok": False, "reason": VOICE_STARTING if state == "starting" else VOICE_DOWN}
+        now = time.monotonic()
+        with self._voice_lock:
+            hit = self._voice_cache
+        if hit is not None and hit[1] == cfg.base_url and now < hit[0]:
+            up = hit[2]
+        else:
+            up = bool(self._voice_health())  # up to HEALTH_TIMEOUT_S: not under any lock
+            with self._voice_lock:
+                self._voice_cache = (time.monotonic() + VOICE_STATUS_TTL_S, cfg.base_url, up)
+        return {"ok": True, "reason": ""} if up else {"ok": False, "reason": VOICE_DOWN}
+
+    def _voice_health(self) -> bool:
+        return make_voice(self.tier.voice).health()  # HEALTH_TIMEOUT_S bounds it
+
     def reload_tier(self, name: str) -> None:
         """Switch tiers. Raises ConfigError, changing nothing, if the tier is unknown or invalid."""
         tier = load_tier(name, self.tiers_dir)
@@ -282,6 +339,7 @@ class App:
         with self._lock:
             self.shutdown_images()
             self.shutdown_maps(MAPS_TIER_SWITCH)
+            self.shutdown_stories(STORIES_TIER_SWITCH)
             self.servers.stop_all()
             self.pages.shutdown(drain=False)  # queued prefetch is for the old tier's servers
             servers = ServerManager(tier)
@@ -295,6 +353,9 @@ class App:
             self.tier, self.pages, self.servers = tier, pages, servers
             self.text_pause, self.gate, self.images = text_pause, gate, images
             self.maps = self.make_maps(self.graph, tier, fast)
+            self.stories = self.make_stories(tier, pages, images, gate)
+            with self._voice_lock:
+                self._voice_cache = None
             self._close_archive()  # a tile request during the switch may have reopened the old file
             try:
                 settings = read_settings(self.var_dir)
@@ -311,6 +372,8 @@ class App:
         with self._lock:
             getattr(self.servers, action)(role)
             self._forget_reference()
+            with self._voice_lock:
+                self._voice_cache = None
             return next(s for s in self.servers.statuses() if s["role"] == role)
 
     def status(self) -> dict:
@@ -322,7 +385,8 @@ class App:
                 "images": self.images.server_status(), "image_available": self.image_available(),
                 "video_available": self.image_available("video"),
                 "animate_available": self.animate_available(), "gpu": self.gate.state(),
-                "map_available": self.map_available()}
+                "map_available": self.map_available(), "voice_available": self.voice_available(),
+                "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""}}
 
     def sources_status(self) -> dict:
         """Which source modes can be used now, and why not. One quick call to kiwix-serve,
@@ -563,7 +627,8 @@ def _make_handler(app: App):
                         self._json({"node": asdict(node), "version": version,
                                     "versions": page["versions"], "highlights": page["highlights"],
                                     "media": [asdict(m) for m in app.graph.media_for_node(node.id)],
-                                    "maps": app.graph.maps_for(node.id)})
+                                    "maps": app.graph.maps_for(node.id),
+                                    "stories": app.graph.stories_for(node.id)})
                 elif path == "/v1/image-models":
                     self._image_models()
                 elif path.startswith("/v1/images/") and "/" not in path[len("/v1/images/"):]:
@@ -579,6 +644,12 @@ def _make_handler(app: App):
                     self._map_tilejson()
                 elif path.startswith("/v1/map/assets/"):
                     self._map_asset(path[len("/v1/map/assets/"):])
+                elif path.startswith("/v1/stories/") and "/" not in path[len("/v1/stories/"):]:
+                    story = app.stories.get(unquote(path[len("/v1/stories/"):]))
+                    if story is None:
+                        self._json({"error": "not found"}, 404)
+                    else:
+                        self._json(self._with_pictures(story))
                 elif path.startswith("/v1/maps/") and "/" not in path[len("/v1/maps/"):]:
                     job = app.maps.get(unquote(path[len("/v1/maps/"):]))
                     if job is None:
@@ -621,11 +692,20 @@ def _make_handler(app: App):
                         raise _BadRequest("text must be a string")
                     video = match_video_request(text)
                     place = match_map_request(text)
-                    if place:  # a map request is not also a picture or clip request
-                        self._json({"image": None, "video": None, "map": place})
+                    tale = match_story_request(text)
+                    if tale and not app.voice_available()["ok"]:
+                        tale = None  # no voice: route it as before (a page, a picture...)
+                    if tale:  # a story request is not also a picture, clip or map request
+                        self._json({"image": None, "video": None, "map": None, "story": tale})
+                    elif place:  # a map request is not also a picture or clip request
+                        self._json({"image": None, "video": None, "map": place, "story": None})
                     else:
                         self._json({"image": None if video else match_image_request(text), "video": video,
-                                    "map": None})
+                                    "map": None, "story": None})
+                elif path == "/v1/stories":
+                    self._create_story(body)
+                elif path.startswith("/v1/stories/") and path.endswith("/again"):
+                    self._again_story(unquote(path[len("/v1/stories/"):-len("/again")]))
                 elif path == "/v1/maps":
                     self._create_map(body)
                 elif path.startswith("/v1/maps/") and path.endswith("/again"):
@@ -865,7 +945,7 @@ def _make_handler(app: App):
             self._json(asdict(media))
 
         def _media(self, name: str) -> None:
-            """A generated image or video: var/media/<sha256>.png|.webm only, contained like the
+            """A generated image, video or narration: var/media/<sha256>.png|.webm|.wav only, contained like the
             static UI. A video answers a single byte Range (browsers seek a video with one)."""
             name = unquote(name)
             root = (Path(app.var_dir) / "media").resolve()
@@ -874,7 +954,7 @@ def _make_handler(app: App):
                 self._json({"error": "not found"}, 404)
                 return
             ctype = MEDIA_TYPES[Path(name).suffix]
-            if ctype != "video/webm":
+            if ctype == "image/png":
                 self._send(200, target.read_bytes(), ctype)
                 return
             asked, size = self.headers.get("Range"), target.stat().st_size
@@ -987,6 +1067,47 @@ def _make_handler(app: App):
             except ValueError as e:
                 raise _HttpError(409 if str(e) == MAPS_SHUT_DOWN else 404, str(e)) from None
             self._json({"id": mid}, 202)
+
+        # stories
+        def _check_voice(self) -> None:
+            status = app.voice_available()
+            if not status["ok"]:
+                raise _HttpError(409, status["reason"])
+
+        def _with_pictures(self, story: dict) -> dict:
+            """The story with each scene's picture `{media_id, status, file}` (None when it has none)."""
+            scenes = []
+            for sc in story["scenes"]:
+                media = app.graph.get_media(sc["media_id"]) if sc["media_id"] else None
+                picture = ({"media_id": media.id, "status": media.status, "file": media.file}
+                           if media is not None else None)
+                scenes.append({**sc, "picture": picture})
+            return {**story, "scenes": scenes}
+
+        def _create_story(self, body: dict) -> None:
+            node_id, kind = body.get("node_id"), body.get("kind", "story")
+            if not isinstance(node_id, str) or not node_id:
+                raise _BadRequest("node_id is required")
+            if not isinstance(kind, str) or kind not in STORY_KINDS:
+                raise _BadRequest(f"kind must be one of {', '.join(STORY_KINDS)}")
+            if app.graph.get_node(node_id) is None or app.graph.latest_version(node_id) is None:
+                raise _HttpError(404, "page not found")
+            self._check_voice()
+            try:
+                sid = app.stories.create(node_id, kind)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == STORIES_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": sid}, 202)
+
+        def _again_story(self, story_id: str) -> None:
+            if app.stories.get(story_id) is None:
+                raise _HttpError(404, "not found")
+            self._check_voice()
+            try:
+                sid = app.stories.again(story_id)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == STORIES_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": sid}, 202)
 
         # static UI
         def _static(self, raw_path: str) -> None:

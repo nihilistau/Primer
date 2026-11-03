@@ -387,6 +387,56 @@ place is is never used. Lookups stop after 30 seconds and show what was found.
 With LFM3-1.7B as the fast model (on the CPU) and the two Wikipedia ZIMs, a page's map takes
 about 20 seconds; a single place, about 9 seconds including the page.
 
+## Voice
+
+Phase 6 gives Primer a voice, for **Listen** and **Story**. It needs a text-to-speech server,
+named in the tier's `[voice]` table. Two kinds work:
+
+- **`lfm3`**: llama.cpp's `llama-server` running Liquid AI's **LFM3-Audio-2B** with its
+  multimodal projector. It answers `POST /tts` with a 24 kHz WAV. It runs on the CPU, so it never
+  competes with pictures for the GPU.
+- **`openai`**: any server with OpenAI's `POST /v1/audio/speech` (a hosted API, or a local
+  Kokoro or Piper wrapper). Add `model`, and `api_key_file` if it needs a key.
+
+```toml
+[voice]
+kind = "lfm3"
+base_url = "http://127.0.0.1:8840"
+voice = "female"                   # or "male"
+managed = true
+launch = ["llama-server", "-m", "D:/Models/LFM3-Audio-2B-Q8_0.gguf",
+          "--mmproj", "D:/Models/mmproj-LFM3-Audio-2B-F16.gguf",
+          "--port", "8840", "-ngl", "0", "-c", "8192"]
+ready_timeout_s = 180
+timeout_s = 180                    # seconds allowed per spoken passage
+```
+
+Primer starts the voice server with the others and shows it in the Engines window as the
+**Voice server**. Use a recent llama.cpp; the `/tts` route came with LFM3-Audio support. For an
+`lfm3` server, `base_url` must be on this machine. `timeout_s` (default 180) is how long one
+passage may take to voice; raise it on a busy CPU. `ready_timeout_s` is how long Primer waits for
+the server to start, and `stop` (a command list, as for the other servers) shuts down a detached one.
+
+Text is prepared for speaking first: Markdown and citations are dropped, and numbers, years,
+ordinals, centuries, money and common units are spelled out. Measured on this machine, the
+model said "768" for "1068" written as digits, and "ten sixty-eight" correctly. Narration is
+made in passages of up to 300 characters and joined, with a quarter-second pause between them.
+
+### Measured voice speeds
+
+On an RTX 2060 machine's CPU (8 threads), LFM3-Audio-2B Q8_0 made 8.6 seconds of speech in 11.4
+seconds and 5.4 seconds in 7.0 (about 1.3 times real time) when the machine was otherwise idle.
+Through Primer, with the writing model on the GPU:
+
+| | Speech | Ready |
+| --- | --- | --- |
+| **Listen**, the Warwick Castle page (three parts) | 85 s | first part after 16 s, all after 98 s |
+| **Story**, four scenes | 95 s | written and fully narrated after 138 s; scene 1 plays after about 70 s |
+It slows down a great deal when other programs keep the CPU busy: with three other model servers
+using most of the CPU, one sentence took over four minutes. Give it a free CPU, or put it on the
+GPU (`-ngl 99`) if you have about 3 GB of video memory to spare. Primer doesn't pause a GPU
+voice server while pictures are made, so that only suits a card with room for both.
+
 ## Tests
 
 ```

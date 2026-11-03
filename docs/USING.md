@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching, grounding, mapping, drawing and animating with Primer. To install it and point it at your models,
+A guide to reading, branching, grounding, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -40,6 +40,8 @@ The buttons beside it rewrite the page you are on:
 | **Image** | Draws a picture of the whole page (see [Pictures](#pictures)). |
 | **Video** | Makes a short clip of the whole page (see [Video](#video)). |
 | **Map** | Pins the places the page names on a map (see [Maps](#maps)). |
+| **Listen** | Reads the page aloud (see [Stories](#stories-and-listening)). |
+| **Story** | Retells the page as a short illustrated, narrated story. |
 
 **Back** and **forward** (the arrows at the left) move through the pages you've visited in this
 reader, like a browser. Going back shows the saved page instantly. It is never rewritten.
@@ -63,6 +65,7 @@ Click a card to open that page. Under the cards:
   question before sending it.
 - **Video** makes a short clip of just this phrase.
 - **Map** pins just this phrase on a map, if it's a place.
+- **Story** opens the phrase's page and tells its story.
 
 Press **Escape** or click elsewhere to close the fork without choosing.
 
@@ -201,6 +204,32 @@ online fill the gaps, for example for counties and regions whose articles carry 
 
 To set the map up, see [RUNNING.md](RUNNING.md#maps).
 
+## Stories and listening
+
+Primer can read to you.
+
+- **Listen** reads the page aloud. A window opens with the text as it is read: headings, links
+  and citations are dropped and numbers are spelled out. Press **Play**; the
+  passage being read is highlighted, and the next part follows on its own. Long pages are read in
+  parts, so the first part can play while the rest is still being voiced.
+- **Story** retells the page as a short story of three to five scenes, each with a title, a
+  picture and narration. The Story window shows the current scene's picture large, its text with
+  the passage being read highlighted (the text is shown as it is read, as for Listen), and a strip of scenes. Use the arrows to move between
+  scenes. If the next scene isn't ready yet, the window says "Waiting for scene N…" and carries
+  on when it is.
+- Type "tell me a story about a dragon" or "read me a story about Hadrian's Wall" to open the
+  page and its story together.
+
+Phrases in a story are underlined and clickable, as on a page. Pictures are made in the
+background through the usual picture queue; without a picture model, scenes show their title
+instead. **Again** writes a new story. Stories and readings are saved with the page and appear
+in its thumbnail strip.
+
+Numbers and years are spelled out before they are read ("1068" is read as "ten sixty-eight"),
+because the voice model misreads digits.
+
+To set up the voice, see [RUNNING.md](RUNNING.md#voice).
+
 ## Models
 
 Open **Models** from the dock. It has two lists, **Pictures** and **Videos**, each with its own
@@ -304,6 +333,8 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 | "already answering" for the image server | Something else holds the image port, perhaps a leftover from a crash. Primer clears its own leftovers on the next start; otherwise stop it, or change `port` under `[images]`. |
 | Thumbnails show a red cross | That picture failed. Open it to see why. |
 | Video button disabled | Hover it for the reason: no video model added, or no default video model. |
+| Listen and Story disabled | Hover them for the reason: no `[voice]` in the tier, or the voice server isn't running. |
+| "cannot reach the voice server … timed out" | The voice model runs on the CPU. If other programs are using most of the CPU, a passage can take minutes; close them, or raise `timeout_s` under `[voice]`. |
 | Map button disabled | Hover it for the reason: no `[map]` in the tier, the map file can't be read, or no way to look places up (no offline encyclopedia and web search off). |
 | A place is "not found" | Its article has no coordinates, or there's no article. With web search on, Primer also asks Wikipedia and Wikidata online. |
 | "Some map tiles could not be loaded" | The map file or the fonts folder in `[map]` has moved, or Primer stopped. |

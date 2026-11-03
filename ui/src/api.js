@@ -77,3 +77,10 @@ export const createMap = (body) => j('POST', '/v1/maps', body)
 export const mapJob = (id) => j('GET', `/v1/maps/${encodeURIComponent(id)}`)
 export const mapAgain = (id) => j('POST', `/v1/maps/${encodeURIComponent(id)}/again`)
 export const mapTileJson = () => j('GET', '/v1/map/tilejson')
+
+/* stories (Listen is a story of kind "listen") */
+export const createStory = (body) => j('POST', '/v1/stories', body)
+export const storyJob = (id) => j('GET', `/v1/stories/${encodeURIComponent(id)}`)
+export const storyAgain = (id) => j('POST', `/v1/stories/${encodeURIComponent(id)}/again`)
+/* only a <sha256>.wav name is a narration file */
+export const audioUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.wav$/.test(file) ? `/v1/media/${file}` : '')

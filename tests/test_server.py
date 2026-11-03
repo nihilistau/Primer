@@ -378,6 +378,7 @@ def _grounded(tmp_path, g, tier, settings=None, replies=None):
         server.server_close()
         app.pages.shutdown()
         app.shutdown_maps()
+        app.shutdown_stories()
     return app, Client(server.server_address[1]), close
 
 
@@ -973,3 +974,298 @@ def test_intent_map_wins_over_image_and_video(client):
                  "make a map of the Roman Empire"):
         r = client.post("/v1/intent", {"text": text})
         assert r["map"] and r["image"] is None and r["video"] is None, text
+
+
+
+# --- Phase 6: voice role, stories API, wav media ---
+from primer.config import VoiceConfig
+from tests import fake_tts_server
+
+
+def _voiced(tmp_path, g, voice_url="http://127.0.0.1:1"):
+    tier = Tier("t", _spec(), _spec(), voice=VoiceConfig(kind="lfm3", base_url=voice_url) if voice_url else None)
+    return _grounded(tmp_path, g, tier)
+
+
+def test_status_names_the_voice(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g, voice_url=None)
+    try:
+        assert client.get("/v1/status")["voice"] == {"name": ""}
+    finally:
+        close()
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        assert client.get("/v1/status")["voice"] == {"name": "female"}
+    finally:
+        close()
+
+
+def test_voice_available_reasons(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g, voice_url=None)
+    try:
+        assert client.get("/v1/status")["voice_available"] == {"ok": False, "reason": "No [voice] section in this tier"}
+    finally:
+        close()
+    sub = tmp_path / "down"
+    sub.mkdir()
+    app, client, close = _voiced(sub, g)  # configured, nothing listening
+    try:
+        assert client.get("/v1/status")["voice_available"] == {"ok": False, "reason": "The voice server isn't running"}
+    finally:
+        close()
+    tts, url = fake_tts_server.serve()
+    sub = tmp_path / "up"
+    sub.mkdir()
+    app, client, close = _voiced(sub, g, url)
+    try:
+        assert client.get("/v1/status")["voice_available"] == {"ok": True, "reason": ""}
+    finally:
+        close()
+        tts.kill()
+
+
+def test_voice_available_external_is_cached(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        calls = []
+        monkeypatch.setattr(app, "_voice_health", lambda: calls.append(1) or True)
+        for _ in range(3):
+            assert app.voice_available()["ok"] is True
+        assert len(calls) == 1  # polled status must not call the voice server each time
+    finally:
+        close()
+
+
+def _managed_voice(app):
+    app.tier = Tier("t", _spec(), _spec(), voice=VoiceConfig(kind="lfm3", base_url="http://127.0.0.1:1",
+                                                             managed=True, launch=("x",)))
+    return app.servers._servers["voice"]
+
+
+def test_voice_available_managed_follows_state_and_process(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        monkeypatch.setattr(app, "_voice_health", lambda: pytest.fail("a managed server is not asked"))
+        server = _managed_voice(app)
+        down = {"ok": False, "reason": "The voice server isn't running"}
+        assert app.voice_available() == down  # not started
+        server._state = "ready"
+        assert app.voice_available() == down  # "ready" but no process: it died
+
+        class Proc:
+            pid = 1
+
+            def __init__(self, code):
+                self.code = code
+
+            def poll(self):
+                return self.code
+        server.proc = Proc(None)
+        assert app.voice_available() == {"ok": True, "reason": ""}
+        server.proc = Proc(1)  # exited after becoming ready
+        assert app.voice_available() == down
+        server.proc, server._detached = None, True  # a detached launcher's server
+        assert app.voice_available()["ok"] is True
+    finally:
+        close()
+
+
+def test_slow_voice_health_blocks_neither_status_nor_server_actions(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    gate, entered = threading.Event(), threading.Event()
+
+    def slow():
+        entered.set()
+        gate.wait(5)
+        return True
+    monkeypatch.setattr(app, "_voice_health", slow)
+    try:
+        t = threading.Thread(target=app.voice_available, daemon=True)
+        t.start()
+        assert entered.wait(5)
+        with app._voice_lock:  # what reload_tier and server_action take: free while health runs
+            pass
+        assert client.post("/v1/servers/voice/stop", {})["role"] == "voice"
+        gate.set()
+        t.join(5)
+    finally:
+        gate.set()
+        close()
+
+
+def test_voice_role_in_status(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        assert "voice" in [s["role"] for s in client.get("/v1/status")["servers"]]
+        assert client.post("/v1/servers/voice/stop", {})["role"] == "voice"
+    finally:
+        close()
+    sub = tmp_path / "none"
+    sub.mkdir()
+    app, client, close = _voiced(sub, g, voice_url=None)
+    try:
+        assert "voice" not in [s["role"] for s in client.get("/v1/status")["servers"]]
+        client.post("/v1/servers/voice/start", {}, expect=404)
+    finally:
+        close()
+
+
+STORY_MD = "## The Siege\nThe castle stood proud.\n\n## The End\nThe gates opened."
+
+
+def _storied(tmp_path, g, ok=True):
+    from primer.stories.service import StoryService
+    from primer.voice.client import make_voice
+    tts, url = fake_tts_server.serve()
+    app, client, close = _voiced(tmp_path, g, url if ok else "http://127.0.0.1:1")
+    app.stories.shutdown()
+    app.stories = StoryService(g, FakeEngine([STORY_MD, STORY_MD, STORY_MD]), FakeEngine(['["castle"]'] * 3),
+                               lambda: make_voice(app.tier.voice), None, None, tmp_path / "var" / "media",
+                               voice_name="female")
+
+    def done():
+        close()
+        app.stories.shutdown()
+        tts.kill()
+    return app, client, done
+
+
+def _wait_story(client, sid, timeout=10.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        s = client.get(f"/v1/stories/{sid}")
+        if s["status"] in ("done", "failed"):
+            return s
+        time.sleep(0.05)
+    raise AssertionError("story did not finish")
+
+
+def test_stories_api_create_get_again(tmp_path, g):
+    app, client, close = _storied(tmp_path, g)
+    node = _page_node(g)
+    try:
+        r = client.post("/v1/stories", {"node_id": node.id, "kind": "story"}, expect=202)
+        done = _wait_story(client, r["id"])
+        assert done["status"] == "done" and [s["title"] for s in done["scenes"]] == ["The Siege", "The End"]
+        assert all(s["picture"] is None and s["audio"].endswith(".wav") for s in done["scenes"])
+        assert _get(client, f"/v1/media/{done['scenes'][0]['audio']}")[0] == 200
+        # a scene's picture is resolved from the media table
+        m = g.add_media(node.id, "castle", "image", "mdl", "p", {})
+        g.update_media(m.id, status="done", file="f" * 64 + ".png")
+        g.update_scene(r["id"], 0, media_id=m.id)
+        pic = client.get(f"/v1/stories/{r['id']}")["scenes"][0]["picture"]
+        assert pic == {"media_id": m.id, "status": "done", "file": "f" * 64 + ".png"}
+        again = client.post(f"/v1/stories/{r['id']}/again", {}, expect=202)
+        assert again["id"] != r["id"] and _wait_story(client, again["id"])["status"] == "done"
+        dflt = client.post("/v1/stories", {"node_id": node.id}, expect=202)  # kind defaults to story
+        assert _wait_story(client, dflt["id"])["kind"] == "story"
+        client.get("/v1/stories/nope", expect=404)
+        client.post("/v1/stories/nope/again", {}, expect=404)
+        client.post("/v1/stories", {"node_id": "nope"}, expect=404)
+        client.post("/v1/stories", {}, expect=400)
+        client.post("/v1/stories", {"node_id": 5}, expect=400)
+        client.post("/v1/stories", {"node_id": node.id, "kind": "poem"}, expect=400)
+        client.post("/v1/stories", {"node_id": node.id, "kind": 3}, expect=400)
+        empty = g.node_for("Empty", "concept")
+        client.post("/v1/stories", {"node_id": empty.id}, expect=404)
+    finally:
+        close()
+
+
+def test_stories_api_refused_when_unavailable(tmp_path, g):
+    app, client, close = _storied(tmp_path, g, ok=False)
+    node = _page_node(g)
+    try:
+        err = client.post("/v1/stories", {"node_id": node.id, "kind": "listen"}, expect=409)
+        assert err["error"] == "The voice server isn't running"
+        sid = g.add_story(node.id, 1, "story", "female")
+        assert client.post(f"/v1/stories/{sid}/again", {}, expect=409)["error"]
+        assert len(g.stories_for(node.id)) == 1  # nothing new was created
+    finally:
+        close()
+
+
+def test_page_lists_stories(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g)
+    node = _page_node(g)
+    try:
+        assert client.get(f"/v1/pages/{node.id}")["stories"] == []
+        sid = g.add_story(node.id, 1, "listen", "female")
+        stories = client.get(f"/v1/pages/{node.id}")["stories"]
+        assert [s["id"] for s in stories] == [sid] and stories[0]["kind"] == "listen"
+    finally:
+        close()
+
+
+def test_media_serves_wav(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        media = tmp_path / "var" / "media"
+        media.mkdir(parents=True)
+        wav = fake_tts_server.make_wav(1000)
+        name = "a" * 64 + ".wav"
+        (media / name).write_bytes(wav)
+        status, h, body = _get(client, f"/v1/media/{name}")
+        assert status == 200 and h["Content-Type"] == "audio/wav" and body == wav
+        assert h["Accept-Ranges"] == "bytes"
+        status, h, body = _get(client, f"/v1/media/{name}", {"Range": "bytes=10-19"})
+        assert status == 206 and body == wav[10:20] and h["Content-Range"] == f"bytes 10-19/{len(wav)}"
+        assert _get(client, f"/v1/media/{name}", {"Range": "bytes=99999-"})[0] == 416
+        assert _get(client, "/v1/media/" + "b" * 64 + ".wav")[0] == 404
+        assert _get(client, "/v1/media/" + "a" * 64 + ".mp3")[0] == 404
+    finally:
+        close()
+
+
+def test_tier_reload_replaces_story_service(tmp_path, g):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        old = app.stories
+        (tmp_path / "tiers" / "other.toml").write_text(
+            '[text]\nkind="openai"\nbase_url="http://127.0.0.1:1"\nmodel="m"\n'
+            '[fast]\nkind="openai"\nbase_url="http://127.0.0.1:1"\nmodel="m"\n'
+            '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:1"\nvoice="calm"\n')
+        assert app.stories.voice_name == "female"
+        client.post("/v1/tier", {"name": "other"})
+        assert old._closed and app.stories is not old
+        assert app.stories.voice_name == "calm"
+    finally:
+        close()
+        app.stories.shutdown()
+
+
+def test_intent_story(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        monkeypatch.setattr(app, "voice_available", lambda: {"ok": True, "reason": ""})
+        assert client.post("/v1/intent", {"text": "tell me a story about Kenilworth Castle"})["story"] == "Kenilworth Castle"
+        r = client.post("/v1/intent", {"text": "what is the story of the Iliad about?"})
+        assert r["story"] is None and "image" in r and "video" in r and "map" in r
+        for text in ("tell me a story about a dragon", "story of Rome"):
+            r = client.post("/v1/intent", {"text": text})
+            assert r["story"] and r["image"] is None and r["video"] is None and r["map"] is None, text
+        assert client.post("/v1/intent", {"text": "draw a moat"})["story"] is None
+    finally:
+        close()
+
+
+def test_intent_story_needs_a_voice(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        monkeypatch.setattr(app, "voice_available", lambda: {"ok": False, "reason": "no"})
+        r = client.post("/v1/intent", {"text": "tell me a story about a dragon"})
+        assert r["story"] is None
+        assert client.post("/v1/intent", {"text": "story of Rome"})["story"] is None
+    finally:
+        close()
+
+
+def test_voice_available_says_starting(tmp_path, g, monkeypatch):
+    app, client, close = _voiced(tmp_path, g)
+    try:
+        monkeypatch.setattr(app, "_voice_health", lambda: pytest.fail("a managed server is not asked"))
+        server = _managed_voice(app)
+        server._state = "starting"
+        assert app.voice_available() == {"ok": False, "reason": "The voice server is starting"}
+    finally:
+        close()

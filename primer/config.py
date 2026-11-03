@@ -8,6 +8,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TIERS_DIR = REPO_ROOT / "tiers"
@@ -78,6 +79,24 @@ class MapConfig:
     assets: str  # folder of glyphs and sprites (Protomaps basemaps-assets)
 
 
+VOICE_KINDS = ("lfm3", "openai")
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+@dataclass(frozen=True)
+class VoiceConfig:
+    kind: Literal["lfm3", "openai"]
+    base_url: str
+    voice: str = "female"
+    model: str = ""
+    api_key_file: str = ""
+    managed: bool = False
+    launch: tuple[str, ...] = ()
+    stop: tuple[str, ...] = ()
+    ready_timeout_s: float = 120.0
+    timeout_s: float = 180.0  # one passage; raise it on a busy or slow CPU
+
+
 WEB_SEARCHES = ("duckduckgo", "searxng", "brave", "off")
 SOURCE_MODES = ("storyteller", "reference", "web")
 
@@ -100,6 +119,7 @@ class Tier:
     reference: ReferenceConfig | None = None
     web: WebConfig = field(default_factory=WebConfig)
     map: MapConfig | None = None
+    voice: VoiceConfig | None = None
 
 
 def _engine(raw: object, where: str) -> EngineSpec:
@@ -212,6 +232,53 @@ def _map(raw: object, where: str) -> MapConfig:
     return MapConfig(pmtiles=pmtiles, assets=assets)
 
 
+def _voice(raw: object, where: str) -> VoiceConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected a table")
+    kind = raw.get("kind")
+    if kind not in VOICE_KINDS:
+        raise ConfigError(f"{where}: kind must be one of {VOICE_KINDS}, got {kind!r}")
+    base_url = raw.get("base_url")
+    if not isinstance(base_url, str) or not base_url:
+        raise ConfigError(f"{where}: base_url is required")
+    try:
+        parts = urlsplit(base_url)
+        host, _port = (parts.hostname or "").lower(), parts.port  # .port raises on a bad port
+    except ValueError:
+        raise ConfigError(f"{where}: base_url is not a valid URL") from None
+    if parts.scheme not in ("http", "https") or not host:
+        raise ConfigError(f"{where}: base_url must start with http:// or https://")
+    if kind == "lfm3":  # the LFM3 server has no auth: it must be on this machine
+        if host not in _LOOPBACK:
+            raise ConfigError(f"{where}: an lfm3 voice server must be on this machine "
+                              "(127.0.0.1, localhost or ::1)")
+    strings = {}
+    for key, default in (("voice", "female"), ("model", ""), ("api_key_file", "")):
+        val = raw.get(key, default)
+        if not isinstance(val, str):
+            raise ConfigError(f"{where}: {key} must be a string")
+        strings[key] = val
+    lists = {}
+    for key in ("launch", "stop"):
+        val = raw.get(key, [])
+        if not isinstance(val, list) or not all(isinstance(a, str) for a in val):
+            raise ConfigError(f"{where}: {key} must be a list of strings")
+        lists[key] = tuple(val)
+    timeout = raw.get("ready_timeout_s", 120.0)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout < math.inf:
+        raise ConfigError(f"{where}: ready_timeout_s must be a positive number")
+    speak_timeout = raw.get("timeout_s", 180.0)
+    if (isinstance(speak_timeout, bool) or not isinstance(speak_timeout, (int, float))
+            or not 0 < speak_timeout < math.inf):
+        raise ConfigError(f"{where}: timeout_s must be a positive number of seconds")
+    managed = raw.get("managed", False)
+    if not isinstance(managed, bool):
+        raise ConfigError(f"{where}: managed must be true or false")
+    return VoiceConfig(kind=kind, base_url=base_url, managed=managed, launch=lists["launch"],
+                       stop=lists["stop"], ready_timeout_s=float(timeout),
+                       timeout_s=float(speak_timeout), **strings)
+
+
 def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     # only a plain name listed in tiers_dir: a path here would run another file's launch command
     if not isinstance(name, str) or not TIER_NAME.fullmatch(name) or name not in list_tiers(tiers_dir):
@@ -234,6 +301,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     reference = _reference(data["reference"], f"{name}.reference") if "reference" in data else None
     web = _web(data["web"], f"{name}.web") if "web" in data else WebConfig()
     map_ = _map(data["map"], f"{name}.map") if "map" in data else None
+    voice = _voice(data["voice"], f"{name}.voice") if "voice" in data else None
     return Tier(
         name=str(data.get("name", name)),
         text=text,
@@ -244,6 +312,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
         reference=reference,
         web=web,
         map=map_,
+        voice=voice,
     )
 
 

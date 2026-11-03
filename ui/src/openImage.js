@@ -1,4 +1,4 @@
-/* openImage — open an Image, Video or Map window. A leaf module (no app imports) so the Reader can use
+/* openImage — open an Image, Video, Map or Story window. A leaf module (no app imports) so the Reader can use
  * it without an import cycle through apps.jsx; sizes match the registry's image and video entries.
  * Each open also announces MEDIA_EVENT on window: a new job exists, so a Reader showing its page
  * refreshes its thumbnail strip (jobs started from an Image or Video window included). */
@@ -22,6 +22,12 @@ export const openVideoWindow = (jobId, subject) => {
 
 export const openMapWindow = (mapId, subject, nodeId) => {
   const id = wm.open('map', { props: { mapId, subject, nodeId }, w: 760, h: 640 })
+  announce()
+  return id
+}
+
+export const openStoryWindow = (storyId, subject, nodeId, kind = 'story') => {
+  const id = wm.open('story', { props: { storyId, subject, nodeId, kind }, w: 720, h: 740 })
   announce()
   return id
 }

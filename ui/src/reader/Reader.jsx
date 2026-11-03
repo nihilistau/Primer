@@ -4,14 +4,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { mediaUrl, videoUrl } from '../api.js'
-import { MEDIA_EVENT, OPEN_PLACE_EVENT, openImageWindow, openMapWindow, openVideoWindow } from '../openImage.js'
+import { MEDIA_EVENT, OPEN_PLACE_EVENT, openImageWindow, openMapWindow, openStoryWindow, openVideoWindow } from '../openImage.js'
 import * as wm from '../windowManager.js'
 import { Button, Chip, Input, State } from '../kit/parts.jsx'
 import { Icon } from '../kit/icons.jsx'
 import BranchFork from '../fork/BranchFork.jsx'
 import { Markdown } from './markdown.jsx'
 import { createHistory } from './history.js'
-import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState } from './imageRoute.js'
+import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState, storyButton, storyChecking, storyCheckFailed } from './imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import { safeHref } from './citations.js'
 import { badgeLabel, rewriteOptions } from './sourceMode.js'
@@ -40,10 +40,11 @@ export default function Reader({ windowId, start, onPick }) {
   const promptRef = useRef(null)
   const [fork, setFork] = useState(null)       // {phrase, anchor, container, node, key} while the fork is open
   nodeRef.current = view.nodeId
-  const [media, setMedia] = useState({ node: null, items: [], maps: [] })   // this page's images, videos and maps
+  const [media, setMedia] = useState({ node: null, items: [], maps: [], stories: [] })   // this page's images, videos, maps and stories
   const [imgBtn, setImgBtn] = useState(imageChecking)
   const [mapBtn, setMapBtn] = useState(mapChecking)
   const [vidBtn, setVidBtn] = useState(videoChecking)
+  const [storyBtn, setStoryBtn] = useState(storyChecking)
   const [imgErr, setImgErr] = useState('')
   const [errTitle, setErrTitle] = useState('No image')
   const [mediaErr, setMediaErr] = useState('')
@@ -144,6 +145,8 @@ export default function Reader({ windowId, start, onPick }) {
     if (r.kind === 'image' || r.kind === 'video') makeImage(r.body)
     // a typed map request: the place's page first, then its map once the page is written
     else if (r.kind === 'map') run(r.body, 'push', (id) => makeMap(typedMapBody(id, r.body.concept)))
+    // a typed story request: the topic's page first, then its story once the page is written
+    else if (r.kind === 'story') run(r.body, 'push', (id) => makeStory(id, 'story', r.body.concept))
     else run(r.body)
   }
 
@@ -177,12 +180,27 @@ export default function Reader({ windowId, start, onPick }) {
     } finally { makingMap.current = false }
   }
 
+  /* Create a story (or Listen) of a page; the Story window opens only on success. */
+  const makingStory = useRef(false)
+  const makeStory = async (nodeId, kind, subject) => {
+    if (makingStory.current) return             // a double click must not start two
+    makingStory.current = true
+    setImgErr('')
+    try {
+      const r = await api.createStory({ node_id: nodeId, kind })
+      openStoryWindow(r.id, subject, nodeId, kind)
+    } catch (e) {
+      setErrTitle(kind === 'listen' ? 'No narration' : 'No story')
+      setImgErr(e.message || (kind === 'listen' ? 'The narration could not be started.' : 'The story could not be started.'))
+    } finally { makingStory.current = false }
+  }
+
   const loadMedia = useCallback(async (id) => {
     if (!id) return
     try {
       const p = await api.page(id)
       if (id !== nodeRef.current) return              // the reader moved on: this page's images are stale
-      setMedia({ node: id, items: p.media || [], maps: p.maps || [] }); setMediaErr('')
+      setMedia({ node: id, items: p.media || [], maps: p.maps || [], stories: p.stories || [] }); setMediaErr('')
     } catch (e) {
       if (id === nodeRef.current) setMediaErr(`Couldn't refresh this page's images: ${e.message || 'Primer did not answer.'}`)
     }
@@ -195,7 +213,8 @@ export default function Reader({ windowId, start, onPick }) {
   }, [loadMedia])
   const mediaItems = media.node === view.nodeId ? media.items : []
   const mapItems = media.node === view.nodeId ? media.maps : []
-  const unfinished = mediaItems.concat(mapItems).some(m => thumbState(m) === 'busy')
+  const storyItems = media.node === view.nodeId ? media.stories : []
+  const unfinished = mediaItems.concat(mapItems, storyItems).some(m => thumbState(m) === 'busy')
   useEffect(() => { if (view.nodeId && !view.streaming) loadMedia(view.nodeId) }, [view.nodeId, view.streaming, loadMedia])
   useEffect(() => {
     if (!unfinished) return
@@ -205,8 +224,8 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { setImgErr(''); setMediaErr('') }, [view.nodeId])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)) } })
-      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)) } })
+    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
+      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)); setStoryBtn(storyCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
 
@@ -267,6 +286,12 @@ export default function Reader({ windowId, start, onPick }) {
     const phrase = fork.phrase, node = fork.node
     closeFork()
     makeMap({ node_id: node, phrase, subject: phrase })
+  }
+  const forkStory = () => {
+    const phrase = fork.phrase, node = fork.node
+    closeFork()
+    // the phrase's General page first, then its story once that page is written
+    run({ concept: phrase, via: 'general', from_id: node, phrase }, 'push', (id) => makeStory(id, 'story', phrase))
   }
   const act = (kind) => {
     if (kind !== 'ask') return
@@ -365,6 +390,14 @@ export default function Reader({ windowId, start, onPick }) {
                   title={mapBtn.enabled ? 'Show the places this page names on a map' : mapBtn.reason}
                   aria-label={mapBtn.enabled ? 'Map' : `Map (unavailable: ${mapBtn.reason})`}
                   onClick={() => makeMap({ node_id: view.nodeId, subject: view.title })}>Map</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !storyBtn.enabled}
+                  title={storyBtn.enabled ? 'Read this page aloud' : storyBtn.reason}
+                  aria-label={storyBtn.enabled ? 'Listen' : `Listen (unavailable: ${storyBtn.reason})`}
+                  onClick={() => makeStory(view.nodeId, 'listen', view.title)}>Listen</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !storyBtn.enabled}
+                  title={storyBtn.enabled ? 'Retell this page as an illustrated, narrated story' : storyBtn.reason}
+                  aria-label={storyBtn.enabled ? 'Story' : `Story (unavailable: ${storyBtn.reason})`}
+                  onClick={() => makeStory(view.nodeId, 'story', view.title)}>Story</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'deeper' })}>Deeper</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'simpler' })}>Simpler</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ regenerate: true })}>Regenerate</Button>
@@ -379,8 +412,8 @@ export default function Reader({ windowId, start, onPick }) {
             {view.grounding && !view.markdown ? <div className="rd-grounding" role="status">{view.grounding}</div> : null}
             <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} />
             {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
-            {mediaItems.length || mapItems.length ? (
-              <ul className="rd-strip" aria-label="Images, videos and maps on this page">
+            {mediaItems.length || mapItems.length || storyItems.length ? (
+              <ul className="rd-strip" aria-label="Images, videos, maps and stories on this page">
                 {mediaItems.map(m => {
                   const video = m.kind === 'video', what = video ? 'Video' : 'Image'
                   const st = thumbState(m), url = st !== 'done' ? '' : video ? videoUrl(m.file) : mediaUrl(m.file)
@@ -417,6 +450,23 @@ export default function Reader({ windowId, start, onPick }) {
                     </li>
                   )
                 })}
+                {storyItems.map(m => {
+                  const st = thumbState(m), listen = m.kind === 'listen'
+                  const name = listen ? 'Listen' : 'Story'
+                  return (
+                    <li key={m.id}>
+                      <button type="button" className={`rd-thumb rd-thumb-map rd-thumb-${st}`}
+                              title={m.title || name}
+                              aria-label={`${name}: ${m.title || view.title || 'this page'} (${st === 'busy' ? 'in progress' : st})`}
+                              onClick={() => openStoryWindow(m.id, m.title || view.title, m.node_id || view.nodeId, m.kind)}>
+                        <span className="rd-thumb-glyph" aria-hidden="true">
+                          {st === 'busy' ? <span className="ui-spin" /> : st === 'failed' ? '✕' : <Icon name={listen ? 'speaker' : 'story'} size={32} />}
+                        </span>
+                      </button>
+                      <span className="rd-thumb-cap">{listen ? 'Listen' : m.title || 'Story'}</span>
+                    </li>
+                  )
+                })}
               </ul>
             ) : null}
             {view.sources.length && !view.streaming ? (
@@ -446,7 +496,7 @@ export default function Reader({ windowId, start, onPick }) {
         {fork ? (
           <div className="rd-fork" style={{ left: fork.at.x, top: fork.at.y }}>
             <BranchFork key={fork.key} anchor={fork.anchor} container={fork.container} node={fork.node}
-                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onMap={forkMap} onClose={closeFork} />
+                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onMap={forkMap} onStory={forkStory} onClose={closeFork} />
           </div>
         ) : null}
       </div>

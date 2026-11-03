@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.6.0: narrated stories (2026-11-03)
+
+Primer can now read to you.
+
+### Added
+
+- **Listen** reads the page aloud in a window that highlights the passage being read. Long pages
+  are read in parts, so the first part plays while the rest is voiced.
+- **Story** retells the page as three to five short scenes, each with a title, a picture (made
+  through the usual picture queue) and narration. The Story window plays scene by scene, waits
+  for a scene that isn't ready yet and carries on when it is, and keeps the story's phrases
+  clickable. **Again** writes a new story. Also on branch forks, and typed: "tell me a story
+  about a dragon".
+- **A voice engine** (`[voice]` in the tier): Liquid AI's LFM3-Audio-2B on llama.cpp's
+  `llama-server` (`kind = "lfm3"`, local, on the CPU, managed by Primer), or any OpenAI-style
+  speech endpoint (`kind = "openai"`). The Engines window shows the voice server and voice.
+- **Speakable text**: Markdown and citations dropped; numbers, years, ordinals, centuries, money
+  and common units spelled out (measured: the voice said "768" for "1068" written in digits).
+- Stories and readings are saved with the page, with their audio, and appear in its thumbnail
+  strip.
+
+### Measured
+
+LFM3-Audio-2B Q8_0 on the CPU of an RTX 2060 machine: a page's 85 s reading was ready in 98 s
+(the first part after 16 s), and a four-scene story was written and narrated in 138 s. It slows
+sharply when other programs keep the CPU busy (`timeout_s` under `[voice]` allows for that).
+
 ## v0.5.0: the map lens (2026-11-03)
 
 The places a page names can now be pinned on a map, offline.

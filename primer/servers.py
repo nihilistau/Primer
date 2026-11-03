@@ -10,9 +10,10 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from primer import children
-from primer.config import REPO_ROOT, EngineSpec, ReferenceConfig, Tier
+from primer.config import REPO_ROOT, EngineSpec, ReferenceConfig, Tier, VoiceConfig
 from primer.engines import make_engine
 from primer.grounding.kiwix import KiwixClient
+from primer.voice.client import make_voice
 
 POLL_S = 0.5
 STOP_WAIT_S = 5
@@ -61,6 +62,13 @@ class ManagedServer:
         if proc is not None and proc.poll() is None:
             return True
         return detached and self._health()
+
+    def alive(self) -> bool:
+        """Cheap: is the server we launched still there? (our process running, or a detached
+        launcher's server, which can't be checked without a request)"""
+        with self._lock:
+            proc, detached = self.proc, self._detached
+        return detached or (proc is not None and proc.poll() is None)
 
     def start(self, wait: bool = True) -> None:
         with self._lock:
@@ -228,6 +236,12 @@ def reference_spec(ref: ReferenceConfig) -> EngineSpec:
     return EngineSpec("openai", ref.url, managed=ref.managed, launch=launch, ready_timeout_s=60.0)
 
 
+def voice_spec(cfg: VoiceConfig) -> EngineSpec:
+    """The voice server as an EngineSpec (launch, stop and base_url matter: health is the client's)."""
+    return EngineSpec("openai", cfg.base_url, model=cfg.model, managed=cfg.managed, launch=cfg.launch,
+                      stop=cfg.stop, ready_timeout_s=cfg.ready_timeout_s)
+
+
 class ServerManager:
     def __init__(self, tier: Tier):
         self._servers: dict[str, ManagedServer] = {"text": ManagedServer("text", tier.text)}
@@ -238,10 +252,12 @@ class ServerManager:
         if tier.reference is not None:  # never a GPU server
             spec = reference_spec(tier.reference)
             self._servers["reference"] = ManagedServer("reference", spec, health=KiwixClient(spec.base_url).health)
+        if tier.voice is not None:  # CPU speech: never a GPU server
+            self._servers["voice"] = ManagedServer("voice", voice_spec(tier.voice), health=make_voice(tier.voice).health)
 
     @property
     def ROLES(self) -> tuple[str, ...]:
-        """The roles of this tier: text, fast, and reference when it has one."""
+        """The roles of this tier: text, fast, and reference and voice when it has them."""
         return tuple(self._servers)
 
     def _unique(self) -> list[ManagedServer]:

@@ -86,6 +86,13 @@ _KEEP = object()
 _MAP_STATUSES = ("finding", "locating", "done", "failed")
 _MAP_FINAL = ("done", "failed")
 _MAP_COLS = "id, node_id, n, phrase, status, error"
+_STORY_STATUSES = ("writing", "narrating", "done", "failed")
+_STORY_FINAL = ("done", "failed")
+_SCENE_STATUSES = ("waiting", "narrating", "done", "failed")
+_STORY_COLS = "id, node_id, n, kind, title, status, error, voice, created_at"
+_STORY_KEYS = ("id", "node_id", "n", "kind", "title", "status", "error", "voice", "created_at")
+_SCENE_FIELDS = ("title", "text", "spoken", "media_id", "audio", "status", "error")
+_SCENE_KEYS = ("idx", "title", "text", "spoken", "media_id", "audio", "chunks", "status", "error")
 _MAP_KEYS = ("id", "node_id", "n", "phrase", "status", "error")
 
 
@@ -118,6 +125,14 @@ CREATE TABLE IF NOT EXISTS maps(
 CREATE TABLE IF NOT EXISTS map_places(
     map_id TEXT NOT NULL, idx INTEGER NOT NULL, name TEXT NOT NULL, what TEXT NOT NULL,
     lat REAL, lon REAL, title TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(map_id, idx));
+CREATE TABLE IF NOT EXISTS stories(
+    id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), n INTEGER NOT NULL,
+    kind TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, error TEXT, voice TEXT NOT NULL,
+    highlights_json TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS story_scenes(
+    story_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
+    spoken TEXT NOT NULL, media_id TEXT, audio TEXT, chunks_json TEXT NOT NULL, status TEXT NOT NULL,
+    error TEXT, PRIMARY KEY(story_id, idx));
 CREATE TABLE IF NOT EXISTS place_cache(
     key TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
     title TEXT NOT NULL, source TEXT NOT NULL, at REAL NOT NULL);
@@ -347,6 +362,111 @@ class Graph:
             cur = self._db.execute(
                 f"UPDATE maps SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
                 (reason, time.time(), *_MAP_FINAL))
+        return cur.rowcount
+
+    # stories
+    def add_story(self, node_id: str, n: int, kind: str, voice: str) -> str:
+        if kind not in ("story", "listen"):
+            raise ValueError(f"unknown story kind {kind!r}")
+        sid = uuid.uuid4().hex[:16]
+        now = time.time()
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO stories(id, node_id, n, kind, title, status, error, voice, highlights_json, "
+                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (sid, node_id, n, kind, "", "writing", None, voice, "[]", now, now))
+        return sid
+
+    def update_story(self, id: str, status: str | None = None, error=_KEEP, title: str | None = None,
+                     highlights: list[str] | None = None) -> None:
+        """Change a story's status, error, title and/or highlights. A failed story stays failed
+        and a done story keeps its status (a late writer cannot revive or un-finish one); an
+        error is kept unless given."""
+        if status is not None and status not in _STORY_STATUSES:
+            raise ValueError(f"unknown story status {status!r}")
+        with self._lock, self._db:
+            row = self._db.execute("SELECT status, error, title FROM stories WHERE id=?", (id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown story {id!r}")
+            if row[0] in _STORY_FINAL:
+                return
+            self._db.execute(
+                "UPDATE stories SET status=?, error=?, title=?, updated_at=? WHERE id=?",
+                (status or row[0], row[1] if error is _KEEP else error,
+                 row[2] if title is None else title, time.time(), id))
+            if highlights is not None:
+                self._db.execute("UPDATE stories SET highlights_json=? WHERE id=?",
+                                 (json.dumps(highlights), id))
+
+    def set_scenes(self, id: str, scenes: Sequence[dict]) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM story_scenes WHERE story_id=?", (id,))
+            self._db.executemany(
+                "INSERT INTO story_scenes(story_id, idx, title, text, spoken, media_id, audio, chunks_json, "
+                "status, error) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [(id, i, s["title"], s["text"], s.get("spoken", ""), None, None, "[]", "waiting", None)
+                 for i, s in enumerate(scenes)])
+
+    def update_scene(self, id: str, idx: int, **fields) -> None:
+        """Change a scene's fields (title, text, spoken, media_id, audio, status, error, chunks).
+        A done or failed scene keeps its status, and none is marked narrating or done once the
+        story has failed."""
+        bad = set(fields) - set(_SCENE_FIELDS) - {"chunks"}
+        if bad:
+            raise ValueError(f"unknown scene field {sorted(bad)[0]!r}")
+        if fields.get("status") is not None and fields["status"] not in _SCENE_STATUSES:
+            raise ValueError(f"unknown scene status {fields['status']!r}")
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT sc.status, st.status FROM story_scenes sc JOIN stories st ON st.id = sc.story_id "
+                "WHERE sc.story_id=? AND sc.idx=?", (id, idx)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown scene {id!r}/{idx}")
+            new = fields.get("status")
+            if new is not None and (row[0] in ("done", "failed")
+                                    or (row[1] == "failed" and new in ("narrating", "done"))):
+                fields = {k: v for k, v in fields.items()
+                          if k not in ("status", "error", "chunks", "audio")}
+            sets, vals = [], []
+            for k, v in fields.items():
+                sets.append("chunks_json=?" if k == "chunks" else f"{k}=?")
+                vals.append(json.dumps(v) if k == "chunks" else v)
+            if sets:
+                self._db.execute(f"UPDATE story_scenes SET {', '.join(sets)} WHERE story_id=? AND idx=?",
+                                 (*vals, id, idx))
+
+    def get_story(self, id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_STORY_COLS}, highlights_json FROM stories WHERE id=?", (id,)).fetchone()
+            if row is None:
+                return None
+            scenes = self._db.execute(
+                "SELECT idx, title, text, spoken, media_id, audio, chunks_json, status, error "
+                "FROM story_scenes WHERE story_id=? ORDER BY idx", (id,)).fetchall()
+        out = dict(zip(_STORY_KEYS, row))
+        out["highlights"] = json.loads(row[-1])
+        out["scenes"] = [dict(zip(_SCENE_KEYS, (*r[:6], json.loads(r[6]), *r[7:]))) for r in scenes]
+        return out
+
+    def stories_for(self, node_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_STORY_COLS} FROM stories WHERE node_id=? ORDER BY created_at DESC, rowid DESC",
+                (node_id,)).fetchall()
+        return [dict(zip(_STORY_KEYS, r)) for r in rows]
+
+    def fail_unfinished_stories(self, reason: str) -> int:
+        """Fail every story not done or failed, and the scene being narrated in it (scenes not
+        yet started stay waiting)."""
+        marks = ",".join("?" * len(_STORY_FINAL))
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE story_scenes SET status='failed', error=? WHERE status='narrating' AND story_id IN "
+                f"(SELECT id FROM stories WHERE status NOT IN ({marks}))", (reason, *_STORY_FINAL))
+            cur = self._db.execute(
+                f"UPDATE stories SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
+                (reason, time.time(), *_STORY_FINAL))
         return cur.rowcount
 
     # located places (only hits are cached)

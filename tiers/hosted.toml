@@ -8,3 +8,15 @@ base_url = "https://api.x.ai"
 model = "grok-4"
 managed = false
 api_key_file = "var/keys/xai.key"
+
+# Voice for Listen (a page read aloud) and Story (illustrated, narrated scenes). Uncomment and
+# edit; until then those buttons show as unavailable. LFM3-Audio on llama-server runs on the CPU
+# (the base_url must be on this machine):
+# [voice]
+# kind = "lfm3"
+# base_url = "http://127.0.0.1:8840"
+# voice = "female"
+# managed = true
+# launch = ["llama-server", "-m", "C:/path/to/LFM3-Audio-2B-Q8_0.gguf",
+#           "--mmproj", "C:/path/to/mmproj-LFM3-Audio-2B-F16.gguf", "--port", "8840", "-ngl", "0"]
+# Or any OpenAI-style speech endpoint (kind = "openai", model, optional api_key_file).

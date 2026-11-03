@@ -520,3 +520,82 @@ def test_reference_role_listed_and_controllable():
     m = ServerManager(_ref_tier(base_url="http://127.0.0.1:9999"))
     assert [s["role"] for s in m.statuses()] == ["text", "fast", "reference"]
     m.stop("reference")
+
+
+# --- the voice role ---
+
+def _voice_tier(**kw):
+    from primer.config import VoiceConfig
+    spec = EngineSpec("openai", "http://x")
+    return Tier("t", spec, spec, voice=VoiceConfig(**kw))
+
+
+def test_voice_role_launch_and_not_gpu(monkeypatch):
+    from primer import servers as servers_mod
+
+    seen = []
+
+    class FakeProc:
+        pid = 4343
+        returncode = None
+
+        def __init__(self, argv, **kw):
+            seen.append(list(argv))
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(servers_mod.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(servers_mod.children, "adopt", lambda *a, **k: None)
+    monkeypatch.setattr(servers_mod.children, "release", lambda *a, **k: None)
+    tier = _voice_tier(kind="lfm3", base_url="http://127.0.0.1:8840", managed=True,
+                       launch=("llama-server", "--port", "8840"))
+    m = ServerManager(tier)
+    assert m.ROLES == ("text", "fast", "voice")
+    v = m._servers["voice"]
+    assert v.spec.managed and not v.spec.gpu and v.spec.launch == ("llama-server", "--port", "8840")
+    assert m.gpu_servers() == []
+    v._health = lambda: bool(seen)
+    v.start(wait=True)
+    assert seen == [["llama-server", "--port", "8840"]]
+    assert v.status()["state"] == "ready"
+    v.stop()
+
+
+def test_external_voice_is_not_managed_and_absent_without_config():
+    m = ServerManager(_voice_tier(kind="lfm3", base_url="http://127.0.0.1:9999"))
+    v = m._servers["voice"]
+    assert not v.spec.managed
+    assert next(s for s in m.statuses() if s["role"] == "voice")["state"] == "stopped"
+    spec = EngineSpec("openai", "http://x")
+    assert "voice" not in ServerManager(Tier("t", spec, spec)).ROLES
+
+
+def test_alive_follows_process_and_detached():
+    from primer.config import EngineSpec
+    from primer.servers import ManagedServer
+
+    s = ManagedServer("voice", EngineSpec(kind="openai", base_url="http://127.0.0.1:1", model="m"),
+                      health=lambda: False)
+    assert s.alive() is False
+
+    class P:
+        code = None
+
+        def poll(self):
+            return self.code
+    s.proc = P()
+    assert s.alive() is True
+    s.proc.code = 0
+    assert s.alive() is False
+    s._detached = True
+    assert s.alive() is True

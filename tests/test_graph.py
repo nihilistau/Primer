@@ -211,3 +211,19 @@ def test_update_map_keeps_error_and_failed(g):
     assert g.get_map(m2)["error"] == "note"
     g.update_map(m2, status="done", error=None)  # explicit None clears
     assert g.get_map(m2)["error"] is None
+
+
+def test_story_roundtrip(g):
+    n = g.node_for("Castles", "concept")
+    sid = g.add_story(n.id, 1, "story", "female")
+    assert len(sid) == 16 and g.get_story(sid)["status"] == "writing" and g.get_story(sid)["scenes"] == []
+    g.set_scenes(sid, [{"title": "A", "text": "x", "spoken": "x"}, {"title": "B", "text": "y"}])
+    g.update_scene(sid, 0, status="done", audio="a.wav", chunks=[[0, 1, 0.0, 0.5]], media_id="m1")
+    g.update_story(sid, status="narrating", title="Castles", highlights=["x"])
+    s = g.get_story(sid)
+    assert s["title"] == "Castles" and s["highlights"] == ["x"] and s["voice"] == "female"
+    assert s["scenes"][0]["chunks"] == [[0, 1, 0.0, 0.5]] and s["scenes"][0]["media_id"] == "m1"
+    assert s["scenes"][1]["status"] == "waiting" and s["scenes"][1]["chunks"] == []
+    assert g.get_story("nope") is None
+    with pytest.raises(ValueError):
+        g.add_story(n.id, 1, "weird", "v")

@@ -9,17 +9,19 @@ import './apps.css'
 
 const TONE = { ready: 'ok', unavailable: 'warn', busy: 'warn', starting: 'warn', failed: 'err', external: 'neutral', stopped: 'neutral' }
 
+const ROLE_NAMES = { reference: 'Reference server', voice: 'Voice server' }
+
 function hardwareNote(hw) {
   if (!hw || !hw.gpu_name) return 'suggested for this machine (no NVIDIA GPU found)'
   return `suggested for your ${hw.gpu_name}, ${hw.vram_gb} GB`
 }
 
-function Server({ s, busy, onAction }) {
+function Server({ s, busy, onAction, voice }) {
   const hint = s.state === 'external' ? 'running outside Primer' : ''
   return (
     <div className="en-server">
       <div className="en-server-top">
-        <span className="en-role">{s.role === 'reference' ? 'Reference server' : s.role}</span>
+        <span className="en-role">{ROLE_NAMES[s.role] || s.role}</span>
         <Chip tone={TONE[s.state] || 'neutral'} dot>{s.state}</Chip>
         <span className="en-actions">
           <Button size="sm" disabled={busy || ['ready', 'starting', 'external'].includes(s.state)}
@@ -28,7 +30,7 @@ function Server({ s, busy, onAction }) {
                   onClick={() => onAction(s.role, 'stop')}>Stop</Button>
         </span>
       </div>
-      <div className="en-detail">{[s.model, s.base_url].filter(Boolean).join(' · ')}</div>
+      <div className="en-detail">{[s.model, s.role === 'voice' && voice ? `voice ${voice}` : '', s.base_url].filter(Boolean).join(' · ')}</div>
       {s.state !== 'ready' && (s.reason || hint) ? <div className="en-reason">{s.reason || hint}</div> : null}
     </div>
   )
@@ -83,7 +85,7 @@ export default function Engines() {
             <section className="en-sec">
               <h3 className="en-h">Model servers</h3>
               {st.servers.map(s => (
-                <Server key={s.role} s={s} busy={busy} onAction={(role, a) => act(() => api.serverAction(role, a))} />
+                <Server key={s.role} s={s} busy={busy} voice={st.voice && st.voice.name} onAction={(role, a) => act(() => api.serverAction(role, a))} />
               ))}
               {st.images ? <ImageServer im={st.images} avail={st.image_available} gpu={st.gpu} /> : null}
               {err ? <div className="en-err" role="alert">{err}</div> : null}

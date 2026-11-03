@@ -53,6 +53,7 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     graph = Graph(var_dir / "primer.sqlite")
     graph.fail_unfinished_media("Primer restarted")
     graph.fail_unfinished_maps("Primer restarted")
+    graph.fail_unfinished_stories("Primer restarted")
     store = ModelStore(var_dir)
     servers = ServerManager(tier)
     text_pause, gate = make_gate(tier, servers)
@@ -87,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as e:
         app.shutdown_images()
         app.shutdown_maps()
+        app.shutdown_stories()
         app.pages.shutdown(drain=False)
         print(f"error: cannot listen on port {args.port}: {e}", file=sys.stderr)
         return 2
@@ -108,7 +110,10 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     app.shutdown_maps()
                 finally:
-                    app.servers.stop_all()
+                    try:
+                        app.shutdown_stories()
+                    finally:
+                        app.servers.stop_all()
         finally:
             server.server_close()
             app.pages.shutdown(drain=False)

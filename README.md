@@ -6,7 +6,8 @@ new page: one written in the context you came from, a general article, or a side
 Any phrase can also be drawn as a picture or turned into a short clip, and any picture can be
 animated. You keep reading while they render. A page can be the model's own telling, or grounded
 in an offline copy of Wikipedia or the live web, with citations you can follow. The places a page
-names can be pinned on an offline map, and every pin opens its own page.
+names can be pinned on an offline map, and every pin opens its own page. And Primer can read to
+you: a page aloud, or retold as a short illustrated story.
 
 Primer runs on your own machine against local models (LM Studio, llama.cpp's `llama-server`, or a
 hosted OpenAI-compatible API if you choose). Everything you read and every picture it draws is
@@ -66,6 +67,14 @@ Bodiam Castle on a map" to go straight there.
 
 ![The Warwick Castle page beside a Map window showing Warwick Castle, Warwickshire and the River Avon pinned on a dark map of the English Midlands, with the list of places and what each one is](docs/screenshots/map-lens.webp)
 
+**It reads to you.** **Listen** reads the page aloud, highlighting the passage being read.
+**Story** retells the page as three to five short scenes, each with its own picture and
+narration, played in a Story window that starts the first scene while the rest are still being
+made. The voice is a local model (Liquid AI's LFM3-Audio on llama.cpp's `llama-server`, on the
+CPU) or any OpenAI-style speech service. Numbers and years are spelled out before they're read.
+
+![A Story window telling the story of Warwick Castle in four scenes, the passage being read highlighted and its phrases underlined, with a strip of the scenes below, beside the Warwick Castle page](docs/screenshots/story.webp)
+
 **A map of where you've been.** Every page you open joins a concept graph. The map shows the
 trail: which page you branched from, and how (in context, general, or sideways).
 
@@ -102,6 +111,8 @@ with no dependencies and should run elsewhere too, but that hasn't been tried ye
   `wikipedia_en_top_nopic` (2.6 GB, the 50,000 most-read articles in full) or
   `wikipedia_en_all_mini` (13 GB, the opening of every article). See
   [docs/RUNNING.md](docs/RUNNING.md#grounding).
+- **For a voice (optional):** a recent llama.cpp `llama-server` and LFM3-Audio-2B with its
+  mmproj file, or an OpenAI-style speech endpoint. See [docs/RUNNING.md](docs/RUNNING.md#voice).
 - **For the map (optional):** a Protomaps map file. `tools/map_extract.py` makes one for you
   (the whole world in about 1.6 GB), plus Protomaps' free fonts and icons. See
   [docs/RUNNING.md](docs/RUNNING.md#maps).
@@ -132,7 +143,7 @@ Pick a tier in `tiers/` and edit it to name the models you have:
 The model names in the shipped tiers are placeholders; they must match what your server reports
 (`lms ls` for LM Studio). To draw pictures, uncomment the `[images]` block and set `sd_server`
 to the path of `sd-server`. For the offline encyclopedia, uncomment `[reference]` and set
-`kiwix_serve` and `zims`. For the map, uncomment `[map]`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
+`kiwix_serve` and `zims`. For the map, uncomment `[map]`; for a voice, `[voice]`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
 
 ### 4. Run it
 
@@ -157,9 +168,10 @@ The short version:
 4. Click **Image**, or type "draw ...", for a picture. It renders while you keep reading.
 5. Click **Video**, type "animate ...", or press **Animate** on a picture, for a short clip.
 6. Click **Map** to see the places a page names, pinned on a map. Click a pin to open its page.
-7. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
+7. Click **Listen** to hear the page, or **Story** for an illustrated, narrated story.
+8. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
    encyclopedia or the web. Choose the default for new pages in **Engines**.
-8. Open **Map of where I've been** from the dock to see your trail and jump back.
+9. Open **Map of where I've been** from the dock to see your trail and jump back.
 
 The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
 
@@ -180,8 +192,8 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.5**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, and the map work. Narrated stories and an embedded browser are planned next. The
+This is **v0.6**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, the map, and narrated stories work. An embedded browser is planned next. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

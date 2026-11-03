@@ -7,6 +7,7 @@ import ImageModels from './apps/ImageModels.jsx'
 import ImageWindow from './apps/ImageWindow.jsx'
 import VideoWindow from './apps/VideoWindow.jsx'
 import MapWindow from './apps/MapWindow.jsx'
+import StoryWindow from './apps/StoryWindow.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -19,6 +20,8 @@ export const APPS = {
   video: { title: 'Video', icon: 'stage', size: [640, 760], component: VideoWindow },
   // multi-instance: one window per map job, props { mapId, subject?, nodeId? }
   map: { title: 'Map', icon: 'map', size: [760, 640], component: MapWindow },
+  // multi-instance: one window per story (or Listen), props { storyId, subject?, nodeId?, kind? }
+  story: { title: 'Story', icon: 'speaker', size: [720, 740], component: StoryWindow },
 }
 
 /* the dock's buttons, in order */

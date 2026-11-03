@@ -49,6 +49,7 @@ def test_shutdown_stops_servers_even_if_page_shutdown_is_interrupted(tmp_path, m
     class Pages:
         grounder = object()
         source_mode = "storyteller"
+        text = fast = None
 
         def __init__(self, *a, **kw):
             pass
@@ -98,12 +99,15 @@ def test_serve_marks_unfinished_media_failed_on_start(tmp_path):
     g.update_media(queued.id, status="generating")
     done = g.add_media(node.id, "", "image", "m", "p", {})
     g.update_media(done.id, status="done", file="a" * 64 + ".png")
+    story = g.add_story(node.id, 1, "story", "female")
     tier = serve.load_tier("light")
     app = serve.build_app(tier, var, tmp_path / "ui", TIERS_DIR, hardware=HW)
     try:
         job = app.graph.get_media(queued.id)
         assert job.status == "failed" and job.error == "Primer restarted"
         assert app.graph.get_media(done.id).status == "done"
+        assert app.graph.get_story(story)["status"] == "failed"
+        assert app.graph.get_story(story)["error"] == "Primer restarted"
         assert app.store.path == var / "images.json"
         assert app.pages.gate is app.gate and app.images.gate is app.gate
         assert app.gate.mode == tier.gpu_mode and app.images.media_dir == var / "media"

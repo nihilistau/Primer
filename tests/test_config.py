@@ -253,3 +253,42 @@ def test_map_config_requires_both(tmp_path):
 def _tier(tmp_path, name, extra):
     (tmp_path / f"{name}.toml").write_text(_TEXT + extra)
     return tmp_path
+
+
+def test_voice_config_kinds_and_local_url(tmp_path):
+    from primer.config import VoiceConfig
+    (tmp_path / "n.toml").write_text(_TEXT)
+    assert load_tier("n", tiers_dir=tmp_path).voice is None
+    (tmp_path / "v.toml").write_text(_TEXT + '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:8840"\n'
+                                     'managed=true\nlaunch=["llama-server","--port","8840"]\nstop=["x"]\n')
+    v = load_tier("v", tiers_dir=tmp_path).voice
+    assert v == VoiceConfig("lfm3", "http://127.0.0.1:8840", voice="female", managed=True,
+                            launch=("llama-server", "--port", "8840"), stop=("x",))
+    for host in ("localhost", "[::1]"):
+        (tmp_path / "h.toml").write_text(_TEXT + f'[voice]\nkind="lfm3"\nbase_url="http://{host}:8840"\n')
+        assert load_tier("h", tiers_dir=tmp_path).voice.kind == "lfm3"
+    (tmp_path / "o.toml").write_text(_TEXT + '[voice]\nkind="openai"\nbase_url="https://api.example.com"\n'
+                                     'model="tts-1"\nvoice="alloy"\napi_key_file="k.txt"\nready_timeout_s=5\n')
+    o = load_tier("o", tiers_dir=tmp_path).voice
+    assert (o.kind, o.model, o.voice, o.api_key_file, o.ready_timeout_s) == ("openai", "tts-1", "alloy", "k.txt", 5.0)
+    bad = ['kind="lfm3"\nbase_url="http://203.0.113.5:8840"', 'kind="lfm3"\nbase_url="http://example.com"',
+           'kind="piper"\nbase_url="http://127.0.0.1:1"', 'kind="lfm3"',
+           'kind="lfm3"\nbase_url="http://127.0.0.1:1"\nlaunch="llama-server"',
+           'kind="lfm3"\nbase_url="http://127.0.0.1:1"\nvoice=3',
+           'kind="lfm3"\nbase_url="http://127.0.0.1:1"\nready_timeout_s="soon"',
+           'kind="lfm3"\nbase_url="ftp://127.0.0.1:1"', 'kind="openai"\nbase_url="127.0.0.1:8840"',
+           'kind="lfm3"\nbase_url="http://127.0.0.1:99999"', 'kind="openai"\nbase_url="http://h:abc"']
+    for i, body in enumerate(bad):
+        (tmp_path / f"b{i}.toml").write_text(_TEXT + "[voice]\n" + body + "\n")
+        with pytest.raises(ConfigError, match="voice"):
+            load_tier(f"b{i}", tiers_dir=tmp_path)
+
+
+def test_voice_timeout_setting(tmp_path):
+    (tmp_path / "t.toml").write_text(_TEXT + '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:8840"\ntimeout_s=600\n')
+    assert load_tier("t", tiers_dir=tmp_path).voice.timeout_s == 600.0
+    (tmp_path / "d.toml").write_text(_TEXT + '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:8840"\n')
+    assert load_tier("d", tiers_dir=tmp_path).voice.timeout_s == 180.0
+    (tmp_path / "b.toml").write_text(_TEXT + '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:8840"\ntimeout_s=0\n')
+    with pytest.raises(ConfigError, match="timeout_s"):
+        load_tier("b", tiers_dir=tmp_path)

@@ -1,7 +1,7 @@
 /* imageRoute — what a typed line means (an image or a page) and whether the Image buttons work. */
 import * as api from '../api.js'
 
-/* Ask the server whether `text` is a map, video or image request (checked in that order, as the
+/* Ask the server whether `text` is a story, map, video or image request (checked in that order, as the
  * server does). A map request routes to its place as a typed page (the Map window follows once
  * the page is written); a video or image routes to a createImage body (the page's node, or the subject as a concept
  * when the reader is empty; a video adds kind video); anything else, or an intent call that
@@ -11,6 +11,8 @@ export async function routePrompt(text, { nodeId } = {}) {
   try { r = (await api.intent(text)) || {} } catch { /* just open a page */ }
   const where = (subject) => (nodeId ? { node_id: nodeId, subject } : { concept: subject, subject })
   // a map request opens the place's page as a typed page; the Map window follows once its node is known
+  // a story request does the same: the topic's page first, then its story once the node is known
+  if (r.story) return { kind: 'story', body: { concept: r.story, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
   if (r.map) return { kind: 'map', body: { concept: r.map, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
   if (r.video) return { kind: 'video', body: { ...where(r.video), kind: 'video' } }
   if (r.image) return { kind: 'image', body: where(r.image) }
@@ -50,3 +52,13 @@ export function thumbState(m) {
  * the typed subject, so "show Paris on a map" always pins Paris (a whole-page map would pin
  * whatever the page names, maybe not Paris at all). */
 export const typedMapBody = (nodeId, subject) => ({ node_id: nodeId, phrase: subject, subject })
+
+/* {enabled, reason} for the Listen and Story buttons from a /v1/status reply */
+export function storyButton(status) {
+  const a = status && status.voice_available
+  if (a && a.ok) return { enabled: true, reason: '' }
+  return { enabled: false, reason: (a && a.reason) || 'Narration is not available right now.' }
+}
+export const storyChecking = { enabled: false, checking: true, reason: 'Checking whether narration is available…' }
+export const storyCheckFailed = (e) =>
+  ({ enabled: false, reason: `Couldn't check narration availability: ${(e && e.message) || 'Primer did not answer.'}` })

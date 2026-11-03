@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let impl
 vi.mock('../api.js', () => ({ intent: (...a) => impl(...a) }))
-import { routePrompt, mapButton, typedMapBody, imageButton, thumbState, imageChecking, imageCheckFailed } from './imageRoute.js'
+import { routePrompt, storyButton, storyChecking, mapButton, typedMapBody, imageButton, thumbState, imageChecking, imageCheckFailed } from './imageRoute.js'
 
 beforeEach(() => { impl = null })
 
@@ -31,6 +31,13 @@ describe('routePrompt', () => {
       .toEqual({ kind: 'map', body: { concept: 'Warwick', via: 'typed', from_id: 'n1' } })
     expect(await routePrompt('map of Warwick', { nodeId: null }))
       .toEqual({ kind: 'map', body: { concept: 'Warwick', via: 'typed' } })
+  })
+  it('routes a story request to the topic as a typed page, then its story', async () => {
+    impl = async () => ({ story: 'the Norman conquest', map: null, image: null, video: null })
+    expect(await routePrompt('tell me a story about the Norman conquest', { nodeId: 'n1' }))
+      .toEqual({ kind: 'story', body: { concept: 'the Norman conquest', via: 'typed', from_id: 'n1' } })
+    expect(await routePrompt('a story about owls', { nodeId: null }))
+      .toEqual({ kind: 'story', body: { concept: 'the Norman conquest', via: 'typed' } })
   })
   it('routes anything else to a page, with from_id when there is a node', async () => {
     impl = async () => ({ image: null })
@@ -93,5 +100,18 @@ describe('mapButton', () => {
 describe('typedMapBody', () => {
   it('is a phrase map of the typed subject', () => {
     expect(typedMapBody('n2', 'Paris')).toEqual({ node_id: 'n2', phrase: 'Paris', subject: 'Paris' })
+  })
+})
+
+describe('storyButton', () => {
+  it('enabled when the voice is available', () =>
+    expect(storyButton({ voice_available: { ok: true, reason: '' } })).toEqual({ enabled: true, reason: '' }))
+  it('disabled with the reason', () =>
+    expect(storyButton({ voice_available: { ok: false, reason: 'The voice server is not running' } }))
+      .toEqual({ enabled: false, reason: 'The voice server is not running' }))
+  it('disabled with a default reason when status is missing', () => {
+    expect(storyButton(null).enabled).toBe(false)
+    expect(storyButton({ voice_available: { ok: false } }).reason).toBeTruthy()
+    expect(storyChecking.enabled).toBe(false)
   })
 })
