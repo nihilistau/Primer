@@ -87,6 +87,8 @@ export const GLYPHS = {
   // a page already written (a leaf with a tick): the branch cards' "ready" mark
   ready: ['M6 19c0-9 4-13.5 12-14-.3 8.5-4.5 13.5-12 14zM6 19c2-4 4.5-6.5 8-8.5', 'M9.5 16l1.5 1.5 3-3.5'],
   reload: ['M19 12a7 7 0 1 1-2.2-5.1M19 4.5v4h-4'],
+  // an arrow down into a tray: Setup (Phase 9); the tray is the detail
+  download: ['M12 4v10.5M7.5 10l4.5 4.5 4.5-4.5', 'M5 15.5v2.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5v-2.5'],
   micOff: ['M12 3.5a2.5 2.5 0 0 1 2.5 2.5v5a2.5 2.5 0 0 1-5 0V6A2.5 2.5 0 0 1 12 3.5zM12 16.5v3.5M9 20h6',
            'M5 4l14 16'],
 }

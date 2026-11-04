@@ -4,7 +4,9 @@ Walks the remote PMTiles v3 archive's directories with HTTP Range requests, keep
 to --maxzoom (plus, with --bbox, the tiles up to --region-maxzoom that touch the box), downloads
 their data in large coalesced ranges into a resumable `.part` file, and writes a local PMTiles v3
 file with primer.maps.pmtiles. Downloads only from --source; writes only --out (and its
-`.part` / `.tmp` working files beside it).
+`.part` / `.tmp` working files beside it). Every request is https, goes to a public address
+(never a private, loopback or link-local one) on every redirect hop, and ignores proxy
+settings; the default source must be build.protomaps.com (primer.setup.net's policy).
 
     python tools/map_extract.py --out maps/world-z9.pmtiles --maxzoom 9
     python tools/map_extract.py --out maps/uk.pmtiles --maxzoom 9 \\
@@ -39,6 +41,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from primer.maps import USER_AGENT  # noqa: E402
+from primer.setup.net import CatalogueError, check_url  # noqa: E402
 from primer.maps.pmtiles import (HEADER_LEN, PMTilesError, decompress,  # noqa: E402
                                  parse_directory, parse_header, write_archive, zoom_start, zxy_to_tileid)
 
@@ -53,9 +56,37 @@ _MAX_DEPTH = 4
 # ── network ───────────────────────────────────────────────────────────────────────────────
 
 
-def http_fetcher(url: str, *, retries: int = 8, timeout: float = 120.0, sleep=time.sleep):
+class RefusedAddress(OSError):
+    """A source or redirect address the policy refuses; retrying won't help."""
+
+
+class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only to an https address on a public host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            check_url(newurl, first=False)
+        except CatalogueError as e:
+            raise RefusedAddress(f"redirect to {newurl} refused: {e.reason}") from None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def make_opener(url: str, first: bool):
+    """An opener for `url` under primer.setup.net's policy: https and a public host (with
+    `first`, also an allowed host such as build.protomaps.com), the same on every redirect, and
+    no proxy (an empty ProxyHandler: HTTP(S)_PROXY is ignored). RefusedAddress otherwise."""
+    try:
+        check_url(url, first=first)
+    except CatalogueError as e:
+        raise RefusedAddress(f"{url} refused: {e.reason}") from None
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _CheckedRedirect())
+
+
+def http_fetcher(url: str, *, retries: int = 8, timeout: float = 120.0, sleep=time.sleep, first: bool = False):
     """fetch(offset, length) -> exactly those bytes of `url`, with retries. A server that
-    answers a range request with the whole file (200, not 206) is refused before reading."""
+    answers a range request with the whole file (200, not 206) is refused before reading.
+    The address is checked now (make_opener; `first`: it must be an allowed host too)."""
+    opener = make_opener(url, first)
 
     def fetch(offset: int, length: int) -> bytes:
         last: Exception | None = None
@@ -63,13 +94,16 @@ def http_fetcher(url: str, *, retries: int = 8, timeout: float = 120.0, sleep=ti
             try:
                 req = urllib.request.Request(url, headers={
                     "Range": f"bytes={offset}-{offset + length - 1}", "User-Agent": USER_AGENT})
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with opener.open(req, timeout=timeout) as r:
                     if r.status != 206:
                         raise OSError(f"the server ignored the byte range (HTTP {r.status})")
                     b = r.read(length + 1)
                 if len(b) == length:
                     return b
                 last = OSError(f"got {len(b)} of {length} bytes")
+            except RefusedAddress as e:
+                last = e
+                break
             except urllib.error.HTTPError as e:
                 last = e
                 if e.code in (403, 404, 410, 416):  # retrying won't help
@@ -96,7 +130,7 @@ def find_source(probe, today: datetime.date | None = None, days: int = LOOKBACK_
 
 def _probe(url: str) -> bool:
     try:
-        parse_header(http_fetcher(url, retries=1, timeout=30)(0, HEADER_LEN))
+        parse_header(http_fetcher(url, retries=1, timeout=30, first=True)(0, HEADER_LEN))
         return True
     except (OSError, http.client.HTTPException, PMTilesError):
         return False
@@ -298,7 +332,8 @@ def main(argv: list[str] | None = None) -> int:
     url = a.source or find_source(_probe)
     print(f"source {url}", flush=True)
     try:
-        extract(http_fetcher(url), a.out, a.maxzoom, a.bbox, a.region_maxzoom, dry_run=a.dry_run,
+        # the default source must be an allowed host; one given by hand need only be public https
+        extract(http_fetcher(url, first=a.source is None), a.out, a.maxzoom, a.bbox, a.region_maxzoom, dry_run=a.dry_run,
                 log=lambda m: print(m, flush=True))
     except (OSError, PMTilesError) as e:
         print(f"map_extract: {e}", file=sys.stderr)

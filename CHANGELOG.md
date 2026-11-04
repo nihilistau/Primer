@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.9.0: the setup centre (2026-11-05)
+
+From a fresh copy to a working Primer in one window.
+
+### Added
+
+- **Setup** (an arrow in the dock, and opened by itself the first time no writing model is
+  available): pick a starter kit suggested from your graphics card (Light about 5 GB, Hybrid
+  about 27 GB, Workstation about 63 GB), choose a folder, skip or swap any item, accept the
+  licences and press Download. Models come from Hugging Face, the programs (llama.cpp,
+  stable-diffusion.cpp, kiwix-tools) from their publishers, Wikipedia from Kiwix and the map from
+  Protomaps, looked up live so the kits don't go stale.
+- **Downloads you can leave**: one at a time in the background with speed and time left; pause,
+  resume and restarts carry on where they stopped (the map cut starts again if a newer world
+  build appeared meanwhile). Files already in the folder aren't fetched again. A plan that
+  couldn't write a tier (no writing model, or no llama.cpp) is refused before anything downloads.
+- **Checked before use**: every file must match its publisher's SHA-256 (MD5 for kiwix-tools)
+  before it is moved into place; zips are unpacked safely; pickle formats are refused.
+- **Programs need your approval**: Primer never runs a program or DLL it downloaded until you
+  approve it by its SHA-256, per release or one at a time, and refuses one that has changed since.
+- **A ready tier**: when a kit is in, Setup writes `tiers/local-<kit>.toml` with every path, port
+  and setting filled in (thinking off for LFM3, CPU servers kept off the GPU), adds the kit's
+  picture and video models to Models, and offers to switch to it.
+- **Move models**: copy model files off slow drives (external USB disks are spotted even though
+  Windows calls them fixed), checking each copy and pointing Models and Setup's tiers at it. The
+  originals are kept and your own tiers are never edited.
+- **Check for updates**: newer Wikipedia files and program releases, never installed on their own.
+
 ## v0.8.0: thinking ahead (2026-11-04)
 
 The next page is often already written.

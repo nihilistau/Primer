@@ -185,3 +185,51 @@
 .bw-step-t { font-weight: 500; overflow-wrap: anywhere; }
 .bw-step-a, .bw-step-w { color: var(--text-2); }
 .bw-foot { padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--hair); display: flex; }
+
+/* the Setup window (Phase 9). Colours come from the kit's tokens only. */
+.su .ui-tabs { margin: 0 var(--sp-2); }
+.su-kits { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--sp-2); }
+.su-kit { display: flex; flex-direction: column; gap: var(--sp-1); text-align: left; cursor: var(--cur-hand, pointer);
+  padding: var(--sp-2) var(--sp-3); background: var(--surface-0); border: 1px solid var(--hair-strong);
+  border-radius: var(--r-sm); color: var(--text-1); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.su-kit:hover:not(:disabled) { background: var(--hover-tint); }
+.su-kit:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--mood-h) 70% 60% / .6); }
+.su-kit:disabled { opacity: .6; }
+.su-kit-on { border-color: rgba(var(--accent-rgb), .6); background: rgba(var(--accent-rgb), .06); }
+.su-kit-top { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.su-kit-name { font: 600 var(--fs-13)/1.3 var(--font-ui); }
+.su-kit-size, .su-item-size { margin-left: auto; font: 400 var(--fs-11)/1.3 var(--font-mono); color: var(--text-3); }
+.su-kit-sum { color: var(--text-2); }
+.su-dest { display: flex; gap: var(--sp-2); align-items: center; }
+.su-dest .ui-field { flex: 1 1 auto; min-width: 0; }
+.su-role { margin-top: var(--sp-2); }
+.su-role-h { font: 500 var(--fs-12)/1.3 var(--font-ui); color: var(--text-2); margin: var(--sp-2) 0 0; }
+.su-item, .su-rel { padding: var(--sp-2) 0; border-bottom: 1px solid var(--hair); }
+.su-item:last-child, .su-rel:last-child { border-bottom: 0; }
+.su-item-skipped .su-item-name { color: var(--text-3); }
+.su-item-top, .su-item-meta, .su-go, .su-file { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.su-item-meta { margin-top: var(--sp-1); font: 400 var(--fs-11)/1.4 var(--font-ui); color: var(--text-3); }
+.su-item-meta .ui-field { width: auto; height: 24px; font-size: var(--fs-11); }
+.su-item-name { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); overflow-wrap: anywhere; }
+.su-skip { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-2); font: 400 var(--fs-12)/1.3 var(--font-ui); }
+.su-link { color: var(--accent); }
+.su-totals { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-3);
+  font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); }
+.su-totals b { color: var(--text-1); font-weight: 600; }
+.su-lics { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.su-lics li { display: flex; align-items: center; gap: var(--sp-3); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.su-why { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); }
+.su-bar { width: 100%; height: 4px; margin-top: var(--sp-1); accent-color: var(--accent); }
+.su-rel-warn { border: 1px solid rgba(var(--warn-rgb), .35); border-radius: var(--r-sm); padding: var(--sp-2); margin-top: var(--sp-2); }
+.su-file { padding-left: var(--sp-3); margin-top: var(--sp-1); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.su-file-name { color: var(--text-1); }
+.su-filebox { margin-top: var(--sp-1); }
+.su-sha-short { font: 400 var(--fs-11)/1.3 var(--font-mono); color: var(--text-3); }
+.su-sha { padding-left: var(--sp-3); font: 400 var(--fs-11)/1.4 var(--font-mono); color: var(--text-2);
+  overflow-wrap: anywhere; user-select: all; }
+.su-stale { opacity: .5; }
+.su-path { flex: 1 1 auto; min-width: 0; font: 400 var(--fs-12)/1.4 var(--font-mono); color: var(--text-1); overflow-wrap: anywhere; }
+.su-nobox { width: 16px; flex: none; }
+.su-role-tag { font: 400 var(--fs-11)/1.3 var(--font-ui); color: var(--text-3); }
+.su-moving { margin-top: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-1); }
+.su-result { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); }

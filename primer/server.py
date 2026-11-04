@@ -53,6 +53,7 @@ from primer.stories.service import StoryService
 from primer.voice.client import VoiceError, make_voice
 from primer.pages import OpenRequest, PageService
 from primer.servers import ManagedServer, ServerManager
+from primer.setup.api import ApiError, SetupApi, setup_status
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ UI_NOT_BUILT = {"error": "UI not built: run npm run build in ui/"}
 # GET routes that run a model or write, so they need a header a cross-site <img> or form can't
 # send (the UI sends it on every request; a fetch that adds it gets a preflight, which fails)
 PRIMER_HEADER = "X-Primer"
-NEEDS_PRIMER_HEADER = ("/v1/branches",)
+NEEDS_PRIMER_HEADER = ("/v1/branches", "/v1/setup/updates")
 MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm|wav)")
 MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm", ".wav": "audio/wav"}
 RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
@@ -187,6 +188,8 @@ class App:
     browse: BrowseService | None = None
     drafter: Drafter | None = None  # thinking ahead; a new one with every PageService
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
+    installer: object | None = None  # Setup's primer.setup.installer.Installer (serve.py builds it)
+    setup_api: SetupApi | None = None  # the /v1/setup/* logic; made on first use
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -195,6 +198,7 @@ class App:
     _voice_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _voice_cache: tuple | None = field(default=None, repr=False)  # (expires, url, healthy)
     _thinking: int | None = field(default=None, repr=False)  # saved thinking_ahead, None: unset
+    _setup_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         """Fill in what wasn't passed: the model store, a gate over these servers (also given
@@ -467,10 +471,18 @@ class App:
                 self._voice_cache = None
             return next(s for s in self.servers.statuses() if s["role"] == role)
 
+    def setup(self) -> SetupApi:
+        with self._setup_lock:
+            if self.setup_api is None:
+                self.setup_api = SetupApi(self)
+            return self.setup_api
+
     def status(self) -> dict:
+        servers = self.servers.statuses()
         return {"tier": self.tier.name, "tiers": list_tiers(self.tiers_dir),
                 "suggested_tier": suggest_tier(self.hardware),
-                "hardware": asdict(self.hardware), "servers": self.servers.statuses(),
+                "hardware": asdict(self.hardware), "servers": servers,
+                "setup": setup_status(self.installer, servers),
                 "source_mode": self.pages.source_mode, "sources": self.sources_status(),
                 "gpu_mode": self.tier.gpu_mode,
                 "images": self.images.server_status(), "image_available": self.image_available(),
@@ -752,6 +764,8 @@ def _make_handler(app: App):
                                     "stories": app.graph.stories_for(node.id)})
                 elif path == "/v1/image-models":
                     self._image_models()
+                elif path == "/v1/setup" or path.startswith("/v1/setup/"):
+                    self._setup_get(path, parse_qs(url.query))
                 elif path.startswith("/v1/images/") and "/" not in path[len("/v1/images/"):]:
                     try:
                         self._json(app.images.job(unquote(path[len("/v1/images/"):])))
@@ -861,6 +875,8 @@ def _make_handler(app: App):
                     self._json({"ok": True})
                 elif path == "/v1/image-models/scan":
                     self._scan(body)
+                elif path.startswith("/v1/setup/"):
+                    self._setup_post(path[len("/v1/setup/"):], body)
                 else:
                     self._json({"error": "not found"}, 404)
             except _BadRequest as e:
@@ -884,6 +900,34 @@ def _make_handler(app: App):
             except ConfigError as e:
                 raise _BadRequest(str(e)) from None
             self._json(app.status())
+
+        def _setup_get(self, path: str, q: dict) -> None:
+            try:
+                if path == "/v1/setup":
+                    self._json(app.setup().overview())
+                elif path == "/v1/setup/updates":
+                    self._json(app.setup().updates(refresh=q.get("refresh", [""])[0] == "1"))
+                elif path == "/v1/setup/models":
+                    self._json(app.setup().models())
+                else:
+                    raise _HttpError(404, "not found")
+            except ApiError as e:
+                raise _HttpError(e.status, e.reason) from None
+
+        def _setup_post(self, action: str, body: dict) -> None:
+            """POST /v1/setup/<action>; approvals run without app._lock (see primer.setup.api)."""
+            api = app.setup()
+            routes = {"plan": lambda: api.plan(body), "start": lambda: api.start(body), "pause": api.pause,
+                      "resume": api.resume, "cancel": lambda: api.cancel(body),
+                      "licence": lambda: api.licence(body), "approve": lambda: api.approve(body),
+                      "approve-release": lambda: api.approve_release(body), "move": lambda: api.move(body),
+                      "move/cancel": api.cancel_move}
+            if action not in routes:
+                raise _HttpError(404, "not found")
+            try:
+                self._json(routes[action]())
+            except ApiError as e:
+                raise _HttpError(e.status, e.reason) from None
 
         def _server_action(self, rest: str) -> None:
             role, _, action = rest.partition("/")

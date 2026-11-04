@@ -129,3 +129,17 @@ def test_build_app_gate_pauses_only_gpu_text_servers(tmp_path):
     finally:
         app.images.shutdown()
         app.pages.shutdown(drain=False)
+
+
+def test_build_app_wires_setup_approvals_to_retry_servers(tmp_path):
+    app = serve.build_app(serve.load_tier("light"), tmp_path / "var", tmp_path / "ui", TIERS_DIR, hardware=HW)
+    try:
+        calls = []
+        app.servers.retry_unavailable = lambda: calls.append(app._lock.locked()) or []
+        assert app.installer.approvals.on_approved is not None
+        serve._retry_after_approval(app).join(5)
+        assert calls == [True]  # under the app lock: a tier switch can't swap servers meanwhile
+    finally:
+        app.installer.shutdown()
+        app.images.shutdown()
+        app.pages.shutdown(drain=False)

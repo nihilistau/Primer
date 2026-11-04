@@ -199,7 +199,14 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def test_cli_over_local_http(tmp_path):
+def _local_opener(url, first):
+    """Test seam: the local fake server is plain http on loopback, which production refuses."""
+    import urllib.request
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), mx._CheckedRedirect())
+
+
+def test_cli_over_local_http(tmp_path, monkeypatch):
+    monkeypatch.setattr(mx, "make_opener", _local_opener)
     src, tiles = _source(tmp_path, maxz=3)
     _RangeHandler.data = src.read_bytes()
     _RangeHandler.seen = []
@@ -256,3 +263,58 @@ def test_extract_locked_output_keeps_part_and_explains(tmp_path, monkeypatch):
     monkeypatch.undo()
     mx.extract(_fetcher(src, []), out, maxzoom=2, log=lambda *a: None)
     assert out.exists()
+
+
+def test_addresses_refused_on_every_hop(monkeypatch):
+    import urllib.request
+
+    for url, first in (("http://build.protomaps.com/x.pmtiles", True),  # not https
+                       ("https://example.org/x.pmtiles", True),  # the default source: not an allowed host
+                       ("https://127.0.0.1/x.pmtiles", False),  # an IP number (loopback)
+                       ("https://169.254.169.254/x", False)):  # link-local
+        with pytest.raises(mx.RefusedAddress):
+            mx.make_opener(url, first)
+        with pytest.raises(mx.RefusedAddress):
+            mx.http_fetcher(url, first=first)
+    # a redirect is checked as well: http, or a private address, is refused
+    handler = mx._CheckedRedirect()
+    req = urllib.request.Request("https://build.protomaps.com/x.pmtiles")
+    for to in ("http://build.protomaps.com/x.pmtiles", "https://172.31.0.5/x.pmtiles"):
+        with pytest.raises(mx.RefusedAddress, match="redirect"):
+            handler.redirect_request(req, None, 302, "Found", {}, to)
+    # an allowed address gets an opener that ignores proxy settings
+    monkeypatch.setattr(mx, "check_url", lambda url, first: "build.protomaps.com")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    opener = mx.make_opener("https://build.protomaps.com/x.pmtiles", True)
+    proxies = [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
+    assert all(h.proxies == {} for h in proxies)  # the empty one replaces the default (env) one
+    plain = urllib.request.build_opener()  # what the default would have done
+    assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies for h in plain.handlers)
+    assert any(isinstance(h, mx._CheckedRedirect) for h in opener.handlers)
+
+
+class _Redirect(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", f"http://127.0.0.1:{self.server.server_address[1]}/elsewhere")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+def test_a_redirect_to_http_is_refused_without_retrying(monkeypatch):
+    monkeypatch.setattr(mx, "make_opener", _local_opener)
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Redirect)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    slept = []
+    try:
+        fetch = mx.http_fetcher(f"http://127.0.0.1:{srv.server_address[1]}/src.pmtiles", retries=3,
+                                sleep=slept.append)
+        with pytest.raises(OSError, match="redirect .* refused"):
+            fetch(0, 127)
+        assert slept == []  # refused at once, not retried
+    finally:
+        srv.shutdown()
+        srv.server_close()

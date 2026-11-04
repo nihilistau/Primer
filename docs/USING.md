@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
+A guide to setting up, reading, branching, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -16,6 +16,74 @@ dock at the bottom opens:
 | Grid | **Map of where I've been**: every page you've opened, as a tree. |
 | Chip | **Engines**: the tier, the model servers and their states, and the GPU mode. |
 | Wrench | **Models**: add, scan, edit and choose picture and video models. |
+| Arrow | **Setup**: download a starter kit of models, programs, Wikipedia and a map, move models, check for updates. |
+
+## Setup
+
+Setup gets Primer going without hunting for files. It opens by itself the first time no writing
+model is available, and from the dock (the arrow) at any time.
+
+**Install** has four steps on one screen:
+
+1. **Choose a kit.** Setup suggests one from your graphics card, with the reason:
+   - **Light** (about 5 GB): for a CPU or a small GPU. LFM3 1.7B writes and does the fast jobs,
+     LFM3-Audio reads aloud, the 50,000 most-read Wikipedia articles (introductions), a world map
+     to town level, and the llama.cpp and kiwix-tools programs.
+   - **Hybrid** (about 27 GB): for an 8 to 20 GB GPU. gemma-4-E4B writes on the GPU, LFM3 does
+     the fast jobs and the voice on the CPU, Qwen-Image 2.1 draws, the top Wikipedia articles in
+     full, the map to zoom 9, and CUDA builds of llama.cpp and stable-diffusion.cpp.
+   - **Workstation** (about 63 GB): as Hybrid with larger quants, plus Wan 2.2 video and the
+     opening of every Wikipedia article.
+2. **Choose a folder** on an internal drive. Setup shows its free space, and refuses network
+   drives, removable drives, the drive itself, the Primer folder and any folder holding it.
+   External USB disks are
+   allowed but never suggested: models load slowly from them.
+3. **Check the plan.** Every item shows its size, licence and source. **Skip** anything you don't
+   want, or pick another size from the list beside it (a smaller quant, or on Hybrid and
+   Workstation the Vulkan or CPU build). Skipping the writing model, or llama.cpp when no
+   llama-server is on the PATH, is refused: no tier could be written without them. Items already
+   in the folder show as **Already here** and aren't downloaded again (programs count only once
+   this Primer has recorded them; ones another Primer left there are unpacked again, so you can
+   approve them as one release). The total is shown against the free space, with room to unpack
+   the programs and cut the map.
+4. **Accept the licences** (each one once, with a link to read it) and press **Download**.
+
+Downloads run one at a time in the background, with speed and time left. **Pause** and
+**Resume** carry on from where they stopped, and so does quitting Primer and starting it again
+(the map cut starts again if a newer Protomaps world build appeared meanwhile). A file its
+server no longer offers says so: check the plan again to pick up the newer one.
+Every file is checked against the hash its publisher gives before it is used (Hugging Face and
+Kiwix publish SHA-256, GitHub release files too; kiwix-tools only MD5). The map is cut from the
+newest Protomaps world build and checked by reading it back.
+
+![The Setup window after installing the Light kit: every item, from LFM3 1.7B and LFM3-Audio to Wikipedia, the world map, llama.cpp and kiwix-tools, marked Done with its size, and below them the programs waiting for approval, grouped by release with each file's SHA-256 and an Approve all from this release button](screenshots/setup.webp)
+
+**Approve the programs.** Setup never runs a program it downloaded until you approve it. Each
+release is listed with its publisher, release and every file's SHA-256; **Approve all from this
+release** approves them together. A program or DLL that Setup did not put there (for example one
+copied into the folder later) is listed apart, with a warning, and has to be approved on its own.
+Primer refuses to start a program in a Setup folder that isn't approved, or whose file has
+changed since.
+
+When everything is in, Setup writes a tier called `local-<kit>` (for example `local-light`) with
+every path, port and setting filled in, adds the kit's picture and video models to **Models**
+(the first of each kind becomes the default if you had none),
+and offers **Switch to the new tier**. Setup rewrites that file whole each time, so make a copy
+under another name if you want to change it.
+
+A **Hugging Face token** is only needed for gated models (none of the kits use one). Put it in
+`var/keys/huggingface.key`; Setup sends it only to huggingface.co.
+
+**Move models** lists the model files your tier and the Models window use, with their drive.
+Files on slow drives (external USB disks, removable or network drives) are marked. Tick some,
+choose a folder on another drive and press **Move**: each file is copied, checked, and the
+Models window and Setup's own tiers are pointed at the copy. Your originals are kept; delete
+them yourself when you're happy. Your own tier files are never edited: Setup lists the ones that
+still name a moved file. Files Setup installed stay where they are (choose another folder in
+Setup to use another drive).
+
+**Updates** lists newer Wikipedia files and newer program releases. Nothing is ever updated on
+its own.
 
 ## Reading
 

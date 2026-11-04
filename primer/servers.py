@@ -1,6 +1,7 @@
 """Launch, health-check and stop the model servers a tier manages."""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -15,10 +16,20 @@ from primer.engines import make_engine
 from primer.grounding.kiwix import KiwixClient
 from primer.voice.client import make_voice
 
+log = logging.getLogger(__name__)
 POLL_S = 0.5
 STOP_WAIT_S = 5
 STOP_CMD_TIMEOUT_S = 30
 LAUNCHER_NOTE = "launched via a launcher; no stop command configured"
+# may_launch(executable) -> a refusal reason, or None. serve.py installs Setup's approval check
+# here, so every managed server (text, fast, reference, voice, sd-server) consults it.
+_default_may_launch: Callable[[str], str | None] | None = None
+
+
+def set_launch_check(fn: Callable[[str], str | None] | None) -> None:
+    """The check every ManagedServer without its own may_launch uses before spawning."""
+    global _default_may_launch
+    _default_may_launch = fn
 
 
 def _port(base_url: str) -> int | None:
@@ -29,8 +40,10 @@ def _port(base_url: str) -> int | None:
 
 
 class ManagedServer:
-    def __init__(self, role: str, spec: EngineSpec, health: Callable[[], bool] | None = None):
+    def __init__(self, role: str, spec: EngineSpec, health: Callable[[], bool] | None = None,
+                 may_launch: Callable[[str], str | None] | None = None):
         self.role = role
+        self._may_launch = may_launch
         self.spec = spec
         engine = None if health else make_engine(spec)
         self._health = health or engine.health
@@ -42,6 +55,11 @@ class ManagedServer:
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def _refusal(self, executable: str) -> str | None:
+        """Why `executable` may not run (Setup's approval check), or None."""
+        check = self._may_launch or _default_may_launch
+        return check(executable) if check is not None else None
 
     def _unhealthy_reason(self, base: str) -> str:
         """`base`, plus what the engine learned about why health never passed (e.g. HTTP 401)."""
@@ -100,6 +118,13 @@ class ManagedServer:
             return
         if not self.spec.launch:
             self._set("failed", "managed but no launch command configured", ev)
+            return
+        # The check hashes the executable, then Popen runs it: someone who can write to the
+        # setup root could swap the file in that short window. Setup's guard is against
+        # downloaded and replaced files, not a local attacker with write access to the root.
+        refusal = self._refusal(self.spec.launch[0])
+        if refusal:  # e.g. an executable Setup downloaded that isn't approved: spawn nothing
+            self._set("unavailable", refusal, ev)
             return
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         with self._lock:  # cancel-check and launch are atomic with respect to stop()
@@ -207,9 +232,13 @@ class ManagedServer:
     def _run_stop_command(self) -> str:
         return self._run_command(self.spec.stop, "stop")
 
-    @staticmethod
-    def _run_command(cmd: tuple[str, ...], what: str) -> str:
-        """Run a configured stop/pause command; returns "" on success, else what went wrong."""
+    def _run_command(self, cmd: tuple[str, ...], what: str) -> str:
+        """Run a configured stop/pause command; returns "" on success, else what went wrong.
+        The same approval check as the launch applies: a refused command isn't run."""
+        refusal = self._refusal(cmd[0]) if cmd else None
+        if refusal:
+            log.warning("%s command for %s not run: %s", what, self.role, refusal)
+            return f"{what} command not run: {refusal}"
         try:
             done = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True,
                                   timeout=STOP_CMD_TIMEOUT_S)
@@ -285,6 +314,20 @@ class ServerManager:
 
     def stop(self, role: str) -> None:
         self._get(role).stop()
+
+    def retry_unavailable(self) -> list[str]:
+        """Start again the servers refused for want of a Setup approval (state "unavailable");
+        returns their roles. serve.py calls this after an approval is recorded."""
+        roles, seen = [], set()
+        for role in self.ROLES:
+            s = self._servers[role]
+            st = s.status()
+            if id(s) in seen or st["state"] != "unavailable" or "in Setup" not in st["reason"]:
+                continue
+            seen.add(id(s))
+            s.start(wait=False)
+            roles.append(role)
+        return roles
 
     def statuses(self) -> list[dict]:
         return [{**self._servers[r].status(), "role": r} for r in self.ROLES]

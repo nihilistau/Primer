@@ -109,29 +109,8 @@ with no dependencies and should run elsewhere too, but that hasn't been tried ye
 
 - **Python 3.11 or newer.** Nothing to `pip install`: the server uses only the standard library.
 - **Node.js 20 or newer**, to build the interface once.
-- **A text model server**, any one of:
-  - [LM Studio](https://lmstudio.ai/) with its `lms` command on your PATH, or
-  - [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` and a GGUF model, or
-  - a hosted OpenAI-compatible API (bring your own key).
-- **For pictures and video (optional):** a
-  [stable-diffusion.cpp release](https://github.com/leejet/stable-diffusion.cpp/releases) (CUDA,
-  Vulkan or CPU build) and at least one model: an SDXL checkpoint, Qwen-Image 2.1 or MOSS-Image
-  for pictures; Wan 2.2 or LTX-2.3 for video (see [docs/RUNNING.md](docs/RUNNING.md#video)).
-- **For an offline encyclopedia (optional):**
-  [kiwix-tools](https://download.kiwix.org/release/kiwix-tools/) and one or more Wikipedia
-  [ZIM files](https://download.kiwix.org/zim/wikipedia/), for example
-  `wikipedia_en_top_nopic` (2.6 GB, the 50,000 most-read articles in full) or
-  `wikipedia_en_all_mini` (13 GB, the opening of every article). See
-  [docs/RUNNING.md](docs/RUNNING.md#grounding).
-- **For a voice (optional):** a recent llama.cpp `llama-server` and LFM3-Audio-2B with its
-  mmproj file, or an OpenAI-style speech endpoint. See [docs/RUNNING.md](docs/RUNNING.md#voice).
-- **For the map (optional):** a Protomaps map file. `tools/map_extract.py` makes one for you
-  (the whole world in about 1.6 GB), plus Protomaps' free fonts and icons. See
-  [docs/RUNNING.md](docs/RUNNING.md#maps).
-
-A good small setup is a 4B to 12B instruct model on the GPU for writing, plus a 1B to 2B model on
-the CPU for picking highlights. Measured on an RTX 2060 (12 GB), a page takes about a minute with
-gemma-4-E4B.
+- **Disk space** for the models: about 5 GB for the Light kit, 27 GB for Hybrid, 63 GB for
+  Workstation. **Setup** downloads everything else.
 
 ### 2. Get it and build it
 
@@ -141,34 +120,47 @@ cd Primer
 cd ui && npm install && npm run build && cd ..
 ```
 
-### 3. Point it at your models
-
-Pick a tier in `tiers/` and edit it to name the models you have:
-
-| Tier | For |
-| --- | --- |
-| `light` | CPU only, or a small GPU. One small model does everything. |
-| `hybrid` | One GPU (8 GB or more). LM Studio for writing, plus a small fast model. |
-| `workstation` | A big GPU (20 GB or more) and larger models. |
-| `hosted` | A hosted OpenAI-compatible API. |
-
-The model names in the shipped tiers are placeholders; they must match what your server reports
-(`lms ls` for LM Studio). To draw pictures, uncomment the `[images]` block and set `sd_server`
-to the path of `sd-server`. For the offline encyclopedia, uncomment `[reference]` and set
-`kiwix_serve` and `zims`. For the map, uncomment `[map]`; for a voice, `[voice]`. Every option is described in [docs/RUNNING.md](docs/RUNNING.md).
-
-### 4. Run it
+### 3. Run it and open Setup
 
 ```bash
-python serve.py --tier hybrid
+python serve.py
 ```
 
-Then open **http://127.0.0.1:8810**. Primer starts the model servers its tier manages, and stops
-them when you quit. Without `--tier` it uses the tier you last chose, or suggests one from your
-GPU's memory.
+Then open **http://127.0.0.1:8810**. The first time, **Setup** opens by itself. It suggests a kit
+for your graphics card:
 
-To add picture or video models, open **Models** from the dock, paste the folder that holds them
-into **Scan a folder**, and click **Add** on each model it finds.
+| Kit | For | Size |
+| --- | --- | --- |
+| Light | CPU only, or a small GPU. One small model writes and does the fast jobs. | about 5 GB |
+| Hybrid | One GPU with 8 to 20 GB. Writing and pictures on the GPU, the fast jobs and voice on the CPU. | about 27 GB |
+| Workstation | 20 GB or more. As Hybrid with larger models, plus video and every Wikipedia article. | about 63 GB |
+
+Choose a folder, check the plan (skip or swap anything), accept the licences and press
+**Download**. Setup fetches the models from Hugging Face, the programs (llama.cpp,
+stable-diffusion.cpp, kiwix-tools) from their publishers, an offline Wikipedia from Kiwix and a
+world map from Protomaps, checks every file against its published hash, and asks you to approve
+each program before it runs. Then it writes a tier with everything filled in: press **Switch to
+the new tier** and start reading. See [docs/USING.md](docs/USING.md#setup).
+
+![The Setup window after installing the Light kit: every item, from LFM3 1.7B and LFM3-Audio to Wikipedia, the world map, llama.cpp and kiwix-tools, marked Done with its size, and below them the programs waiting for approval, grouped by release with each file's SHA-256 and an Approve all from this release button](docs/screenshots/setup.webp)
+
+### Or set it up by hand
+
+Primer works with any of: [LM Studio](https://lmstudio.ai/) (`lms` on your PATH),
+[llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` with a GGUF model, or a
+hosted OpenAI-compatible API. Pick a tier in `tiers/` (`light`, `hybrid`, `workstation`,
+`hosted`) and edit it to name your models; their model names are placeholders. Uncomment
+`[images]`, `[reference]`, `[map]` or `[voice]` for pictures and video
+([stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp/releases)), an offline
+encyclopedia ([kiwix-tools](https://download.kiwix.org/release/kiwix-tools/) and
+[ZIM files](https://download.kiwix.org/zim/wikipedia/)), the map (`tools/map_extract.py`) or a
+voice (LFM3-Audio-2B). Every option is in [docs/RUNNING.md](docs/RUNNING.md). Then run
+`python serve.py --tier <name>`.
+
+To add picture or video models you already have, open **Models** from the dock, paste the folder
+that holds them into **Scan a folder**, and click **Add** on each model it finds. A good small
+setup is a 4B to 12B instruct model on the GPU for writing plus a 1B to 2B model on the CPU;
+on an RTX 2060 (12 GB) a page takes about a minute with gemma-4-E4B.
 
 ## How to use it
 
@@ -200,14 +192,18 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
   is sent).
 - Fetched pages and encyclopedia articles are treated as reference text, never as instructions
   to the model, and are never shown as HTML inside Primer.
+- **Setup** downloads only from Hugging Face, Kiwix, GitHub and Protomaps (and the mirrors and
+  CDNs they redirect to), checks every file against its publisher's hash, and runs no program
+  it downloaded until you approve it by its SHA-256. A Hugging Face token, if you add one, is sent only to huggingface.co.
 - Model files must be local `.safetensors` or `.gguf` files. Pickle formats (`.ckpt`, `.pt`,
   `.bin`) and network paths are refused, and no command line can be set from the browser.
 
 ## Status
 
-This is **v0.8**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, the map, narrated stories, the reader browser and thinking ahead work. A browser that drives a real Chrome
-(for sites that need scripts or a login) is planned next. The
+This is **v0.9**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, the map, narrated stories, the reader browser, thinking ahead and the Setup window work.
+Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): a reader model that
+learns what you like and asks you back. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

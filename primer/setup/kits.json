@@ -1,0 +1,1244 @@
+{
+ "_comment": [
+  "Primer Setup starter kits. Each item names its source and a default choice; exact sizes and hashes are resolved live from the catalogues (primer/setup/kits.py). size_hint is the size seen when the kit was checked, used only before resolving.",
+  "Every repo, file, asset pattern and ZIM here was checked against the live catalogues on the _checked date. Map sizes are estimates: tools/map_extract.py cuts the file, which has no published hash. The fonts zip is pinned by commit and SHA-256 (two fetches of the codeload zip were byte-identical). That zip holds symlinks (a font alias folder): source.symlinks = 'skip' asks the installer to leave them out rather than refuse the archive."
+ ],
+ "_checked": "2026-11-04",
+ "map_estimates": {
+  "8": 450000000,
+  "9": 1600000000
+ },
+ "kits": [
+  {
+   "id": "light",
+   "label": "Light",
+   "for": {
+    "min_vram_gb": 0,
+    "max_vram_gb": 8
+   },
+   "summary": "CPU or a small GPU: one small model writes and does the fast jobs.",
+   "items": [
+    {
+     "id": "writing_model",
+     "role": "text",
+     "label": "LFM3 1.7B (writing and the fast jobs)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-1.7B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "LFM3-1.7B-Q4_K_M.gguf",
+       "size_hint": 1099627808
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "LFM3-1.7B-Q5_K_M.gguf",
+       "size_hint": 1258663200
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "LFM3-1.7B-Q6_K.gguf",
+       "size_hint": 1427638304
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "LFM3-1.7B-Q8_0.gguf",
+       "size_hint": 1846238496
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "voice_model",
+     "role": "voice",
+     "label": "LFM3-Audio 2B (voice)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smaller)",
+       "file": "LFM3-Audio-2B-Q4_K_M.gguf",
+       "size_hint": 1099626016
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0",
+       "file": "LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 1846236704
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "voice_mmproj",
+     "role": "voice_mmproj",
+     "label": "LFM3-Audio 2B audio projector",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (smaller)",
+       "file": "mmproj-LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 303811840
+      },
+      {
+       "id": "f16",
+       "label": "F16",
+       "file": "mmproj-LFM3-Audio-2B-F16.gguf",
+       "size_hint": 570846400
+      }
+     ],
+     "default": "f16"
+    },
+    {
+     "id": "zim_top",
+     "role": "reference",
+     "label": "Wikipedia, top articles",
+     "source": {
+      "type": "zim",
+      "name": "wikipedia_en_top",
+      "licence": "CC-BY-SA-4.0",
+      "licence_link": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "choices": [
+      {
+       "id": "mini",
+       "label": "mini (introductions only)",
+       "flavour": "mini",
+       "size_hint": 296858624
+      },
+      {
+       "id": "nopic",
+       "label": "nopic (full text)",
+       "flavour": "nopic",
+       "size_hint": 2745850880
+      },
+      {
+       "id": "maxi",
+       "label": "maxi (with pictures)",
+       "flavour": "maxi",
+       "size_hint": 6991082496
+      }
+     ],
+     "default": "mini"
+    },
+    {
+     "id": "map",
+     "role": "map",
+     "label": "World map (Protomaps, OpenStreetMap data)",
+     "source": {
+      "type": "map",
+      "licence": "ODbL-1.0",
+      "licence_link": "https://www.openstreetmap.org/copyright"
+     },
+     "choices": [
+      {
+       "id": "z8",
+       "label": "to zoom 8 (towns)",
+       "maxzoom": 8
+      },
+      {
+       "id": "z9",
+       "label": "to zoom 9 (more towns and roads)",
+       "maxzoom": 9
+      }
+     ],
+     "default": "z8"
+    },
+    {
+     "id": "map_fonts",
+     "role": "fonts",
+     "label": "Map fonts and sprites (Protomaps basemaps-assets)",
+     "source": {
+      "type": "archive",
+      "repo": "protomaps/basemaps-assets",
+      "commit": "028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "licence": "OFL-1.1 (fonts) + MIT (sprites)",
+      "licence_link": "https://github.com/protomaps/basemaps-assets/blob/028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/OFL.txt",
+      "licence_note": "Fonts: SIL Open Font License 1.1 (fonts/OFL.txt). Sprites: derived from MIT-licensed tangrams/icons (https://github.com/tangrams/icons/blob/master/LICENSE.md).",
+      "assets_subdir": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "marker": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/Noto Sans Regular/0-255.pbf",
+      "symlinks": "skip"
+     },
+     "choices": [
+      {
+       "id": "pinned",
+       "label": "commit 028c18f",
+       "url": "https://codeload.github.com/protomaps/basemaps-assets/zip/028c18f713baecad011301ff7a69acc39bcc2ae7",
+       "sha256": "e942a417d94a12596842a20b53d6b785cbf6d47f2545e458538191ba6d74b305",
+       "size": 6731115,
+       "size_hint": 6731115
+      }
+     ],
+     "default": "pinned"
+    },
+    {
+     "id": "llama_cpp",
+     "role": "runtime_llama",
+     "label": "llama.cpp (llama-server)",
+     "source": {
+      "type": "github",
+      "repo": "ggml-org/llama.cpp",
+      "tool": "llama.cpp",
+      "exe": "llama-server.exe",
+      "licence": "MIT",
+      "licence_link": "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE"
+     },
+     "choices": [
+      {
+       "id": "cpu",
+       "label": "CPU",
+       "pattern": "^llama-b\\d+-bin-win-cpu-x64\\.zip$",
+       "size_hint": 24707363
+      }
+     ],
+     "default": "cpu"
+    },
+    {
+     "id": "kiwix_tools",
+     "role": "runtime_kiwix",
+     "label": "kiwix-tools (kiwix-serve)",
+     "source": {
+      "type": "url",
+      "tool": "kiwix-tools",
+      "release": "3.8.1",
+      "exe": "kiwix-serve.exe",
+      "licence": "GPL-3.0",
+      "licence_link": "https://github.com/kiwix/kiwix-tools/blob/main/COPYING"
+     },
+     "choices": [
+      {
+       "id": "win64",
+       "label": "Windows x86_64",
+       "url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip",
+       "md5_url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip.md5",
+       "size": 18301924,
+       "size_hint": 18301924
+      }
+     ],
+     "default": "win64"
+    }
+   ]
+  },
+  {
+   "id": "hybrid",
+   "label": "Hybrid",
+   "for": {
+    "min_vram_gb": 8,
+    "max_vram_gb": 20
+   },
+   "summary": "An 8-20 GB GPU: writing and pictures on the GPU, the fast jobs and voice on the CPU.",
+   "items": [
+    {
+     "id": "writing_model",
+     "role": "text",
+     "label": "Gemma 4 E4B (writing, on the GPU)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/gemma-4-E4B-it-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+       "size_hint": 4977171584
+      },
+      {
+       "id": "ud_q4_k_xl",
+       "label": "UD-Q4_K_XL",
+       "file": "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
+       "size_hint": 5126306944
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "gemma-4-E4B-it-Q5_K_M.gguf",
+       "size_hint": 5481798784
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "gemma-4-E4B-it-Q6_K.gguf",
+       "size_hint": 7074929792
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "gemma-4-E4B-it-Q8_0.gguf",
+       "size_hint": 8192953472
+      }
+     ],
+     "default": "q6_k",
+     "gpu": true
+    },
+    {
+     "id": "fast_model",
+     "role": "fast",
+     "label": "LFM3 1.7B (fast jobs, on the CPU)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-1.7B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "LFM3-1.7B-Q4_K_M.gguf",
+       "size_hint": 1099627808
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "LFM3-1.7B-Q5_K_M.gguf",
+       "size_hint": 1258663200
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "LFM3-1.7B-Q6_K.gguf",
+       "size_hint": 1427638304
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "LFM3-1.7B-Q8_0.gguf",
+       "size_hint": 1846238496
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "image_model",
+     "role": "image",
+     "label": "Qwen-Image 2.1 (pictures)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "qwen-image-2.1-Q4_K_M.gguf",
+       "size_hint": 4199565024
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "qwen-image-2.1-Q5_K_M.gguf",
+       "size_hint": 5390223072
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "qwen-image-2.1-Q6_K.gguf",
+       "size_hint": 6271551200
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "qwen-image-2.1-Q8_0.gguf",
+       "size_hint": 7640860384
+      }
+     ],
+     "default": "q4_k_m"
+    },
+    {
+     "id": "image_encoder",
+     "role": "image_encoder",
+     "label": "Qwen3-VL 8B (Qwen-Image's text encoder)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M",
+       "file": "Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
+       "size_hint": 5027785568
+      },
+      {
+       "id": "ud_q4_k_xl",
+       "label": "UD-Q4_K_XL (the publisher's pick)",
+       "file": "Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf",
+       "size_hint": 5148699488
+      },
+      {
+       "id": "ud_q6_k_xl",
+       "label": "UD-Q6_K_XL",
+       "file": "Qwen3-VL-8B-Instruct-UD-Q6_K_XL.gguf",
+       "size_hint": 7490550624
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "Qwen3-VL-8B-Instruct-Q8_0.gguf",
+       "size_hint": 8709520224
+      }
+     ],
+     "default": "ud_q4_k_xl"
+    },
+    {
+     "id": "image_vae",
+     "role": "image_vae",
+     "label": "Qwen-Image 2.1 VAE",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen-Image-2.1-FP8"
+     },
+     "choices": [
+      {
+       "id": "bf16",
+       "label": "BF16",
+       "file": "vae/qwen_image_2.1_vae_bf16.safetensors",
+       "size_hint": 675508656
+      }
+     ],
+     "default": "bf16"
+    },
+    {
+     "id": "voice_model",
+     "role": "voice",
+     "label": "LFM3-Audio 2B (voice)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smaller)",
+       "file": "LFM3-Audio-2B-Q4_K_M.gguf",
+       "size_hint": 1099626016
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0",
+       "file": "LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 1846236704
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "voice_mmproj",
+     "role": "voice_mmproj",
+     "label": "LFM3-Audio 2B audio projector",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (smaller)",
+       "file": "mmproj-LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 303811840
+      },
+      {
+       "id": "f16",
+       "label": "F16",
+       "file": "mmproj-LFM3-Audio-2B-F16.gguf",
+       "size_hint": 570846400
+      }
+     ],
+     "default": "f16"
+    },
+    {
+     "id": "zim_top",
+     "role": "reference",
+     "label": "Wikipedia, top articles",
+     "source": {
+      "type": "zim",
+      "name": "wikipedia_en_top",
+      "licence": "CC-BY-SA-4.0",
+      "licence_link": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "choices": [
+      {
+       "id": "mini",
+       "label": "mini (introductions only)",
+       "flavour": "mini",
+       "size_hint": 296858624
+      },
+      {
+       "id": "nopic",
+       "label": "nopic (full text)",
+       "flavour": "nopic",
+       "size_hint": 2745850880
+      },
+      {
+       "id": "maxi",
+       "label": "maxi (with pictures)",
+       "flavour": "maxi",
+       "size_hint": 6991082496
+      }
+     ],
+     "default": "nopic"
+    },
+    {
+     "id": "map",
+     "role": "map",
+     "label": "World map (Protomaps, OpenStreetMap data)",
+     "source": {
+      "type": "map",
+      "licence": "ODbL-1.0",
+      "licence_link": "https://www.openstreetmap.org/copyright"
+     },
+     "choices": [
+      {
+       "id": "z8",
+       "label": "to zoom 8 (towns)",
+       "maxzoom": 8
+      },
+      {
+       "id": "z9",
+       "label": "to zoom 9 (more towns and roads)",
+       "maxzoom": 9
+      }
+     ],
+     "default": "z9"
+    },
+    {
+     "id": "map_fonts",
+     "role": "fonts",
+     "label": "Map fonts and sprites (Protomaps basemaps-assets)",
+     "source": {
+      "type": "archive",
+      "repo": "protomaps/basemaps-assets",
+      "commit": "028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "licence": "OFL-1.1 (fonts) + MIT (sprites)",
+      "licence_link": "https://github.com/protomaps/basemaps-assets/blob/028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/OFL.txt",
+      "licence_note": "Fonts: SIL Open Font License 1.1 (fonts/OFL.txt). Sprites: derived from MIT-licensed tangrams/icons (https://github.com/tangrams/icons/blob/master/LICENSE.md).",
+      "assets_subdir": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "marker": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/Noto Sans Regular/0-255.pbf",
+      "symlinks": "skip"
+     },
+     "choices": [
+      {
+       "id": "pinned",
+       "label": "commit 028c18f",
+       "url": "https://codeload.github.com/protomaps/basemaps-assets/zip/028c18f713baecad011301ff7a69acc39bcc2ae7",
+       "sha256": "e942a417d94a12596842a20b53d6b785cbf6d47f2545e458538191ba6d74b305",
+       "size": 6731115,
+       "size_hint": 6731115
+      }
+     ],
+     "default": "pinned"
+    },
+    {
+     "id": "llama_cpp",
+     "role": "runtime_llama",
+     "label": "llama.cpp (llama-server)",
+     "source": {
+      "type": "github",
+      "repo": "ggml-org/llama.cpp",
+      "tool": "llama.cpp",
+      "exe": "llama-server.exe",
+      "licence": "MIT",
+      "licence_link": "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE"
+     },
+     "choices": [
+      {
+       "id": "cuda",
+       "label": "CUDA 12 (NVIDIA)",
+       "pattern": "^llama-b\\d+-bin-win-cuda-12\\.\\d+-x64\\.zip$",
+       "size_hint": 287012764
+      },
+      {
+       "id": "vulkan",
+       "label": "Vulkan (any GPU)",
+       "pattern": "^llama-b\\d+-bin-win-vulkan-x64\\.zip$",
+       "size_hint": 37660949
+      },
+      {
+       "id": "cpu",
+       "label": "CPU",
+       "pattern": "^llama-b\\d+-bin-win-cpu-x64\\.zip$",
+       "size_hint": 24707363
+      }
+     ],
+     "default": "cuda"
+    },
+    {
+     "id": "llama_cudart",
+     "role": "runtime_llama_cudart",
+     "label": "CUDA 12 runtime for llama.cpp",
+     "source": {
+      "type": "github",
+      "repo": "ggml-org/llama.cpp",
+      "beside": "llama_cpp",
+      "marker": "cudart64_12.dll",
+      "licence": "NVIDIA-CUDA-EULA",
+      "licence_link": "https://docs.nvidia.com/cuda/eula/index.html"
+     },
+     "requires": {
+      "llama_cpp": "cuda"
+     },
+     "choices": [
+      {
+       "id": "cuda12",
+       "label": "CUDA 12",
+       "pattern": "^cudart-llama-bin-win-cuda-12\\.\\d+-x64\\.zip$",
+       "size_hint": 391443627
+      }
+     ],
+     "default": "cuda12"
+    },
+    {
+     "id": "sd_cpp",
+     "role": "runtime_sd",
+     "label": "stable-diffusion.cpp (sd-server)",
+     "source": {
+      "type": "github",
+      "repo": "leejet/stable-diffusion.cpp",
+      "tool": "stable-diffusion.cpp",
+      "exe": "sd-server.exe",
+      "licence": "MIT",
+      "licence_link": "https://github.com/leejet/stable-diffusion.cpp/blob/master/LICENSE"
+     },
+     "choices": [
+      {
+       "id": "cuda",
+       "label": "CUDA 12 (NVIDIA)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-cuda12-x64\\.zip$",
+       "size_hint": 362084003
+      },
+      {
+       "id": "vulkan",
+       "label": "Vulkan (any GPU)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-vulkan-x64\\.zip$",
+       "size_hint": 29805929
+      },
+      {
+       "id": "cpu",
+       "label": "CPU (slow)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-cpu-x64\\.zip$",
+       "size_hint": 18069874
+      }
+     ],
+     "default": "cuda"
+    },
+    {
+     "id": "sd_cudart",
+     "role": "runtime_sd_cudart",
+     "label": "CUDA 12 runtime for stable-diffusion.cpp",
+     "source": {
+      "type": "github",
+      "repo": "leejet/stable-diffusion.cpp",
+      "beside": "sd_cpp",
+      "marker": "cudart64_12.dll",
+      "licence": "NVIDIA-CUDA-EULA",
+      "licence_link": "https://docs.nvidia.com/cuda/eula/index.html"
+     },
+     "requires": {
+      "sd_cpp": "cuda"
+     },
+     "choices": [
+      {
+       "id": "cuda12",
+       "label": "CUDA 12",
+       "pattern": "^cudart-sd-bin-win-cu12-x64\\.zip$",
+       "size_hint": 563452046
+      }
+     ],
+     "default": "cuda12"
+    },
+    {
+     "id": "kiwix_tools",
+     "role": "runtime_kiwix",
+     "label": "kiwix-tools (kiwix-serve)",
+     "source": {
+      "type": "url",
+      "tool": "kiwix-tools",
+      "release": "3.8.1",
+      "exe": "kiwix-serve.exe",
+      "licence": "GPL-3.0",
+      "licence_link": "https://github.com/kiwix/kiwix-tools/blob/main/COPYING"
+     },
+     "choices": [
+      {
+       "id": "win64",
+       "label": "Windows x86_64",
+       "url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip",
+       "md5_url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip.md5",
+       "size": 18301924,
+       "size_hint": 18301924
+      }
+     ],
+     "default": "win64"
+    }
+   ]
+  },
+  {
+   "id": "workstation",
+   "label": "Workstation",
+   "for": {
+    "min_vram_gb": 20,
+    "max_vram_gb": null
+   },
+   "summary": "20 GB or more: as Hybrid with larger quants, plus video and every Wikipedia article.",
+   "items": [
+    {
+     "id": "writing_model",
+     "role": "text",
+     "label": "Gemma 4 E4B (writing, on the GPU)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/gemma-4-E4B-it-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "gemma-4-E4B-it-Q4_K_M.gguf",
+       "size_hint": 4977171584
+      },
+      {
+       "id": "ud_q4_k_xl",
+       "label": "UD-Q4_K_XL",
+       "file": "gemma-4-E4B-it-UD-Q4_K_XL.gguf",
+       "size_hint": 5126306944
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "gemma-4-E4B-it-Q5_K_M.gguf",
+       "size_hint": 5481798784
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "gemma-4-E4B-it-Q6_K.gguf",
+       "size_hint": 7074929792
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "gemma-4-E4B-it-Q8_0.gguf",
+       "size_hint": 8192953472
+      }
+     ],
+     "default": "q8_0",
+     "gpu": true
+    },
+    {
+     "id": "fast_model",
+     "role": "fast",
+     "label": "LFM3 1.7B (fast jobs, on the CPU)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-1.7B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "LFM3-1.7B-Q4_K_M.gguf",
+       "size_hint": 1099627808
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "LFM3-1.7B-Q5_K_M.gguf",
+       "size_hint": 1258663200
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "LFM3-1.7B-Q6_K.gguf",
+       "size_hint": 1427638304
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "LFM3-1.7B-Q8_0.gguf",
+       "size_hint": 1846238496
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "image_model",
+     "role": "image",
+     "label": "Qwen-Image 2.1 (pictures)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen-Image-2.1-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "qwen-image-2.1-Q4_K_M.gguf",
+       "size_hint": 4199565024
+      },
+      {
+       "id": "q5_k_m",
+       "label": "Q5_K_M",
+       "file": "qwen-image-2.1-Q5_K_M.gguf",
+       "size_hint": 5390223072
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "qwen-image-2.1-Q6_K.gguf",
+       "size_hint": 6271551200
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "qwen-image-2.1-Q8_0.gguf",
+       "size_hint": 7640860384
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "image_encoder",
+     "role": "image_encoder",
+     "label": "Qwen3-VL 8B (Qwen-Image's text encoder)",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen3-VL-8B-Instruct-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M",
+       "file": "Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
+       "size_hint": 5027785568
+      },
+      {
+       "id": "ud_q4_k_xl",
+       "label": "UD-Q4_K_XL (the publisher's pick)",
+       "file": "Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf",
+       "size_hint": 5148699488
+      },
+      {
+       "id": "ud_q6_k_xl",
+       "label": "UD-Q6_K_XL",
+       "file": "Qwen3-VL-8B-Instruct-UD-Q6_K_XL.gguf",
+       "size_hint": 7490550624
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "Qwen3-VL-8B-Instruct-Q8_0.gguf",
+       "size_hint": 8709520224
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "image_vae",
+     "role": "image_vae",
+     "label": "Qwen-Image 2.1 VAE",
+     "source": {
+      "type": "hf",
+      "repo": "unsloth/Qwen-Image-2.1-FP8"
+     },
+     "choices": [
+      {
+       "id": "bf16",
+       "label": "BF16",
+       "file": "vae/qwen_image_2.1_vae_bf16.safetensors",
+       "size_hint": 675508656
+      }
+     ],
+     "default": "bf16"
+    },
+    {
+     "id": "video_model",
+     "role": "video",
+     "label": "Wan 2.2 TI2V 5B (video)",
+     "source": {
+      "type": "hf",
+      "repo": "QuantStack/Wan2.2-TI2V-5B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "Wan2.2-TI2V-5B-Q4_K_M.gguf",
+       "size_hint": 3433116000
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "Wan2.2-TI2V-5B-Q6_K.gguf",
+       "size_hint": 4211683680
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "Wan2.2-TI2V-5B-Q8_0.gguf",
+       "size_hint": 5400179040
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "video_encoder",
+     "role": "video_encoder",
+     "label": "UMT5-XXL (Wan's text encoder)",
+     "source": {
+      "type": "hf",
+      "repo": "city96/umt5-xxl-encoder-gguf"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smallest)",
+       "file": "umt5-xxl-encoder-Q4_K_M.gguf",
+       "size_hint": 3655145312
+      },
+      {
+       "id": "q6_k",
+       "label": "Q6_K",
+       "file": "umt5-xxl-encoder-Q6_K.gguf",
+       "size_hint": 4667283296
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (best)",
+       "file": "umt5-xxl-encoder-Q8_0.gguf",
+       "size_hint": 6043068256
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "video_vae",
+     "role": "video_vae",
+     "label": "Wan 2.2 VAE",
+     "source": {
+      "type": "hf",
+      "repo": "QuantStack/Wan2.2-TI2V-5B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "bf16",
+       "label": "Wan 2.2 VAE",
+       "file": "VAE/Wan2.2_VAE.safetensors",
+       "size_hint": 1409400960
+      }
+     ],
+     "default": "bf16"
+    },
+    {
+     "id": "voice_model",
+     "role": "voice",
+     "label": "LFM3-Audio 2B (voice)",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q4_k_m",
+       "label": "Q4_K_M (smaller)",
+       "file": "LFM3-Audio-2B-Q4_K_M.gguf",
+       "size_hint": 1099626016
+      },
+      {
+       "id": "q8_0",
+       "label": "Q8_0",
+       "file": "LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 1846236704
+      }
+     ],
+     "default": "q8_0"
+    },
+    {
+     "id": "voice_mmproj",
+     "role": "voice_mmproj",
+     "label": "LFM3-Audio 2B audio projector",
+     "source": {
+      "type": "hf",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF"
+     },
+     "choices": [
+      {
+       "id": "q8_0",
+       "label": "Q8_0 (smaller)",
+       "file": "mmproj-LFM3-Audio-2B-Q8_0.gguf",
+       "size_hint": 303811840
+      },
+      {
+       "id": "f16",
+       "label": "F16",
+       "file": "mmproj-LFM3-Audio-2B-F16.gguf",
+       "size_hint": 570846400
+      }
+     ],
+     "default": "f16"
+    },
+    {
+     "id": "zim_top",
+     "role": "reference",
+     "label": "Wikipedia, top articles",
+     "source": {
+      "type": "zim",
+      "name": "wikipedia_en_top",
+      "licence": "CC-BY-SA-4.0",
+      "licence_link": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "choices": [
+      {
+       "id": "mini",
+       "label": "mini (introductions only)",
+       "flavour": "mini",
+       "size_hint": 296858624
+      },
+      {
+       "id": "nopic",
+       "label": "nopic (full text)",
+       "flavour": "nopic",
+       "size_hint": 2745850880
+      },
+      {
+       "id": "maxi",
+       "label": "maxi (with pictures)",
+       "flavour": "maxi",
+       "size_hint": 6991082496
+      }
+     ],
+     "default": "nopic"
+    },
+    {
+     "id": "zim_all",
+     "role": "reference",
+     "label": "Wikipedia, every article",
+     "source": {
+      "type": "zim",
+      "name": "wikipedia_en_all",
+      "licence": "CC-BY-SA-4.0",
+      "licence_link": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "choices": [
+      {
+       "id": "mini",
+       "label": "mini (introductions only)",
+       "flavour": "mini",
+       "size_hint": 14386799616
+      },
+      {
+       "id": "nopic",
+       "label": "nopic (full text)",
+       "flavour": "nopic",
+       "size_hint": 52690707456
+      }
+     ],
+     "default": "mini"
+    },
+    {
+     "id": "map",
+     "role": "map",
+     "label": "World map (Protomaps, OpenStreetMap data)",
+     "source": {
+      "type": "map",
+      "licence": "ODbL-1.0",
+      "licence_link": "https://www.openstreetmap.org/copyright"
+     },
+     "choices": [
+      {
+       "id": "z8",
+       "label": "to zoom 8 (towns)",
+       "maxzoom": 8
+      },
+      {
+       "id": "z9",
+       "label": "to zoom 9 (more towns and roads)",
+       "maxzoom": 9
+      }
+     ],
+     "default": "z9"
+    },
+    {
+     "id": "map_fonts",
+     "role": "fonts",
+     "label": "Map fonts and sprites (Protomaps basemaps-assets)",
+     "source": {
+      "type": "archive",
+      "repo": "protomaps/basemaps-assets",
+      "commit": "028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "licence": "OFL-1.1 (fonts) + MIT (sprites)",
+      "licence_link": "https://github.com/protomaps/basemaps-assets/blob/028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/OFL.txt",
+      "licence_note": "Fonts: SIL Open Font License 1.1 (fonts/OFL.txt). Sprites: derived from MIT-licensed tangrams/icons (https://github.com/tangrams/icons/blob/master/LICENSE.md).",
+      "assets_subdir": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7",
+      "marker": "basemaps-assets-028c18f713baecad011301ff7a69acc39bcc2ae7/fonts/Noto Sans Regular/0-255.pbf",
+      "symlinks": "skip"
+     },
+     "choices": [
+      {
+       "id": "pinned",
+       "label": "commit 028c18f",
+       "url": "https://codeload.github.com/protomaps/basemaps-assets/zip/028c18f713baecad011301ff7a69acc39bcc2ae7",
+       "sha256": "e942a417d94a12596842a20b53d6b785cbf6d47f2545e458538191ba6d74b305",
+       "size": 6731115,
+       "size_hint": 6731115
+      }
+     ],
+     "default": "pinned"
+    },
+    {
+     "id": "llama_cpp",
+     "role": "runtime_llama",
+     "label": "llama.cpp (llama-server)",
+     "source": {
+      "type": "github",
+      "repo": "ggml-org/llama.cpp",
+      "tool": "llama.cpp",
+      "exe": "llama-server.exe",
+      "licence": "MIT",
+      "licence_link": "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE"
+     },
+     "choices": [
+      {
+       "id": "cuda",
+       "label": "CUDA 12 (NVIDIA)",
+       "pattern": "^llama-b\\d+-bin-win-cuda-12\\.\\d+-x64\\.zip$",
+       "size_hint": 287012764
+      },
+      {
+       "id": "vulkan",
+       "label": "Vulkan (any GPU)",
+       "pattern": "^llama-b\\d+-bin-win-vulkan-x64\\.zip$",
+       "size_hint": 37660949
+      },
+      {
+       "id": "cpu",
+       "label": "CPU",
+       "pattern": "^llama-b\\d+-bin-win-cpu-x64\\.zip$",
+       "size_hint": 24707363
+      }
+     ],
+     "default": "cuda"
+    },
+    {
+     "id": "llama_cudart",
+     "role": "runtime_llama_cudart",
+     "label": "CUDA 12 runtime for llama.cpp",
+     "source": {
+      "type": "github",
+      "repo": "ggml-org/llama.cpp",
+      "beside": "llama_cpp",
+      "marker": "cudart64_12.dll",
+      "licence": "NVIDIA-CUDA-EULA",
+      "licence_link": "https://docs.nvidia.com/cuda/eula/index.html"
+     },
+     "requires": {
+      "llama_cpp": "cuda"
+     },
+     "choices": [
+      {
+       "id": "cuda12",
+       "label": "CUDA 12",
+       "pattern": "^cudart-llama-bin-win-cuda-12\\.\\d+-x64\\.zip$",
+       "size_hint": 391443627
+      }
+     ],
+     "default": "cuda12"
+    },
+    {
+     "id": "sd_cpp",
+     "role": "runtime_sd",
+     "label": "stable-diffusion.cpp (sd-server)",
+     "source": {
+      "type": "github",
+      "repo": "leejet/stable-diffusion.cpp",
+      "tool": "stable-diffusion.cpp",
+      "exe": "sd-server.exe",
+      "licence": "MIT",
+      "licence_link": "https://github.com/leejet/stable-diffusion.cpp/blob/master/LICENSE"
+     },
+     "choices": [
+      {
+       "id": "cuda",
+       "label": "CUDA 12 (NVIDIA)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-cuda12-x64\\.zip$",
+       "size_hint": 362084003
+      },
+      {
+       "id": "vulkan",
+       "label": "Vulkan (any GPU)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-vulkan-x64\\.zip$",
+       "size_hint": 29805929
+      },
+      {
+       "id": "cpu",
+       "label": "CPU (slow)",
+       "pattern": "^sd-master-[0-9a-f]+-bin-win-cpu-x64\\.zip$",
+       "size_hint": 18069874
+      }
+     ],
+     "default": "cuda"
+    },
+    {
+     "id": "sd_cudart",
+     "role": "runtime_sd_cudart",
+     "label": "CUDA 12 runtime for stable-diffusion.cpp",
+     "source": {
+      "type": "github",
+      "repo": "leejet/stable-diffusion.cpp",
+      "beside": "sd_cpp",
+      "marker": "cudart64_12.dll",
+      "licence": "NVIDIA-CUDA-EULA",
+      "licence_link": "https://docs.nvidia.com/cuda/eula/index.html"
+     },
+     "requires": {
+      "sd_cpp": "cuda"
+     },
+     "choices": [
+      {
+       "id": "cuda12",
+       "label": "CUDA 12",
+       "pattern": "^cudart-sd-bin-win-cu12-x64\\.zip$",
+       "size_hint": 563452046
+      }
+     ],
+     "default": "cuda12"
+    },
+    {
+     "id": "kiwix_tools",
+     "role": "runtime_kiwix",
+     "label": "kiwix-tools (kiwix-serve)",
+     "source": {
+      "type": "url",
+      "tool": "kiwix-tools",
+      "release": "3.8.1",
+      "exe": "kiwix-serve.exe",
+      "licence": "GPL-3.0",
+      "licence_link": "https://github.com/kiwix/kiwix-tools/blob/main/COPYING"
+     },
+     "choices": [
+      {
+       "id": "win64",
+       "label": "Windows x86_64",
+       "url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip",
+       "md5_url": "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_win-x86_64-3.8.1.zip.md5",
+       "size": 18301924,
+       "size_hint": 18301924
+      }
+     ],
+     "default": "win64"
+    }
+   ]
+  }
+ ]
+}

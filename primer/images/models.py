@@ -12,6 +12,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from .families import FAMILIES, SETTINGS, TWO_STAGE_SETTINGS, VIDEO_MAX_SIZE, VIDEO_SETTINGS
 
@@ -440,6 +441,17 @@ class ModelStore:
             defaults[kind] = defaults[kind] or model.id  # the first model of a kind becomes its default
             self._write(models, defaults)
         return model
+
+    def update(self, id: str, change: Callable[[ImageModel], ImageModel | None]) -> ImageModel | None:
+        """Read the model and save change(model) under the store's lock, so a concurrent save
+        isn't lost; change returns None to leave it alone. The save validates as save() does.
+        KeyError when there is no such model."""
+        with _LOCK:
+            model = self.get(id)
+            if model is None:
+                raise KeyError(id)
+            new = change(model)
+            return self.save(new) if new is not None else None
 
     def delete(self, id: str) -> None:
         with _LOCK:

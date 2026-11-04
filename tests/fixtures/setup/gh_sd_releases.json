@@ -1,0 +1,84 @@
+[
+ {
+  "tag_name": "master-1047-984eb06",
+  "assets": [
+   {
+    "name": "cudart-sd-bin-win-cu12-x64.zip",
+    "size": 563452046,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/cudart-sd-bin-win-cu12-x64.zip",
+    "digest": "sha256:fe20366827d357c00797eebb58244dddab7fd9a348d70090c3871004c320f38d"
+   },
+   {
+    "name": "sd-master-984eb06-bin-Darwin-macOS-26.6.2-arm64.zip",
+    "size": 37651339,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/sd-master-984eb06-bin-Darwin-macOS-26.6.2-arm64.zip",
+    "digest": "sha256:857a2178db0a745ce841eb9526201605dc7c05a9fb6dd1b50fac6ccf6fbc93a6"
+   },
+   {
+    "name": "sd-master-984eb06-bin-win-cpu-x64.zip",
+    "size": 18069874,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/sd-master-984eb06-bin-win-cpu-x64.zip",
+    "digest": "sha256:53d538e6187d31c2c22107ca89cb694494ca5e583f7e1d769cfb6b74926728b8"
+   },
+   {
+    "name": "sd-master-984eb06-bin-win-cuda12-x64.zip",
+    "size": 362084003,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/sd-master-984eb06-bin-win-cuda12-x64.zip",
+    "digest": "sha256:d21008534fd7ec8d4bb0bde78c728530a819a510654ba9c04bd279dab40ac8ab"
+   },
+   {
+    "name": "sd-master-984eb06-bin-win-rocm-10.1.0-x64.zip",
+    "size": 265846436,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/sd-master-984eb06-bin-win-rocm-10.1.0-x64.zip",
+    "digest": "sha256:599ca9896675e2d0233a915cb94eff5ed1f6457757f23fd90b45e5360960c580"
+   },
+   {
+    "name": "sd-master-984eb06-bin-win-vulkan-x64.zip",
+    "size": 29805929,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1047-984eb06/sd-master-984eb06-bin-win-vulkan-x64.zip",
+    "digest": "sha256:2c1bc233e580c430e51b65f4683abc6833434052aaaec90136a09ba1a46f9878"
+   }
+  ]
+ },
+ {
+  "tag_name": "master-1046-d308544",
+  "assets": [
+   {
+    "name": "cudart-sd-bin-win-cu12-x64.zip",
+    "size": 563452046,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/cudart-sd-bin-win-cu12-x64.zip",
+    "digest": "sha256:fe20366827d357c00797eebb58244dddab7fd9a348d70090c3871004c320f38d"
+   },
+   {
+    "name": "sd-master-d308544-bin-Darwin-macOS-26.6.2-arm64.zip",
+    "size": 37651049,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/sd-master-d308544-bin-Darwin-macOS-26.6.2-arm64.zip",
+    "digest": "sha256:35cd00a44599caa5fb41fd1d9ca50937ec4a00fcf8b2bf8646de404ed28f2dea"
+   },
+   {
+    "name": "sd-master-d308544-bin-win-cpu-x64.zip",
+    "size": 18070219,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/sd-master-d308544-bin-win-cpu-x64.zip",
+    "digest": "sha256:1097dcf23b35ee03e92fb64e5b41e9f0ccae739d5327de92b63ef48742acc15c"
+   },
+   {
+    "name": "sd-master-d308544-bin-win-cuda12-x64.zip",
+    "size": 361966843,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/sd-master-d308544-bin-win-cuda12-x64.zip",
+    "digest": "sha256:d8bccb3915b02f75f164204a7ac9f4283d2ea5b6a7e0403165b83573d2453c2d"
+   },
+   {
+    "name": "sd-master-d308544-bin-win-rocm-10.1.0-x64.zip",
+    "size": 265821046,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/sd-master-d308544-bin-win-rocm-10.1.0-x64.zip",
+    "digest": "sha256:a9785b8e12e4226a4f9d6a2cc3ae65f7b26b019c1d5dad67d1b055805320dd98"
+   },
+   {
+    "name": "sd-master-d308544-bin-win-vulkan-x64.zip",
+    "size": 29800372,
+    "browser_download_url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1046-d308544/sd-master-d308544-bin-win-vulkan-x64.zip",
+    "digest": "sha256:2cd0c14d1e1715d5c411c027fe2017db03d1963a95e10813cc00c92a0327cf89"
+   }
+  ]
+ }
+]

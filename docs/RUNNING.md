@@ -42,6 +42,59 @@ tier in the UI is remembered in `var/` and used the next time you start without 
 Pages are cached in the graph: reopening a concept after a restart is near-instant (about 0.1 s
 in testing), and a fresh page takes as long as your model needs.
 
+## Setup
+
+The **Setup** window (see [USING.md](USING.md#setup)) downloads a starter kit and writes a tier
+for it. The kits are listed in `primer/setup/kits.json`: each item names its source (a Hugging
+Face repository and file, a Kiwix book and flavour, a GitHub release asset pattern, or a map
+zoom), and the exact files, sizes and hashes are looked up from the live catalogues when you
+check the plan.
+
+Where things go, under the folder you choose:
+
+| Path | What |
+| --- | --- |
+| `models/<publisher>/<repo>/<file>` | Model files. |
+| `reference/<file>.zim` | Wikipedia. |
+| `maps/<file>.pmtiles`, `maps/basemaps-assets/` | The map and its fonts and icons. |
+| `tools/<name>/<release>/` | llama.cpp, stable-diffusion.cpp and kiwix-tools, unpacked. |
+| `.setup/` | Downloads in progress (`.part` files) and unpacking. |
+
+Each unpacked folder gets a `.primer-setup.json` marker recording what was installed there.
+Setup's own state (the plan, progress, licences accepted, approvals) is `var/setup.json`. The
+tier is written to `tiers/local-<kit>.toml` (git-ignored), with free ports chosen from 8191
+(text), 8192 (fast), 8820 (pictures), 8830 (reference) and 8840 (voice). Model servers that
+run on the CPU from a GPU build of llama.cpp get `--device none`, so they never take GPU memory
+from pictures.
+
+Safety:
+
+- **Where downloads come from.** The first request must be to huggingface.co,
+  download.kiwix.org, library.kiwix.org, github.com, api.github.com,
+  objects.githubusercontent.com, codeload.github.com or build.protomaps.com. Redirects (mirrors
+  and CDNs) may go to any `https` address that isn't on your own network; never `http`.
+  `tools/map_extract.py` follows the same rules on every request and redirect (its default
+  source must be build.protomaps.com; one given with `--source` must be public `https`), and
+  ignores proxy settings.
+- **Hashes.** A file is moved into place only after it matches its published SHA-256 (MD5 for
+  kiwix-tools, which publishes nothing else). The map fonts are pinned to a commit and a hash in
+  `kits.json`; the map is cut by `tools/map_extract.py` and read back to check it.
+- **Formats.** Pickle formats (`.ckpt`, `.pt`, `.pth`, `.bin`, `.pkl`) are refused. Zips are
+  unpacked into an empty folder first, refusing absolute paths, `..`, links (the map fonts'
+  alias links are skipped), Windows device names and anything that expands to more than four times its size.
+- **Programs** run only after you approve them in Setup. The approval is the file's SHA-256: a
+  changed file, or an unapproved program or DLL beside it, is refused ("approve … in Setup before
+  it can run"), and the server shows as unavailable until you do. Programs you configured
+  yourself, outside a Setup folder, are not affected.
+- **The Hugging Face token** (`var/keys/huggingface.key`) is sent only to huggingface.co.
+- **Disk space.** A kit doesn't start unless it fits with a 2 GB margin; a download that fills
+  the disk stops and keeps its `.part` to resume.
+
+The routes are under `/v1/setup` (`GET` for the overview, `plan`, `start`, `pause`, `resume`,
+`cancel`, `licence`, `approve`, `approve-release`, `updates`, `models`, `move`, `move/cancel`),
+with the same origin rules as the rest of the API; `/v1/setup/updates` also needs `X-Primer: 1`.
+`/v1/status` reports `setup: {needed, running}`.
+
 ## Tiers
 
 A tier is a TOML file in `tiers/` naming a `[text]` engine for pages and a `[fast]` engine for

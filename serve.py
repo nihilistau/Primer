@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from primer import children
@@ -15,7 +16,10 @@ from primer.images.models import ModelStore
 from primer.images.service import ImageService
 from primer.pages import PageService
 from primer.server import App, make_gate, make_server
-from primer.servers import ServerManager
+from primer.servers import ServerManager, set_launch_check
+from primer.setup.approvals import launch_check
+from primer.setup.catalogues import Catalogues
+from primer.setup.installer import Installer
 
 ROOT = Path(__file__).resolve().parent
 
@@ -56,16 +60,35 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     graph.fail_unfinished_stories("Primer restarted")
     graph.clear_unfinished_drafts()
     store = ModelStore(var_dir)
+    # Setup: a run that was going when Primer stopped comes back paused (Resume continues it)
+    installer = Installer(var_dir, Catalogues(token_file=var_dir / "keys" / "huggingface.key"),
+                          tiers_dir=tiers_dir, store=store)
     servers = ServerManager(tier)
     text_pause, gate = make_gate(tier, servers)
     fast = make_engine(tier.fast)
     pages = PageService(graph, make_engine(tier.text), fast, tier.source_mode, gate,
                         App.make_grounder(tier))
     images = ImageService(graph, store, tier.images, fast, gate, var_dir / "media")
-    return App(tier=tier, servers=servers, pages=pages, graph=graph,
-               hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,
-               tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause,
-               maps=App.make_maps(graph, tier, fast))
+    app = App(tier=tier, servers=servers, pages=pages, graph=graph,
+              hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,
+              tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause,
+              maps=App.make_maps(graph, tier, fast), installer=installer)
+    installer.approvals.on_approved = lambda: _retry_after_approval(app)
+    return app
+
+
+def _retry_after_approval(app: App) -> threading.Thread:
+    """An approval in Setup starts the servers that were waiting for it. On its own thread
+    (approve() may be called by a request already holding app._lock) and under app._lock, so a
+    concurrent tier switch can't leave it starting a server of a discarded tier."""
+
+    def run() -> None:
+        with app._lock:
+            app.servers.retry_unavailable()
+
+    t = threading.Thread(target=run, name="primer-setup-retry", daemon=True)
+    t.start()
+    return t
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -84,9 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     app = build_app(tier, var_dir, ROOT / "ui" / "dist", args.tiers_dir, hardware)
+    # an executable Setup downloaded runs only once approved by its SHA-256 (any managed server)
+    set_launch_check(launch_check(var_dir, app.installer.approvals))
     try:
         server = make_server(app, "127.0.0.1", args.port)
     except OSError as e:
+        app.installer.shutdown()
         app.shutdown_images()
         app.shutdown_maps()
         app.shutdown_stories()
@@ -106,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
         # winds down can't skip them
         try:
             try:
+                app.installer.shutdown()  # keeps the current download's .part
+                if app.setup_api is not None:
+                    app.setup_api.shutdown()  # a model move in progress stops; its .part is removed
                 app.shutdown_images()
             finally:
                 try:

@@ -13,3 +13,6 @@ __pycache__/
 # node
 node_modules/
 ui/dist/
+
+# tiers written by Setup (regenerated, machine-specific)
+tiers/local-*.toml

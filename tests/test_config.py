@@ -30,8 +30,10 @@ def test_settings_roundtrip(tmp_path):
 
 
 def test_shipped_tiers_all_load():
-    assert set(list_tiers()) == {"light", "hybrid", "workstation", "hosted"}
-    for n in list_tiers():
+    # tiers Setup wrote on this machine (local-*, git-ignored) aren't shipped
+    shipped = {n for n in list_tiers() if not n.startswith("local-")}
+    assert shipped == {"light", "hybrid", "workstation", "hosted"}
+    for n in shipped:
         load_tier(n)
 
 

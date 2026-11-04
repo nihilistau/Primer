@@ -1,0 +1,40 @@
+{
+ "id": "LiquidAI/LFM3-1.7B-GGUF",
+ "gated": false,
+ "cardData": {
+  "library_name": "gguf",
+  "license": "other",
+  "license_name": "lfm1.0",
+  "license_link": "LICENSE",
+  "pipeline_tag": "text-generation",
+  "tags": [
+   "liquid",
+   "lfm3",
+   "gguf",
+   "llama.cpp"
+  ],
+  "language": [
+   "en",
+   "ar",
+   "zh",
+   "fr",
+   "de",
+   "it",
+   "ja",
+   "ko",
+   "pt",
+   "es",
+   "vi",
+   "th",
+   "id",
+   "hi",
+   "ru",
+   "pl"
+  ],
+  "base_model": [
+   "LiquidAI/LFM3-1.7B",
+   "LiquidAI/LFM3-1.7B-NVFP4"
+  ],
+  "base_model_relation": "quantized"
+ }
+}

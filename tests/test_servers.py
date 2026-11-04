@@ -599,3 +599,277 @@ def test_alive_follows_process_and_detached():
     assert s.alive() is False
     s._detached = True
     assert s.alive() is True
+
+
+# --- Phase 9: executables Setup downloaded run only once approved by SHA-256 ---
+class _FakeProc:
+    pid = 424242
+
+    def __init__(self):
+        self.code = None
+
+    def poll(self):
+        return self.code
+
+    def terminate(self):
+        self.code = 1
+
+    kill = terminate
+
+    def wait(self, timeout=None):
+        self.code = 1 if self.code is None else self.code
+        return self.code
+
+
+@pytest.fixture
+def fake_popen(monkeypatch):
+    """Popen that records its calls and returns a process that 'runs' until terminated."""
+    import subprocess
+
+    from primer import servers as srv
+
+    calls = []
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: calls.append(cmd) or _FakeProc())
+    monkeypatch.setattr(srv.children, "adopt", lambda *a, **k: None)
+    monkeypatch.setattr(srv.children, "release", lambda *a, **k: None)
+    return calls
+
+
+def _setup_root(tmp_path):
+    from primer.setup.approvals import Approvals
+
+    var, root = tmp_path / "var", tmp_path / "kit"
+    exe = root / "tools" / "llama.cpp" / "b1" / "llama-server.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ original")
+    ap = Approvals(var)
+    ap.add_root(root)
+    ap.record_installed([{"path": str(exe), "publisher": "ggml-org/llama.cpp", "release": "b1"}])
+    return var, root, exe, ap
+
+
+def _server(exe, var, launched):
+    from primer.setup.approvals import launch_check
+
+    spec = EngineSpec("openai", "http://127.0.0.1:9", managed=True, launch=(str(exe), "--port", "9"),
+                      ready_timeout_s=2)
+    return ManagedServer("text", spec, health=lambda: bool(launched), may_launch=launch_check(var))
+
+
+def test_unapproved_executable_not_launched(tmp_path, fake_popen):
+    var, root, exe, ap = _setup_root(tmp_path)
+    s = _server(exe, var, fake_popen)
+    s.start()
+    st = s.status()
+    assert fake_popen == []  # nothing was spawned
+    assert st["state"] == "unavailable"
+    assert st["reason"] == "approve llama-server.exe in Setup before it can run"
+    assert [p["path"] for p in ap.pending()] == [os.path.normcase(os.path.realpath(exe))]
+
+    assert ap.approve(exe) is True
+    s.start()
+    assert len(fake_popen) == 1 and s.status()["state"] == "ready"
+    s.stop()
+
+    exe.write_bytes(b"MZ something else")  # a different file at the same path
+    fake_popen.clear()
+    s2 = _server(exe, var, fake_popen)
+    s2.start()
+    assert fake_popen == [] and s2.status()["state"] == "unavailable"
+    assert not ap.approved(exe)
+    assert ap.approve(exe) is False  # not what Setup verified and placed there
+    assert ap.approve(exe.with_name("missing.exe")) is False
+
+
+def test_executable_outside_setup_root_is_unaffected(tmp_path, fake_popen):
+    var, root, exe, ap = _setup_root(tmp_path)
+    own = tmp_path / "mine" / "llama-server.exe"
+    own.parent.mkdir()
+    own.write_bytes(b"MZ hand configured")
+    s = _server(own, var, fake_popen)
+    s.start()
+    assert len(fake_popen) == 1 and s.status()["state"] == "ready"
+    s.stop()
+
+
+def test_unapproved_dll_beside_the_executable_blocks_it(tmp_path, fake_popen):
+    var, root, exe, ap = _setup_root(tmp_path)
+    dll = exe.with_name("ggml-cuda.dll")
+    dll.write_bytes(b"MZ dll")
+    ap.record_installed([{"path": str(dll), "publisher": "ggml-org/llama.cpp", "release": "b1"}])
+    assert ap.approve(exe)
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert fake_popen == [] and "approve ggml-cuda.dll in Setup" in s.status()["reason"]
+    assert ap.approve(dll)
+    s.start()
+    assert len(fake_popen) == 1
+    s.stop()
+
+
+def test_launch_check_default_applies_to_every_server(tmp_path, fake_popen, monkeypatch):
+    from primer import servers as srv
+    from primer.setup.approvals import launch_check
+
+    var, root, exe, ap = _setup_root(tmp_path)
+    monkeypatch.setattr(srv, "_default_may_launch", None)
+    srv.set_launch_check(launch_check(var))
+    spec = EngineSpec("openai", "http://127.0.0.1:9", managed=True, launch=(str(exe),), ready_timeout_s=2)
+    s = ManagedServer("text", spec, health=lambda: False)
+    s.start()
+    assert fake_popen == [] and s.status()["state"] == "unavailable"
+
+
+# --- fix round 1: the guard fails closed, planted DLLs, commands, retry ---
+def _marked_exe(tmp_path, approve=True):
+    """An exe in a folder holding Setup's marker, recorded and (optionally) approved."""
+    var, root, exe, ap = _setup_root(tmp_path)
+    (exe.parent / ".primer-setup.json").write_text('{"items": {"llama_cpp": "x"}}', encoding="utf-8")
+    if approve:
+        assert ap.approve(exe)
+    return var, root, exe, ap
+
+
+def test_guard_holds_when_setup_json_is_deleted(tmp_path, fake_popen):
+    var, root, exe, ap = _marked_exe(tmp_path)
+    (var / "setup.json").unlink()
+    exe.write_bytes(b"MZ swapped")
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert fake_popen == [] and s.status()["state"] == "unavailable"
+
+
+def test_guard_holds_when_setup_json_is_corrupt(tmp_path, fake_popen):
+    var, root, exe, ap = _marked_exe(tmp_path)
+    (var / "setup.json").write_text("{broken", encoding="utf-8")
+    exe.write_bytes(b"MZ swapped")
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert fake_popen == [] and s.status()["state"] == "unavailable"
+    assert (var / "setup.json.bad").exists()
+
+
+def test_unreadable_setup_json_refuses_and_is_not_moved(tmp_path, fake_popen, monkeypatch):
+    from pathlib import Path as P
+
+    var, root, exe, ap = _marked_exe(tmp_path)
+    real = P.read_bytes
+
+    def locked(self):
+        if self.name == "setup.json":
+            raise PermissionError(13, "locked")
+        return real(self)
+
+    monkeypatch.setattr(P, "read_bytes", locked)
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert fake_popen == [] and s.status()["state"] == "unavailable"
+    assert "could not check" in s.status()["reason"]
+    monkeypatch.undo()
+    assert (var / "setup.json").exists() and not (var / "setup.json.bad").exists()
+
+
+def test_planted_dll_beside_an_approved_exe_blocks_it(tmp_path, fake_popen):
+    from primer.setup.approvals import UNKNOWN_PUBLISHER
+
+    var, root, exe, ap = _marked_exe(tmp_path)
+    planted = exe.with_name("version.dll")
+    planted.write_bytes(b"MZ planted")
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert fake_popen == [] and "approve version.dll in Setup" in s.status()["reason"]
+    row = next(p for p in ap.pending() if p["file"] == "version.dll")
+    assert row["publisher"] == UNKNOWN_PUBLISHER
+    assert ap.approve(planted)
+    s.start()
+    assert len(fake_popen) == 1
+    s.stop()
+
+
+def test_same_size_and_mtime_replacement_is_not_approved(tmp_path):
+    var, root, exe, ap = _marked_exe(tmp_path)
+    st = os.stat(exe)
+    assert ap.approved(exe)
+    other = tmp_path / "other.exe"
+    other.write_bytes(b"MZ origxnal")  # same length
+    os.utime(other, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.replace(other, exe)
+    assert os.stat(exe).st_size == st.st_size and os.stat(exe).st_mtime_ns == st.st_mtime_ns
+    assert not ap.approved(exe)
+
+
+def test_relative_launch_paths_resolve_against_repo_root():
+    from primer.config import REPO_ROOT
+    from primer.setup.approvals import Approvals
+
+    assert Approvals._locate(os.path.join("tools", "x.exe")) == os.path.join(REPO_ROOT, "tools", "x.exe")
+
+
+def test_pending_does_not_rehash_installed_files(tmp_path, monkeypatch):
+    from primer.setup import approvals as apm
+
+    var, root, exe, ap = _setup_root(tmp_path)
+    calls = []
+    monkeypatch.setattr(apm, "sha256_file", lambda p: calls.append(p) or "0" * 64)
+    fresh = apm.Approvals(var)
+    assert [p["file"] for p in fresh.pending()] == ["llama-server.exe"]
+    assert calls == []
+
+
+def test_unapproved_pause_and_stop_commands_are_not_run(tmp_path, fake_popen, monkeypatch):
+    import subprocess
+
+    var, root, exe, ap = _marked_exe(tmp_path, approve=False)
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: ran.append(cmd))
+    from primer.setup.approvals import launch_check
+
+    spec = EngineSpec("openai", "http://127.0.0.1:9", managed=True, launch=("python",),
+                      pause=(str(exe), "unload"), stop=(str(exe), "stop"))
+    s = ManagedServer("text", spec, health=lambda: False, may_launch=launch_check(var))
+    with pytest.raises(RuntimeError, match="pause command not run"):
+        s.pause()
+    assert "stop command not run" in s._run_stop_command()
+    assert ran == []
+
+
+def test_retry_unavailable_starts_servers_once_approved(tmp_path, fake_popen):
+    var, root, exe, ap = _marked_exe(tmp_path, approve=False)
+    s = _server(exe, var, fake_popen)
+    s.start()
+    assert s.status()["state"] == "unavailable"
+    mgr = ServerManager.__new__(ServerManager)
+    mgr._servers = {"text": s, "fast": s}
+    assert ap.approve(exe)
+    roles = mgr.retry_unavailable()
+    assert roles == ["text"]  # one server behind both roles: started once
+    import time
+    end = time.monotonic() + 5
+    while s.status()["state"] != "ready" and time.monotonic() < end:
+        time.sleep(0.01)
+    assert s.status()["state"] == "ready" and len(fake_popen) == 1
+    s.stop()
+
+
+def test_refused_unlisted_exe_is_pending_and_approvable_alone(tmp_path, fake_popen):
+    from primer.setup.approvals import UNKNOWN_PUBLISHER, Approvals, launch_check
+
+    var = tmp_path / "var"
+    folder = tmp_path / "elsewhere" / "tool"
+    folder.mkdir(parents=True)
+    (folder / ".primer-setup.json").write_text('{"items": {}}', encoding="utf-8")
+    exe = folder / "Lonely.exe"
+    exe.write_bytes(b"MZ lonely")
+    ap = Approvals(var)
+    assert ap.pending() == []
+    spec = EngineSpec("openai", "http://127.0.0.1:9", managed=True, launch=(str(exe),), ready_timeout_s=2)
+    s = ManagedServer("text", spec, health=lambda: bool(fake_popen), may_launch=launch_check(var, ap))
+    s.start()
+    assert fake_popen == [] and s.status()["state"] == "unavailable"
+    row = next(p for p in ap.pending() if p["file"] == "Lonely.exe")
+    assert row["publisher"] == UNKNOWN_PUBLISHER and row["item"] == ""
+    assert ap.approve(row["path"], row["sha256"])
+    assert ap.pending() == []
+    s.start()
+    assert len(fake_popen) == 1
+    s.stop()

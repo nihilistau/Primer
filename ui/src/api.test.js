@@ -128,3 +128,49 @@ describe('image calls', () => {
     await expect(api.imageJob('x')).rejects.toMatchObject({ message: 'not found', status: 404 })
   })
 })
+
+describe('setup calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+
+  it('POSTs send X-Primer and a JSON body', async () => {
+    const cases = [
+      [() => api.setupPlan('light', { map: 'z9' }, '/data'), '/v1/setup/plan', { kit: 'light', choices: { map: 'z9' }, root: '/data' }],
+      [() => api.setupPlan('light', undefined, '/data'), '/v1/setup/plan', { kit: 'light', choices: {}, root: '/data' }],
+      [() => api.setupStart('light', '/data', { map: 'z9' }), '/v1/setup/start', { kit: 'light', root: '/data', choices: { map: 'z9' } }],
+      [() => api.setupStart('light', '/data'), '/v1/setup/start', { kit: 'light', root: '/data', choices: {} }],
+      [() => api.setupPause(), '/v1/setup/pause', {}],
+      [() => api.setupResume(), '/v1/setup/resume', {}],
+      [() => api.setupCancel('zim_top'), '/v1/setup/cancel', { item: 'zim_top' }],
+      [() => api.setupLicence('other <https://l/x>'), '/v1/setup/licence', { licence: 'other <https://l/x>' }],
+      [() => api.setupApprove('/x/a.exe', 'ab'), '/v1/setup/approve', { path: '/x/a.exe', sha256: 'ab' }],
+      [() => api.setupApproveRelease('llama_cpp'), '/v1/setup/approve-release', { item: 'llama_cpp' }],
+      [() => api.setupMove(['/a.gguf'], '/d'), '/v1/setup/move', { paths: ['/a.gguf'], dest: '/d' }],
+      [() => api.setupMoveCancel(), '/v1/setup/move/cancel', {}],
+    ]
+    for (const [fn, url, body] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+      expect(JSON.parse(init.body)).toEqual(body)
+    }
+  })
+
+  it('GETs send X-Primer (updates needs it)', async () => {
+    const cases = [[() => api.setup(), '/v1/setup'], [() => api.setupModels(), '/v1/setup/models'],
+                   [() => api.setupUpdates(), '/v1/setup/updates'], [() => api.setupUpdates(true), '/v1/setup/updates?refresh=1']]
+    for (const [fn, url] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('GET')
+      expect(init.headers['X-Primer']).toBe('1')
+    }
+  })
+})

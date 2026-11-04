@@ -1,0 +1,143 @@
+[
+ {
+  "tag_name": "b12101",
+  "assets": [
+   {
+    "name": "cudart-llama-b12101-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "size": 594371533,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/cudart-llama-b12101-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "digest": "sha256:2c9edfabd763875622a3e1a77b7d53e7c5e8006bff500e7ebcea7d4b2df88062"
+   },
+   {
+    "name": "cudart-llama-b12101-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "size": 552521501,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/cudart-llama-b12101-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "digest": "sha256:6b5cb8cd9b26860cfdada54bdd495ce87b634cf61441807843dcad70b3691ec5"
+   },
+   {
+    "name": "cudart-llama-b12101-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "size": 440232598,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/cudart-llama-b12101-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "digest": "sha256:e516cf872c7f23f6e09ff3506ede606f36c6a89ee60c0baf78adfe689f5ec2f6"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-26.04-s390x.tar.gz",
+    "size": 15679851,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-26.04-s390x.tar.gz",
+    "digest": "sha256:19b8cf6f75db87b01d388ef1173d0c704e5e97f4d1edd60d7c4570d62cd5c9f4"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-arm64.tar.gz",
+    "size": 18724290,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-arm64.tar.gz",
+    "digest": "sha256:1b153039a73b6636068250fa6a057ca1a0110bc5c1b77fd696ce59e6b0733035"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "size": 187311044,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-cuda-12.8-x64.tar.gz",
+    "digest": "sha256:e3f7532cb572c2a89cbc47d1aebb8290393bf59b759d062f300d8a2615f8c1c2"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "size": 163313648,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-cuda-13.4-arm64.tar.gz",
+    "digest": "sha256:08d05a7a9b8d193d2ae9b8d7c9f313e93dfcfd993966598a581a11723606576f"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "size": 168274419,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-cuda-13.4-x64.tar.gz",
+    "digest": "sha256:117d07590e76d1dcac64a2865389037982d3c7dc08ad9049c584108333a604c0"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-openvino-2026.4.1-x64.tar.gz",
+    "size": 122619978,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-openvino-2026.4.1-x64.tar.gz",
+    "digest": "sha256:22aec5dcba8d621a64656be767e3bb02e1f16917dd8bfd42421032de85cb835d"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-rocm-10.0-x64.tar.gz",
+    "size": 255525751,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-rocm-10.0-x64.tar.gz",
+    "digest": "sha256:bf528757b779a059380d613667756234a3ebfd4573a5614b64a7faa608e847ff"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-s390x.tar.gz",
+    "size": 17822238,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-s390x.tar.gz",
+    "digest": "sha256:505b2d427aa5a226ad163cdd98f596ca05d810f5ad83e1f17feee90e219065ef"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-sycl-fp16-x64.tar.gz",
+    "size": 66990983,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-sycl-fp16-x64.tar.gz",
+    "digest": "sha256:fcda7ad497238da6b185103b521256ae35a5d6164026136a3ccb4ec5ce22dd66"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-sycl-fp32-x64.tar.gz",
+    "size": 66897064,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-sycl-fp32-x64.tar.gz",
+    "digest": "sha256:8f1da0fdbdc8486a007add09224fe66a2dfa3b4c72a4aa7fe819a6521137e2cb"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-vulkan-arm64.tar.gz",
+    "size": 29168712,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-vulkan-arm64.tar.gz",
+    "digest": "sha256:5db32923cbb7fd3b0cb37cc8d7e5796ec5d88f513c8769a915659194a4aa25b0"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-vulkan-x64.tar.gz",
+    "size": 35863352,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-vulkan-x64.tar.gz",
+    "digest": "sha256:22dd126a601d8538f9b77f1e85116f680ada13f73ec08cb991cb7ea38dd9a843"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-x64.tar.gz",
+    "size": 23057663,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-x64.tar.gz",
+    "digest": "sha256:1eddb95e9ecc41e042ff49850b7dad4cdea616f43c9d51c9998e74cfd0286942"
+   },
+   {
+    "name": "llama-b12101-bin-ubuntu-zdnn-s390x.tar.gz",
+    "size": 13844785,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12101/llama-b12101-bin-ubuntu-zdnn-s390x.tar.gz",
+    "digest": "sha256:a1e5e6c93f6e831bc60af60efd9cadeeb3b01ec17ef6fc85a9123c55a5b94760"
+   }
+  ]
+ },
+ {
+  "tag_name": "b12100",
+  "assets": [
+   {
+    "name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "size": 391443627,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12100/cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "digest": "sha256:8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+   },
+   {
+    "name": "llama-b12100-bin-win-cpu-x64.zip",
+    "size": 24707257,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12100/llama-b12100-bin-win-cpu-x64.zip",
+    "digest": "sha256:2578e983b1405b6368e374b64926212229f436c40e19fcffa383e81bab73efd8"
+   },
+   {
+    "name": "llama-b12100-bin-win-cuda-12.4-x64.zip",
+    "size": 287009354,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12100/llama-b12100-bin-win-cuda-12.4-x64.zip",
+    "digest": "sha256:b281eb49c5771013dd79bdd187432de6bc3352fd3a47c26d88e8d6572cf3dbea"
+   }
+  ]
+ },
+ {
+  "tag_name": "b12099",
+  "assets": [
+   {
+    "name": "llama-b12099-bin-win-cpu-x64.zip",
+    "size": 24706916,
+    "browser_download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b12099/llama-b12099-bin-win-cpu-x64.zip",
+    "digest": "sha256:ba751a91caeb8f5492c408386a46c9e0eba7da599c81bce1383260342e2b672b"
+   }
+  ]
+ }
+]

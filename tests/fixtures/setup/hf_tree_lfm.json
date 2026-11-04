@@ -1,0 +1,53 @@
+[
+ {
+  "type": "directory",
+  "oid": "ef181d329191b37c319576940665ddaeeeaa77d3",
+  "size": 0,
+  "path": "leap"
+ },
+ {
+  "type": "file",
+  "oid": "a365f7608b49a3c0e61536c445513a3e00de10a1",
+  "size": 2031,
+  "path": ".gitattributes"
+ },
+ {
+  "type": "file",
+  "oid": "21a4b74864d9e62434318351d2a440b6570b0f7a",
+  "size": 3466626336,
+  "lfs": {
+   "oid": "b7ab8b69a85e4dfbf62cdfd0e02d7d051ed09f2c5b84c701771dddb073b85970",
+   "size": 3466626336,
+   "pointerSize": 135
+  },
+  "path": "LFM3-1.7B-F16.gguf"
+ },
+ {
+  "type": "file",
+  "oid": "7cef402894b0d8e66eb18b34b968eca018ff7025",
+  "size": 1280019776,
+  "lfs": {
+   "oid": "462c2379586a45b30fe3dbfa30e6ff08cbb440734d6934689e24e4fe59a67bec",
+   "size": 1280019776,
+   "pointerSize": 135
+  },
+  "path": "LFM3-1.7B-NVFP4.gguf"
+ },
+ {
+  "type": "file",
+  "oid": "c7f4e5b2191d01de5fd9c1f96e94d19f268a695d",
+  "size": 6989,
+  "path": "README.md"
+ },
+ {
+  "type": "file",
+  "oid": "5310c907afb84069df2b781e62b300ce9d271c9e",
+  "size": 3466626336,
+  "lfs": {
+   "oid": "39158a79f56edb85e0c4252ce6447b8d7883ef82ffedd02f0cda7c84da5e9f68",
+   "size": 3466626336,
+   "pointerSize": 135
+  },
+  "path": "LFM3-1.7B-BF16.gguf"
+ }
+]

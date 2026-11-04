@@ -98,3 +98,22 @@ export const storyJob = (id) => j('GET', `/v1/stories/${encodeURIComponent(id)}`
 export const storyAgain = (id) => j('POST', `/v1/stories/${encodeURIComponent(id)}/again`)
 /* only a <sha256>.wav name is a narration file */
 export const audioUrl = (file) => (typeof file === 'string' && /^[0-9a-f]{64}\.wav$/.test(file) ? `/v1/media/${file}` : '')
+
+/* Setup: kits, the plan, the run, approvals, the model mover and update checks. Every run
+ * action answers with the installer's state; updates does network work, so it (like every
+ * call) carries X-Primer. */
+export const setup = () => j('GET', '/v1/setup')
+export const setupPlan = (kit, choices, root) => j('POST', '/v1/setup/plan', { kit, choices: choices || {}, root })
+// names the plan the window shows: the server answers 409 if the pending plan is another one
+export const setupStart = (kit, root, choices) => j('POST', '/v1/setup/start', { kit, root, choices: choices || {} })
+export const setupPause = () => j('POST', '/v1/setup/pause')
+export const setupResume = () => j('POST', '/v1/setup/resume')
+export const setupCancel = (item) => j('POST', '/v1/setup/cancel', { item })
+// `licence` is the licence's key as the plan lists it (name and link)
+export const setupLicence = (licence) => j('POST', '/v1/setup/licence', { licence })
+export const setupApprove = (path, sha256) => j('POST', '/v1/setup/approve', { path, sha256 })
+export const setupApproveRelease = (item) => j('POST', '/v1/setup/approve-release', { item })
+export const setupUpdates = (refresh = false) => j('GET', '/v1/setup/updates' + (refresh ? '?refresh=1' : ''))
+export const setupModels = () => j('GET', '/v1/setup/models')
+export const setupMove = (paths, dest) => j('POST', '/v1/setup/move', { paths, dest })
+export const setupMoveCancel = () => j('POST', '/v1/setup/move/cancel')
