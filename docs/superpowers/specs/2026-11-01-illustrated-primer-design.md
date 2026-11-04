@@ -114,6 +114,7 @@ These are my calls, not agreed with the user. They're easy to change.
 - **Phase 5, map lens.**
 - **Phase 6, narrated stories** (TTS).
 - **Phase 7, browser lens.**
+- **Phases 8–15** (added 2026-11-04, after all seven shipped): thinking ahead, a setup centre, a reader model that asks back, a continuing story, timeline and diagram lenses, exporting the trail as a book, a driven browser, and Kairos as the front door. See [the roadmap](2026-11-04-primer-roadmap.md).
 - Tier presets plus first-run hardware suggestion land with Phase 1 (config) and grow as lenses arrive. The graph/tree map view lands with or after Phase 1.
 
 ## 9. Left to the builder

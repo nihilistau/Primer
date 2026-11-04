@@ -5,11 +5,10 @@ from __future__ import annotations
 import http.client
 import json
 import urllib.error
-import urllib.request
 from typing import Iterator
 
 from primer.config import EngineSpec
-from primer.engines import EngineError, opener_for
+from primer.engines import EngineError, StreamCancel, open_stream, opener_for
 
 STREAM_TIMEOUT_S = 300.0
 
@@ -21,20 +20,22 @@ class SpDaemonEngine:
         self._opener = opener_for(self.base)
 
     def stream(self, messages: list[dict], *, max_tokens: int = 1200,
-               temperature: float = 0.7) -> Iterator[str]:
+               temperature: float = 0.7, cancel: StreamCancel | None = None) -> Iterator[str]:
+        """Text pieces as they arrive. Closing the generator closes the connection; `cancel`
+        stops it from another thread, even mid-read."""
         body = {"messages": messages, "max_tokens": max_tokens,
                 "temperature": temperature, "stream": True}
         if self.spec.model:
             body["model"] = self.spec.model
-        req = urllib.request.Request(
-            self.base + "/v1/chat", data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
-            method="POST")
         try:
-            resp = self._opener.open(req, timeout=STREAM_TIMEOUT_S)
+            resp = open_stream(self._opener, self.base + "/v1/chat", json.dumps(body).encode("utf-8"),
+                               {"Content-Type": "application/json", "Accept": "text/event-stream"},
+                               STREAM_TIMEOUT_S, cancel)
         except urllib.error.HTTPError as exc:
             raise EngineError(f"sp-daemon returned HTTP {exc.code}") from None
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            if cancel is not None and cancel.cancelled:
+                raise EngineError("stream cancelled") from None
             raise EngineError(f"cannot reach sp-daemon at {self.base}: {exc}") from None
         event = "message"
         finished = False  # the sp-daemon always ends a turn with [DONE]
@@ -69,9 +70,13 @@ class SpDaemonEngine:
                 if delta:
                     yield delta
         except (OSError, ValueError, http.client.HTTPException) as exc:
+            if cancel is not None and cancel.cancelled:
+                raise EngineError("stream cancelled") from None
             raise EngineError(f"stream failed: {exc}") from None
         finally:
             resp.close()
+        if cancel is not None and cancel.cancelled:
+            raise EngineError("stream cancelled")
         if not finished:
             raise EngineError("stream failed: the sp-daemon closed the connection before the page finished")
 

@@ -23,7 +23,8 @@ from primer.browse.prompts import DEFAULT_QUESTION
 from primer.browse.service import BrowseError, BrowseService
 from primer.config import (TIERS_DIR, ConfigError, Tier, list_tiers, load_tier, read_settings,
                            write_settings)
-from primer.engines import make_engine
+from primer.drafts import Drafter
+from primer.engines import LOOPBACK_HOSTS, make_engine
 from primer.gpu import GpuGate
 from primer.graph import clean_typed
 from primer.grounding import MODES
@@ -163,6 +164,10 @@ class TextPause:
             s.stop()
 
 
+def _is_setting(value) -> bool:
+    return type(value) is int and 0 <= value <= 2
+
+
 @dataclass
 class App:
     tier: Tier
@@ -180,6 +185,7 @@ class App:
     maps: MapService | None = None
     stories: StoryService | None = None
     browse: BrowseService | None = None
+    drafter: Drafter | None = None  # thinking ahead; a new one with every PageService
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -188,6 +194,7 @@ class App:
     _archive: Archive | None = field(default=None, repr=False)  # opened on first use
     _voice_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _voice_cache: tuple | None = field(default=None, repr=False)  # (expires, url, healthy)
+    _thinking: int | None = field(default=None, repr=False)  # saved thinking_ahead, None: unset
 
     def __post_init__(self) -> None:
         """Fill in what wasn't passed: the model store, a gate over these servers (also given
@@ -211,6 +218,11 @@ class App:
             self.stories = self.make_stories(self.tier, self.pages, self.images, self.gate)
         if self.browse is None:
             self.browse = self.make_browse(self.tier)
+        self._thinking = self.saved_thinking_ahead()
+        if self.pages.drafter is None:
+            self.drafter = Drafter(self.graph, self.pages, self.gate, self.thinking_ahead)
+        else:
+            self.drafter = self.pages.drafter
 
     @staticmethod
     def make_browse(tier: Tier) -> BrowseService:
@@ -264,6 +276,46 @@ class App:
             except ConfigError:
                 settings = {}
             write_settings(self.var_dir, {**settings, "source_mode": mode})
+
+    def saved_thinking_ahead(self) -> int | None:
+        """The saved thinking_ahead setting (0, 1 or 2), if there is a valid one."""
+        try:
+            value = read_settings(self.var_dir).get("thinking_ahead")
+        except ConfigError:
+            return None
+        return value if _is_setting(value) else None
+
+    def thinking_ahead(self) -> int:
+        """Pages to draft ahead: the saved setting, else 1 where drafting costs nothing (auto
+        GPU mode, the writing model on this machine's GPU) and 0 otherwise: a hosted (paid)
+        API, a CPU-only model, or manual GPU mode. The reader can still turn it on."""
+        value = self._thinking
+        if value is not None:
+            return value
+        text = self.tier.text
+        try:
+            host = (urlsplit(text.base_url).hostname or "").lower()
+        except ValueError:
+            host = ""
+        return 1 if self.tier.gpu_mode == "auto" and text.gpu and host in LOOPBACK_HOSTS else 0
+
+    def set_thinking_ahead(self, value: int) -> None:
+        """Remember `value` across restarts and tiers; off (or lowering it below the draft being
+        written) stops that draft."""
+        with self._lock:
+            self._thinking = value
+            try:
+                settings = read_settings(self.var_dir)
+            except ConfigError:
+                settings = {}
+            write_settings(self.var_dir, {**settings, "thinking_ahead": value})
+            drafter = self.drafter
+        if drafter is None:
+            return
+        if value == 0:
+            drafter.cancel_current()
+        else:  # lowered (2 -> 1): a draft two pages ahead stops
+            drafter.cancel_beyond(value)
 
     def shutdown_images(self) -> None:
         """Stop image jobs and sd-server without restarting text servers that are about to stop."""
@@ -365,36 +417,45 @@ class App:
         """Switch tiers. Raises ConfigError, changing nothing, if the tier is unknown or invalid."""
         tier = load_tier(name, self.tiers_dir)
         self._forget_reference()
-        with self._lock:
-            self.shutdown_images()
-            self.shutdown_maps(MAPS_TIER_SWITCH)
-            self.shutdown_stories(STORIES_TIER_SWITCH)
-            self.servers.stop_all()
-            self.pages.shutdown(drain=False)  # queued prefetch is for the old tier's servers
-            servers = ServerManager(tier)
-            text_pause, gate = make_gate(tier, servers)
-            fast = make_engine(tier.fast)
-            mode = self.saved_source_mode() or tier.source_mode
-            pages = PageService(self.graph, make_engine(tier.text), fast, mode, gate,
-                                self.make_grounder(tier))
-            images = self.make_images(tier, gate, fast)
-            text_pause.release_gpu = images.release_gpu
-            self.tier, self.pages, self.servers = tier, pages, servers
-            self.text_pause, self.gate, self.images = text_pause, gate, images
-            self.maps = self.make_maps(self.graph, tier, fast)
-            self.stories = self.make_stories(tier, pages, images, gate)
-            self.browse = self.make_browse(tier)
-            with self._voice_lock:
-                self._voice_cache = None
-            self._close_archive()  # a tile request during the switch may have reopened the old file
-            try:
-                settings = read_settings(self.var_dir)
-            except ConfigError:
-                settings = {}
-            try:
-                write_settings(self.var_dir, {**settings, "tier": name})
-            finally:
-                servers.start_all(wait=False)
+        old = self.drafter
+        if old is not None:
+            old.shutdown()  # may wait on a web fetch: not under the lock other requests need
+        try:
+            with self._lock:
+                self.shutdown_images()
+                self.shutdown_maps(MAPS_TIER_SWITCH)
+                self.shutdown_stories(STORIES_TIER_SWITCH)
+                self.servers.stop_all()
+                self.pages.shutdown(drain=False)  # queued prefetch is for the old tier's servers
+                servers = ServerManager(tier)
+                text_pause, gate = make_gate(tier, servers)
+                fast = make_engine(tier.fast)
+                mode = self.saved_source_mode() or tier.source_mode
+                pages = PageService(self.graph, make_engine(tier.text), fast, mode, gate,
+                                    self.make_grounder(tier))
+                images = self.make_images(tier, gate, fast)
+                text_pause.release_gpu = images.release_gpu
+                self.tier, self.pages, self.servers = tier, pages, servers
+                self.drafter = Drafter(self.graph, pages, gate, self.thinking_ahead)
+                self.text_pause, self.gate, self.images = text_pause, gate, images
+                self.maps = self.make_maps(self.graph, tier, fast)
+                self.stories = self.make_stories(tier, pages, images, gate)
+                self.browse = self.make_browse(tier)
+                with self._voice_lock:
+                    self._voice_cache = None
+                self._close_archive()  # a tile request during the switch may have reopened the old file
+                try:
+                    settings = read_settings(self.var_dir)
+                except ConfigError:
+                    settings = {}
+                try:
+                    write_settings(self.var_dir, {**settings, "tier": name})
+                finally:
+                    servers.start_all(wait=False)
+        except BaseException:
+            if old is not None and self.drafter is old:  # the switch failed: keep drafting for what is current
+                self.drafter = Drafter(self.graph, self.pages, self.gate, self.thinking_ahead)
+            raise
 
     def server_action(self, role: str, action: str) -> dict:
         """Start or stop one model server. Raises ValueError for an unknown role. Holds the
@@ -417,7 +478,26 @@ class App:
                 "animate_available": self.animate_available(), "gpu": self.gate.state(),
                 "map_available": self.map_available(), "browse_available": self.browse_available(),
                 "voice_available": self.voice_available(),
-                "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""}}
+                "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""},
+                "thinking_ahead": {**(self.drafter.status() if self.drafter is not None else {}),
+                                   "setting": self.thinking_ahead()}}
+
+    def cards_json(self, node_id: str, phrase: str) -> list[dict]:
+        """The phrase's branch cards, each with `ready`: a finished draft of the page opening
+        it would show (for the current source mode) is waiting."""
+        mode, drafter = self.pages.source_mode, self.drafter
+        out = []
+        for c in self.pages.branches(node_id, phrase):
+            ready = False
+            if drafter is not None:
+                try:  # the node exactly as opening the card resolves it, created by no one
+                    nid = (self.graph.node_id_for(c.concept, "context", node_id) if c.via == "context"
+                           else self.graph.node_id_for(c.concept, "concept"))
+                    ready = drafter.ready(nid, mode)
+                except ValueError:
+                    pass
+            out.append({**asdict(c), "ready": ready})
+        return out
 
     def sources_status(self) -> dict:
         """Which source modes can be used now, and why not. One quick call to kiwix-serve,
@@ -649,14 +729,14 @@ def _make_handler(app: App):
                 elif path == "/v1/status":
                     self._json(app.status())
                 elif path == "/v1/graph":
-                    self._json(app.graph.snapshot())
+                    self._json(app.graph.snapshot(visible_only=True))
                 elif path == "/v1/branches":
                     q = parse_qs(url.query)
                     node, phrase = q.get("node", [""])[0], q.get("phrase", [""])[0]
                     if not node or not phrase:
                         self._json({"error": "node and phrase are required"}, 400)
                     else:
-                        self._json({"cards": [asdict(c) for c in app.pages.branches(node, phrase)]})
+                        self._json({"cards": app.cards_json(node, phrase)})
                 elif path.startswith("/v1/pages/"):
                     page = app.pages.page(unquote(path[len("/v1/pages/"):]))
                     if page is None:
@@ -724,6 +804,12 @@ def _make_handler(app: App):
                     if not isinstance(mode, str) or mode not in MODES:
                         raise _BadRequest(f"mode must be one of {MODES}")
                     app.set_source_mode(mode)
+                    self._json(app.status())
+                elif path == "/v1/thinking-ahead":
+                    value = body.get("setting")
+                    if not _is_setting(value):
+                        raise _BadRequest("setting must be 0, 1 or 2")
+                    app.set_thinking_ahead(value)
                     self._json(app.status())
                 elif path == "/v1/pages/open":
                     self._open(body)

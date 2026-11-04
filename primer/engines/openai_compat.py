@@ -9,7 +9,7 @@ import urllib.request
 from typing import Iterator
 
 from primer.config import REPO_ROOT, EngineSpec
-from primer.engines import EngineError, opener_for
+from primer.engines import EngineError, StreamCancel, open_stream, opener_for
 
 STREAM_TIMEOUT_S = 300.0
 
@@ -48,22 +48,24 @@ class OpenAICompatEngine:
             body["model"] = self.spec.model
         return body
 
-    def _open(self, body: dict):
-        req = urllib.request.Request(
-            self.base + "/v1/chat/completions", data=json.dumps(body).encode("utf-8"),
-            headers=self._headers(), method="POST")
+    def _open(self, body: dict, cancel: StreamCancel | None = None):
         try:
-            return self._opener.open(req, timeout=STREAM_TIMEOUT_S)
+            return open_stream(self._opener, self.base + "/v1/chat/completions",
+                               json.dumps(body).encode("utf-8"), self._headers(), STREAM_TIMEOUT_S, cancel)
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise EngineError(self._auth_error(exc.code)) from None
             raise EngineError(f"engine returned HTTP {exc.code}") from None
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            if cancel is not None and cancel.cancelled:
+                raise EngineError("stream cancelled") from None
             raise EngineError(f"cannot reach engine at {self.base}: {exc}") from None
 
     def stream(self, messages: list[dict], *, max_tokens: int = 1200,
-               temperature: float = 0.7) -> Iterator[str]:
-        resp = self._open(self._body(messages, max_tokens, temperature, True))
+               temperature: float = 0.7, cancel: StreamCancel | None = None) -> Iterator[str]:
+        """Text pieces as they arrive. Closing the generator closes the connection; `cancel`
+        stops it from another thread, even mid-read."""
+        resp = self._open(self._body(messages, max_tokens, temperature, True), cancel)
         finished = False  # [DONE] or a finish_reason: anything else is a page cut short
         try:
             for raw in resp:
@@ -96,9 +98,13 @@ class OpenAICompatEngine:
                 if text:
                     yield text
         except (OSError, ValueError, http.client.HTTPException) as exc:
+            if cancel is not None and cancel.cancelled:
+                raise EngineError("stream cancelled") from None
             raise EngineError(f"stream failed: {exc}") from None
         finally:
             resp.close()
+        if cancel is not None and cancel.cancelled:
+            raise EngineError("stream cancelled")
         if not finished:
             raise EngineError("stream failed: the engine closed the connection before the page finished")
 

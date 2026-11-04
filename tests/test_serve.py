@@ -50,6 +50,7 @@ def test_shutdown_stops_servers_even_if_page_shutdown_is_interrupted(tmp_path, m
         grounder = object()
         source_mode = "storyteller"
         text = fast = None
+        drafter = None
 
         def __init__(self, *a, **kw):
             pass

@@ -1,4 +1,5 @@
-"""SQLite concept graph: nodes, edges, page versions, highlights and branch cards."""
+"""SQLite concept graph: nodes, edges, page versions, highlights, branch cards, media, maps,
+stories and drafts (pages written ahead, invisible until opened)."""
 from __future__ import annotations
 
 import hashlib
@@ -62,6 +63,18 @@ class Card:
     concept: str
     title: str
     blurb: str
+
+
+@dataclass
+class Draft:
+    """A page written ahead of the reader (thinking ahead); never a version until opened."""
+    node_id: str
+    depth: str
+    source_mode: str
+    markdown: str
+    sources: list[Source]
+    status: Literal["writing", "done"]
+    created_at: float
 
 
 @dataclass
@@ -133,6 +146,10 @@ CREATE TABLE IF NOT EXISTS story_scenes(
     story_id TEXT NOT NULL, idx INTEGER NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL,
     spoken TEXT NOT NULL, media_id TEXT, audio TEXT, chunks_json TEXT NOT NULL, status TEXT NOT NULL,
     error TEXT, PRIMARY KEY(story_id, idx));
+CREATE TABLE IF NOT EXISTS drafts(
+    node_id TEXT NOT NULL, depth TEXT NOT NULL, source_mode TEXT NOT NULL, markdown TEXT NOT NULL,
+    sources_json TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL,
+    PRIMARY KEY(node_id, source_mode));
 CREATE TABLE IF NOT EXISTS place_cache(
     key TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
     title TEXT NOT NULL, source TEXT NOT NULL, at REAL NOT NULL);
@@ -140,11 +157,21 @@ CREATE TABLE IF NOT EXISTS place_cache(
 
 _NODE_COLS = "id, kind, concept, title, parent_id"
 _VERSION_COLS = "node_id, n, markdown, source_mode, depth, created_at"
+_DRAFT_COLS = "node_id, depth, source_mode, markdown, sources_json, status, created_at"
+_DRAFT_STATUSES = ("writing", "done")
 _MEDIA_COLS = "id, node_id, phrase, kind, model_id, prompt, settings_json, status, file, error, created_at"
 
 
 def _media(row) -> Media:
     return Media(*row[:6], json.loads(row[6]), *row[7:])
+
+
+_SOURCE_KEYS = ("n", "title", "origin", "book", "path", "url", "where")
+
+
+def _draft(row) -> Draft:
+    sources = [Source(text="", **{k: s[k] for k in _SOURCE_KEYS}) for s in json.loads(row[4])]
+    return Draft(*row[:4], sources, *row[5:])
 
 
 class Graph:
@@ -159,8 +186,9 @@ class Graph:
                 self._db.executescript(_SCHEMA)
 
     # nodes
-    def node_for(self, concept: str, kind: str, parent_id: str | None = None,
-                 title: str | None = None) -> Node:
+    @staticmethod
+    def _node_key(concept: str, kind: str, parent_id: str | None) -> tuple[str, str, str | None]:
+        """(node id, normalised concept, effective parent) for a node; ValueError if it can't be."""
         if kind not in ("concept", "context"):
             raise ValueError(f"kind must be 'concept' or 'context', got {kind!r}")
         if kind == "context" and not parent_id:
@@ -171,7 +199,15 @@ class Graph:
         if kind == "concept":
             parent_id = None
         key = norm if kind == "concept" else f"{norm}\x00{parent_id}"
-        node_id = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16], norm, parent_id
+
+    def node_id_for(self, concept: str, kind: str, parent_id: str | None = None) -> str:
+        """The id node_for would give this node, without creating it."""
+        return self._node_key(concept, kind, parent_id)[0]
+
+    def node_for(self, concept: str, kind: str, parent_id: str | None = None,
+                 title: str | None = None) -> Node:
+        node_id, norm, parent_id = self._node_key(concept, kind, parent_id)
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR IGNORE INTO nodes(id, kind, concept, title, parent_id) VALUES(?,?,?,?,?)",
@@ -469,6 +505,54 @@ class Graph:
                 (reason, time.time(), *_STORY_FINAL))
         return cur.rowcount
 
+    # drafts (thinking ahead): keyed by (node, source mode); no edge, version or history entry
+    def put_draft(self, node_id: str, source_mode: str, markdown: str, sources: Sequence[Source],
+                  status: str, depth: str = "normal") -> None:
+        """Insert or replace the draft for (node, mode). Sources keep everything but their text,
+        like a version's."""
+        if status not in _DRAFT_STATUSES:
+            raise ValueError(f"unknown draft status {status!r}")
+        src = json.dumps([{k: getattr(s, k) for k in _SOURCE_KEYS} for s in sources])
+        with self._lock, self._db:
+            self._db.execute(f"INSERT OR REPLACE INTO drafts({_DRAFT_COLS}) VALUES(?,?,?,?,?,?,?)",
+                             (node_id, depth, source_mode, markdown, src, status, time.time()))
+
+    def get_draft(self, node_id: str, source_mode: str) -> Draft | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_DRAFT_COLS} FROM drafts WHERE node_id=? AND source_mode=?",
+                                   (node_id, source_mode)).fetchone()
+        return _draft(row) if row else None
+
+    def drafts_for(self, node_id: str) -> list[Draft]:
+        with self._lock:
+            rows = self._db.execute(f"SELECT {_DRAFT_COLS} FROM drafts WHERE node_id=? ORDER BY rowid",
+                                    (node_id,)).fetchall()
+        return [_draft(r) for r in rows]
+
+    def delete_draft(self, node_id: str, source_mode: str | None = None) -> int:
+        """Delete the node's draft for one mode, or for every mode; returns how many."""
+        with self._lock, self._db:
+            if source_mode is None:
+                cur = self._db.execute("DELETE FROM drafts WHERE node_id=?", (node_id,))
+            else:
+                cur = self._db.execute("DELETE FROM drafts WHERE node_id=? AND source_mode=?",
+                                       (node_id, source_mode))
+        return cur.rowcount
+
+    def prune_drafts(self, keep: int) -> int:
+        """Keep the newest `keep` finished drafts (one being written is never pruned)."""
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "DELETE FROM drafts WHERE status='done' AND rowid NOT IN (SELECT rowid FROM drafts "
+                "WHERE status='done' ORDER BY created_at DESC, rowid DESC LIMIT ?)", (keep,))
+        return cur.rowcount
+
+    def clear_unfinished_drafts(self) -> int:
+        """At start: a draft left half-written by a previous run is never kept."""
+        with self._lock, self._db:
+            cur = self._db.execute("DELETE FROM drafts WHERE status != 'done'")
+        return cur.rowcount
+
     # located places (only hits are cached)
     def cached_place(self, key: str):
         from .maps import Place
@@ -496,9 +580,18 @@ class Graph:
                 "GROUP BY n.id ORDER BY MAX(e.at) DESC, MAX(e.rowid) DESC LIMIT ?", (limit,)).fetchall()
         return [r[0] for r in rows]
 
-    def snapshot(self) -> dict:
+    def snapshot(self, visible_only: bool = False) -> dict:
+        """All nodes and edges; visible_only leaves out nodes a draft made ahead of the reader."""
         with self._lock:
-            nodes = self._db.execute(f"SELECT {_NODE_COLS} FROM nodes ORDER BY rowid").fetchall()
+            where = ""
+            if visible_only:  # a node nobody arrived at (no edge in) with no page, picture, map or story was made by a draft
+                # (older databases may hold such nodes from before edges; they had nothing to show either)
+                where = (" WHERE EXISTS(SELECT 1 FROM edges WHERE to_id=nodes.id)"
+                         " OR EXISTS(SELECT 1 FROM versions WHERE node_id=nodes.id)"
+                         " OR EXISTS(SELECT 1 FROM media WHERE node_id=nodes.id)"
+                         " OR EXISTS(SELECT 1 FROM maps WHERE node_id=nodes.id)"
+                         " OR EXISTS(SELECT 1 FROM stories WHERE node_id=nodes.id)")
+            nodes = self._db.execute(f"SELECT {_NODE_COLS} FROM nodes{where} ORDER BY rowid").fetchall()
             edges = self._db.execute(
                 "SELECT from_id, to_id, phrase, via, at FROM edges ORDER BY rowid").fetchall()
         return {

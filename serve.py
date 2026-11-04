@@ -54,6 +54,7 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     graph.fail_unfinished_media("Primer restarted")
     graph.fail_unfinished_maps("Primer restarted")
     graph.fail_unfinished_stories("Primer restarted")
+    graph.clear_unfinished_drafts()
     store = ModelStore(var_dir)
     servers = ServerManager(tier)
     text_pause, gate = make_gate(tier, servers)

@@ -1,3 +1,4 @@
+import dataclasses
 import http.client
 import json
 import socket
@@ -29,6 +30,7 @@ def test_open_streams_sse_events(client):
 
 
 def test_page_and_branches_and_graph(client):
+    client.post("/v1/thinking-ahead", {"setting": 0})  # a draft would add a node of its own
     nid = client.sse("/v1/pages/open", {"concept": "Trebuchet", "via": "start"})[0][1]["id"]
     assert client.get(f"/v1/pages/{nid}")["version"]["markdown"].startswith("# Trebuchet")
     assert client.get(f"/v1/branches?node={nid}&phrase=counterweight")["cards"][0]["via"] == "context"
@@ -1269,3 +1271,121 @@ def test_voice_available_says_starting(tmp_path, g, monkeypatch):
         assert app.voice_available() == {"ok": False, "reason": "The voice server is starting"}
     finally:
         close()
+
+
+# --- thinking ahead (Phase 8) ---
+def test_thinking_ahead_default_follows_gpu_mode(client, app_parts):
+    """On by default only where drafting is free: auto GPU mode and the writing model on this
+    machine's GPU. Hosted (a paid API) and CPU-only tiers are off unless the reader turns it on."""
+    app, _ = app_parts
+    ta = client.get("/v1/status")["thinking_ahead"]
+    assert {"drafting", "written", "used", "discarded", "hit_rate"} <= ta.keys()
+    assert "background" in client.get("/v1/status")["gpu"]
+    local_gpu = dataclasses.replace(app.tier.text, base_url="http://127.0.0.1:1234", gpu=True)
+    cases = {  # hybrid-like, its manual twin, light-like (CPU), hosted-like (even with gpu set)
+        "hybrid": (dataclasses.replace(app.tier, text=local_gpu), 1),
+        "manual": (dataclasses.replace(app.tier, text=local_gpu, gpu_mode="manual"), 0),
+        "light": (dataclasses.replace(app.tier, text=dataclasses.replace(local_gpu, gpu=False)), 0),
+        "hosted": (dataclasses.replace(app.tier, text=dataclasses.replace(
+            local_gpu, base_url="https://api.example.com")), 0),
+        "localhost": (dataclasses.replace(app.tier, text=dataclasses.replace(
+            local_gpu, base_url="http://localhost:1234/v1")), 1),
+    }
+    for name, (tier, want) in cases.items():
+        app.tier = tier
+        assert client.get("/v1/status")["thinking_ahead"]["setting"] == want, name
+    app.tier = cases["hosted"][0]
+    client.post("/v1/thinking-ahead", {"setting": 1})  # still yours to turn on
+    assert client.get("/v1/status")["thinking_ahead"]["setting"] == 1
+
+
+def test_thinking_ahead_set_persisted_and_validated(client, app_parts):
+    app, _ = app_parts
+    assert client.post("/v1/thinking-ahead", {"setting": 2})["thinking_ahead"]["setting"] == 2
+    assert read_settings(app.var_dir)["thinking_ahead"] == 2
+    for bad in (3, -1, True, False, "1", 1.5, None):
+        client.post("/v1/thinking-ahead", {"setting": bad}, expect=400)
+    client.post("/v1/thinking-ahead", {}, expect=400)
+    assert client.get("/v1/status")["thinking_ahead"]["setting"] == 2
+
+
+def test_thinking_ahead_off_cancels_current_draft(client, app_parts):
+    app, _ = app_parts
+    calls = []
+    app.drafter.cancel_current = lambda: calls.append(1)
+    client.post("/v1/thinking-ahead", {"setting": 0})
+    assert calls == [1]
+    client.post("/v1/thinking-ahead", {"setting": 2})
+    assert calls == [1]
+
+
+def test_thinking_ahead_lowered_cancels_drafts_beyond_it(client, app_parts):
+    app, _ = app_parts
+    calls = []
+    app.drafter.cancel_beyond = calls.append
+    client.post("/v1/thinking-ahead", {"setting": 2})
+    client.post("/v1/thinking-ahead", {"setting": 1})
+    assert calls == [2, 1]
+
+
+def test_thinking_ahead_saved_setting_wins(tmp_path, g):
+    app, client, close = _grounded(tmp_path, g, Tier("t", _spec(), _spec()), settings={"thinking_ahead": 2})
+    try:
+        assert client.get("/v1/status")["thinking_ahead"]["setting"] == 2
+    finally:
+        close()
+
+
+def test_thinking_ahead_survives_tier_reload_with_new_drafter(client, app_parts):
+    app, tiers_dir = app_parts
+    (tiers_dir / "alt.toml").write_text(TIER_TOML)
+    client.post("/v1/thinking-ahead", {"setting": 2})
+    old = app.drafter
+    client.post("/v1/tier", {"name": "alt"})
+    assert app.drafter is not old and app.pages.drafter is app.drafter
+    assert old._closed and not app.drafter._closed
+    assert client.get("/v1/status")["thinking_ahead"]["setting"] == 2
+    app.servers.stop_all()
+
+
+def test_branch_cards_carry_ready(client, app_parts):
+    app, _ = app_parts
+    client.post("/v1/thinking-ahead", {"setting": 0})  # the drafter would write its own
+    nid = client.sse("/v1/pages/open", {"concept": "Trebuchet", "via": "start"})[0][1]["id"]
+    q = f"/v1/branches?node={nid}&phrase=counterweight"
+    cards = client.get(q)["cards"]
+    assert cards and all(c["ready"] is False for c in cards)
+    ctx = next(c for c in cards if c["via"] == "context")
+    before = len(app.graph.snapshot()["nodes"])
+    app.graph.put_draft(app.graph.node_id_for(ctx["concept"], "context", nid),
+                        app.pages.source_mode, "# x", [], "done")
+    cards = client.get(q)["cards"]
+    assert {c["via"]: c["ready"] for c in cards}["context"] is True
+    assert len(app.graph.snapshot()["nodes"]) == before  # asking never creates nodes
+
+
+def test_graph_hides_nodes_a_draft_made(client, app_parts):
+    app, _ = app_parts
+    app.graph.node_for("Counterweight", "concept")  # what drafting does: a node, no edge, no page
+    assert client.get("/v1/graph")["nodes"] == []
+    client.sse("/v1/pages/open", {"concept": "Trebuchet", "via": "start"})
+    assert [n["title"] for n in client.get("/v1/graph")["nodes"]] == ["Trebuchet"]
+
+
+def test_graph_keeps_image_only_node(client, app_parts):
+    app, _ = app_parts
+    node = app.graph.node_for("Windmill", "concept")  # what an image for a concept with no page makes
+    app.graph.add_media(node.id, "sails", "image", "m", "p", {})
+    assert [n["id"] for n in client.get("/v1/graph")["nodes"]] == [node.id]
+
+
+def test_failed_tier_reload_keeps_a_live_drafter(client, app_parts):
+    import pytest
+    app, tiers_dir = app_parts
+    (tiers_dir / "alt.toml").write_text(TIER_TOML)
+    old = app.drafter
+    app.shutdown_maps = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        app.reload_tier("alt")
+    assert app.drafter is not old and not app.drafter._closed and app.pages.drafter is app.drafter
+    app.servers.stop_all()

@@ -27,6 +27,11 @@ following. Click one, and Primer offers three branches, already thinking ahead:
 
 ![A phrase on the castle keep page clicked, with three branch cards fanning out from it: In this context, General, and Sideways, each with a suggested title, plus Image, Video and Ask about it buttons](docs/screenshots/branch-fork.webp)
 
+**It thinks ahead.** While you read, Primer quietly writes the page you're most likely to open
+next, so clicking it is instant. It steps aside the moment you ask for anything else.
+
+![The Rhuddlan Castle page with a phrase's branch cards open, the In this context card marked as already written, beside the Engines window showing Thinking ahead set to One page with 3 written, 1 used and a 33% hit rate](docs/screenshots/thinking-ahead.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -200,8 +205,8 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.7**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, the map, narrated stories and the reader browser work. A browser that drives a real Chrome
+This is **v0.8**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, the map, narrated stories, the reader browser and thinking ahead work. A browser that drives a real Chrome
 (for sites that need scripts or a login) is planned next. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).

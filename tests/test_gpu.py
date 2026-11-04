@@ -49,7 +49,8 @@ def test_manual_mode_never_pauses():
     gate.release_idle()
     assert rec.log == []
     assert gate.state() == {"mode": "manual", "holder": None, "text_paused": False,
-                            "waiting_pages": 0, "waiting_images": 0, "error": None}
+                            "waiting_pages": 0, "waiting_images": 0, "error": None,
+                            "background": False}
 
 
 def test_image_pauses_and_idle_release_resumes():
@@ -225,3 +226,191 @@ def test_interrupt_during_switch_releases_gate():
     with gate.image():  # the gate is usable again
         assert gate.state()["text_paused"] is True
     assert calls == ["pause", "pause"]
+
+
+# background (pre-emptible) turns: drafting on an idle GPU
+
+
+def test_background_only_when_idle():
+    gate, rec = _gate()
+    bg = gate.background()
+    assert bg is not None and gate.state()["holder"] == "page"
+    assert gate.background() is None  # one holder at a time
+    bg.release()
+    bg.release()  # idempotent
+    assert gate.state()["holder"] is None
+
+    with gate.page():  # a held page
+        assert gate.background() is None
+
+    with gate.image():  # a held picture (and the text is paused after it)
+        assert gate.background() is None
+    # text paused for pictures: refuse rather than resume on the draft's account
+    assert gate.state()["text_paused"] is True
+    assert gate.background() is None and rec.log == ["pause"]
+    gate.release_idle()
+    assert rec.log == ["pause", "resume"]
+    bg = gate.background()
+    assert bg is not None
+    bg.release()
+
+    # a queued picture
+    held = gate.page()
+    assert held.try_enter()
+    queued = gate.image()
+    assert queued.try_enter() is False
+    held.__exit__(None, None, None)
+    assert gate.state()["waiting_images"] == 1 and gate.background() is None
+    queued.cancel()
+
+    # a switch in progress (release_idle resuming the text outside the lock)
+    in_resume, finish_resume = threading.Event(), threading.Event()
+
+    def slow_resume():
+        in_resume.set()
+        assert finish_resume.wait(WAIT)
+
+    gate = GpuGate("auto", lambda: None, slow_resume)
+    with gate.image():
+        pass
+    t = threading.Thread(target=gate.release_idle)
+    t.start()
+    assert in_resume.wait(WAIT)
+    assert gate.background() is None
+    finish_resume.set()
+    t.join(WAIT)
+    assert not t.is_alive()
+    bg = gate.background()
+    assert bg is not None
+    bg.release()
+
+
+def test_background_never_pauses_or_resumes():
+    gate, rec = _gate()
+    with gate.background() as bg:
+        assert bg.preempted() is False
+    assert rec.log == [] and gate.state()["holder"] is None
+
+
+@pytest.mark.parametrize("kind", ["page", "image"])
+def test_background_preempted_by_waiting_page_and_image(kind):
+    gate, rec = _gate()
+    bg = gate.background()
+    assert bg is not None
+    assert bg.preempted() is False
+    assert bg.wait_preempted(0.02) is False
+    entered = threading.Event()
+
+    def other():
+        with getattr(gate, kind)():
+            entered.set()
+
+    t = threading.Thread(target=other)
+    t0 = time.monotonic()
+    t.start()
+    assert bg.wait_preempted(WAIT) is True  # woken by the waiter, not by the timeout
+    assert time.monotonic() - t0 < 0.5
+    assert bg.preempted() is True
+    assert not entered.is_set()  # it waits for the background turn, like for any page
+    bg.release()
+    assert entered.wait(WAIT)
+    t.join(WAIT)
+    assert not t.is_alive()
+    assert bg.preempted() is False  # released: nothing to step aside for
+    st = gate.state()
+    assert st["holder"] is None and st["waiting_pages"] == 0 and st["waiting_images"] == 0
+    assert rec.log == (["pause"] if kind == "image" else [])
+
+
+def test_background_release_wakes_waiters():
+    gate, rec = _gate()
+    bg = gate.background()
+    entered = threading.Event()
+
+    def page():
+        with gate.page():
+            entered.set()
+
+    t = threading.Thread(target=page)
+    t.start()
+    assert _until(lambda: gate.state()["waiting_pages"] == 1)
+    assert not entered.is_set()
+    released = time.monotonic()
+    with bg:  # the context manager releases on exit too
+        pass
+    assert entered.wait(0.2)
+    assert time.monotonic() - released < 0.2
+    t.join(WAIT)
+    assert not t.is_alive() and gate.state()["holder"] is None and rec.log == []
+
+
+def test_background_released_on_exception():
+    gate, rec = _gate()
+    with pytest.raises(RuntimeError):
+        with gate.background():
+            raise RuntimeError("draft failed")
+    assert gate.state()["holder"] is None
+    assert gate.background() is not None
+
+
+def test_manual_mode_background():
+    gate, rec = _gate("manual")
+    bg = gate.background()
+    assert bg is not None and bg.preempted() is False
+    assert gate.background() is None
+    with gate.page():  # manual mode lets a real page start alongside: the draft steps aside
+        assert bg.preempted() is True
+        assert bg.wait_preempted(0.01) is True
+    bg.release()
+    with gate.image():
+        assert gate.background() is None
+    bg = gate.background()
+    assert bg is not None
+    bg.release()
+    assert rec.log == [] and gate.state()["holder"] is None
+
+
+def test_wait_preempted_returns_on_release():
+    gate, rec = _gate()
+    bg = gate.background()
+    result = []
+    t = threading.Thread(target=lambda: result.append(bg.wait_preempted(WAIT)))
+    t0 = time.monotonic()
+    t.start()
+    time.sleep(0.02)  # let it block
+    bg.release()
+    t.join(WAIT)
+    assert not t.is_alive() and result == [False] and time.monotonic() - t0 < 0.5
+
+
+def test_state_says_when_a_draft_holds_the_gate():
+    gate, _ = _gate()
+    assert gate.state()["background"] is False
+    with gate.background() as bg:
+        st = gate.state()
+        assert st["background"] is True and st["holder"] == "page"
+        bg.release()
+        assert gate.state()["background"] is False
+    with gate.page():
+        assert gate.state()["background"] is False
+
+
+def test_requested_background_turn_is_real_work():
+    gate, _ = _gate()
+    bg = gate.background()
+    page = gate.page()
+    assert page.try_enter() is False  # queued behind the draft
+    assert bg.preempted() is True
+    bg.set_requested(True)  # a reader adopted the draft
+    st = gate.state()
+    assert st["background"] is False and st["holder"] == "page"
+    assert bg.preempted() is False and bg.wait_preempted(0.05) is False
+    bg.set_requested(False)  # ... and left again
+    assert gate.state()["background"] is True and bg.wait_preempted(0.05) is True
+    bg.set_requested(True)
+    bg.release()
+    assert gate.state()["background"] is False
+    with page:
+        assert gate.state()["holder"] == "page"
+    bg.set_requested(False)  # released: no-op
+    assert gate.state()["background"] is False and gate.state()["holder"] is None

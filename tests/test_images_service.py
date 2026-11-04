@@ -354,7 +354,7 @@ def test_queue_drain_releases_gate(env):
     # consecutive images keep the text paused; the drained queue resumes it once
     assert _until(lambda: env.rec.log == ["pause", "resume"]), env.rec.log
     assert env.gate.state() == {"mode": "auto", "holder": None, "text_paused": False, "waiting_pages": 0,
-                                "waiting_images": 0, "error": None}
+                                "waiting_images": 0, "error": None, "background": False}
 
 
 def test_edit_and_run_skips_prompt_writing(env):

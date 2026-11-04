@@ -5,6 +5,7 @@ import * as api from '../api.js'
 import { rewriteOptions } from '../reader/sourceMode.js'
 import { Button, Chip, Select } from '../kit/parts.jsx'
 import { Body, usePoll } from './panel.jsx'
+import { THINKING_OPTIONS, gpuBackgroundNote, thinkingNow, thinkingSetting, thinkingStats } from './thinkingAhead.js'
 import './apps.css'
 
 const TONE = { ready: 'ok', unavailable: 'warn', busy: 'warn', starting: 'warn', failed: 'err', external: 'neutral', stopped: 'neutral' }
@@ -104,7 +105,15 @@ export default function Engines() {
                   ))}
                 </Select></div>
               <div className="en-tier"><span>GPU</span><Chip>{st.gpu_mode}</Chip>
-                <span className="en-note">configurable per tier</span></div>
+                <span className="en-note">configurable per tier</span>
+                {gpuBackgroundNote(st.gpu) ? <Chip tone="accent" dot>{gpuBackgroundNote(st.gpu)}</Chip> : null}</div>
+              <div className="en-tier"><span>Thinking ahead</span>
+                <Select aria-label="Thinking ahead" value={thinkingSetting(st)} disabled={busy}
+                        onChange={(e) => act(() => api.setThinkingAhead(Number(e.target.value)))}>
+                  {THINKING_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </Select>
+                {thinkingStats(st.thinking_ahead) ? <span className="en-note">{thinkingStats(st.thinking_ahead)}</span> : null}
+                {thinkingNow(st.thinking_ahead) ? <span className="en-note">{thinkingNow(st.thinking_ahead)}</span> : null}</div>
               </div>
             </section>
           </>

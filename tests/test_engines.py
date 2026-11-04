@@ -129,11 +129,26 @@ def fake_sp():
 
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            if self.server.mode == "lateheaders":
+                self.server.unstall.wait(10)
+            if self.server.mode == "chunked":  # HTTP/1.1 chunked, connection kept alive
+                self.protocol_version = "HTTP/1.1"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                for data in (b'data: {"delta": "Half a page"}\n\n', b"data: [DONE]\n\n", b""):
+                    self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+                self.wfile.flush()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             mode = self.server.mode
             self.wfile.write(b'event: kairos\ndata: [1]\n\ndata: {"delta": "Half a page"}\n\n')
+            if mode == "stall":  # one piece, then silence until unstall is set
+                self.wfile.flush()
+                self.server.unstall.wait(10)
             self.wfile.write({"": b"data: [DONE]\n\n",
                               "error": b'data: {"error": "model crashed"}\n\ndata: [DONE]\n\n',
                               "nondict": b"data: [1, 2]\n\ndata: [DONE]\n\n",
@@ -143,6 +158,7 @@ def fake_sp():
 
     s = ThreadingHTTPServer(("127.0.0.1", 0), H)
     s.mode = ""
+    s.unstall = threading.Event()
     threading.Thread(target=s.serve_forever, daemon=True).start()
     yield s
     s.shutdown()
@@ -226,3 +242,89 @@ def test_extra_fields_merged_into_the_request(fake_server):
     make_engine(spec).complete(MSG)
     assert fake_server.last_body["chat_template_kwargs"] == {"enable_thinking": False}
     assert fake_server.last_body["messages"] == MSG
+
+
+# cancelling a stream from another thread (thinking ahead steps aside within the bound)
+
+def _stalled_then_cancelled(engine, server, mode="stall"):
+    import threading
+    import time
+
+    from primer.engines import StreamCancel
+    server.mode = mode
+    cancel, got, err = StreamCancel(), [], []
+
+    def run():
+        try:
+            for piece in engine.stream(MSG, cancel=cancel):
+                got.append(piece)
+        except EngineError as exc:
+            err.append(exc)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    if mode == "stall":
+        end = time.monotonic() + 3
+        while not got and time.monotonic() < end:
+            time.sleep(0.005)
+        assert got, "the first piece never arrived"
+    time.sleep(0.2)  # the reader is now blocked in a read with nothing coming
+    t0 = time.monotonic()
+    cancel.cancel()
+    t.join(1.0)
+    elapsed = time.monotonic() - t0
+    server.unstall.set()
+    assert not t.is_alive() and elapsed < 1.0
+    assert err and "cancelled" in str(err[0])
+
+
+def test_openai_cancel_wakes_a_stalled_stream(fake_server):
+    _stalled_then_cancelled(make_engine(EngineSpec("openai", fake_server.url)), fake_server)
+
+
+def test_sp_cancel_wakes_a_stalled_stream(fake_sp):
+    _stalled_then_cancelled(_sp(fake_sp), fake_sp)
+
+
+def test_cancel_before_the_response_aborts_at_once():
+    from primer.engines import StreamCancel
+    cancel, calls = StreamCancel(), []
+    cancel.cancel()
+    cancel.bind(lambda: calls.append("abort"))
+    assert cancel.cancelled and calls == ["abort"]
+
+
+def test_openai_cancel_before_the_response_headers(fake_server):
+    _stalled_then_cancelled(make_engine(EngineSpec("openai", fake_server.url)), fake_server, "lateheaders")
+
+
+def test_sp_cancel_before_the_response_headers(fake_sp):
+    _stalled_then_cancelled(_sp(fake_sp), fake_sp, "lateheaders")
+
+
+def test_cancellable_stream_keeps_the_http_error_messages(fake_server):
+    from primer.engines import StreamCancel
+    fake_server.auth_status = 401
+    with pytest.raises(EngineError, match="API key"):
+        list(make_engine(EngineSpec("openai", fake_server.url)).stream(MSG, cancel=StreamCancel()))
+    fake_server.auth_status = 0
+    assert "".join(make_engine(EngineSpec("openai", fake_server.url)).stream(
+        MSG, cancel=StreamCancel())) == "Hello trebuchet world"
+
+
+@pytest.mark.parametrize("with_cancel", [False, True])
+def test_openai_stream_reads_llama_server_framing(fake_server, with_cancel):
+    """Chunked keep-alive SSE as llama-server sends it: the cancellable path (its own
+    connection) must read it exactly like the urllib path."""
+    from primer.engines import StreamCancel
+    fake_server.mode = "llama"
+    e = make_engine(EngineSpec("openai", fake_server.url))
+    kw = {"cancel": StreamCancel()} if with_cancel else {}
+    assert "".join(e.stream(MSG, **kw)) == "Hello trebuchet world"
+    assert "".join(e.stream(MSG, **kw)) == "Hello trebuchet world"  # and again: nothing left half-open
+
+
+def test_sp_stream_reads_chunked_keep_alive_with_cancel(fake_sp):
+    from primer.engines import StreamCancel
+    fake_sp.mode = "chunked"
+    assert "".join(_sp(fake_sp).stream(MSG, cancel=StreamCancel())) == "Half a page"

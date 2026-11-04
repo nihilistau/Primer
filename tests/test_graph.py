@@ -227,3 +227,25 @@ def test_story_roundtrip(g):
     assert g.get_story("nope") is None
     with pytest.raises(ValueError):
         g.add_story(n.id, 1, "weird", "v")
+
+
+# drafts (thinking ahead)
+
+def test_drafts_pruned_and_cleared_on_start(g):
+    from primer.grounding import Source
+    src = [Source(1, "T", "web", "the text is not kept", url="https://example.com/t", where="example.com")]
+    for i in range(32):
+        g.put_draft(f"n{i}", "storyteller", f"md {i}", [], "done")
+    g.put_draft("w", "web", "", src, "writing")
+    g.put_draft("n5", "web", "md web", src, "done")  # keyed by (node, mode): a second row for n5
+    assert g.prune_drafts(30) == 3  # 33 finished: the three oldest go, the one writing stays
+    assert [g.get_draft(f"n{i}", "storyteller") for i in range(3)] == [None, None, None]
+    assert g.get_draft("n3", "storyteller").markdown == "md 3"
+    assert g.get_draft("w", "web").status == "writing"
+    d = g.get_draft("n5", "web")
+    assert (d.status, d.depth, d.markdown) == ("done", "normal", "md web")
+    assert d.sources[0].url == "https://example.com/t" and d.sources[0].text == ""
+    assert sorted(x.source_mode for x in g.drafts_for("n5")) == ["storyteller", "web"]
+    assert g.clear_unfinished_drafts() == 1 and g.get_draft("w", "web") is None
+    assert g.delete_draft("n5", "web") == 1 and g.get_draft("n5", "storyteller") is not None
+    assert g.delete_draft("n5") == 1 and g.drafts_for("n5") == []

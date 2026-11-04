@@ -22,12 +22,17 @@ class FakeEngine:
         return reply
 
     def stream(self, messages: list[dict], *, max_tokens: int = 1200,
-               temperature: float = 0.7) -> Iterator[str]:
+               temperature: float = 0.7, cancel=None) -> Iterator[str]:
         self.calls.append(messages)
         reply = self._next(messages)
+        cancelled: list[bool] = []
+        if cancel is not None:
+            cancel.bind(lambda: cancelled.append(True))
         for i in range(0, len(reply), 5):
             if self.fail_after is not None and i // 5 >= self.fail_after:
                 raise EngineError("fake engine failure")
+            if cancelled:
+                raise EngineError("stream cancelled")
             yield reply[i:i + 5]
 
     def complete(self, messages: list[dict], *, max_tokens: int = 400,

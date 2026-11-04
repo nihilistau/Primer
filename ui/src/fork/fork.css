@@ -22,6 +22,7 @@
 
 .fk-tag { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); }
 .fk-context .fk-tag { color: var(--warm); }
+.fk-ready { position: absolute; top: var(--sp-2); right: var(--sp-2); display: inline-flex; color: var(--accent); }
 .fk-title { font-weight: 600; font-size: var(--fs-13); color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fk-blurb { color: var(--text-3); font-size: 11.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 

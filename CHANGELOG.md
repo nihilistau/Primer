@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.8.0: thinking ahead (2026-11-04)
+
+The next page is often already written.
+
+### Added
+
+- **Thinking ahead**: while you read, the idle GPU writes the page you're most likely to open next
+  (the first phrase's In this context card; with Two pages, its General card too). Opening it is
+  instant. Opening one still being written shows what's there and streams the rest.
+- **Never in the way**: drafts run only when nothing else wants the GPU and the writing model
+  isn't paused for pictures, and stop within about a second (with a local model server) when you
+  ask for a page, picture or clip. Pages written ahead stay invisible until you open them.
+- **Engines → Thinking ahead**: Off, One page or Two pages, with pages written, used and the hit
+  rate. Branch cards written ahead show a small mark. On by default only when the writing model
+  runs on this machine's GPU in auto mode; hosted and CPU-only tiers start with it off.
+
+### Fixed
+
+- Pictures made for a topic with no page stay in the map of where you've been.
+
+### Measured
+
+With gemma-4-E4B: a drafted card opened in 0.00 s instead of about 8 s; a page asked for during a
+draft waited 0.25 s for it to step aside.
+
 ## v0.7.0: the browser (2026-11-04)
 
 Real pages, read inside Primer.

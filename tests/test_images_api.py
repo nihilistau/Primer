@@ -169,7 +169,7 @@ def test_create_unavailable_returns_409_with_reason(env):
     assert "unknown image model" in r["error"]
     # a concept node is not created when the model is unavailable
     env.client.post("/v1/images", {"concept": "Windmill", "subject": "x"}, expect=409)
-    assert [n["title"] for n in env.graph.snapshot()["nodes"]] == ["Trebuchet"]
+    assert [n["title"] for n in env.graph.snapshot(visible_only=True)["nodes"]] == ["Trebuchet"]
     broken = env.store.save(ImageModel("broken", "Broken", "sdxl", {"model": str(env.tmp / "missing.gguf")}))
     r = env.client.post("/v1/images", {"node_id": nid, "subject": "x", "model_id": broken.id}, expect=409)
     assert "file not found" in r["error"]

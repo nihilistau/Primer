@@ -99,6 +99,27 @@ A mode that can't be used right now is greyed out, with the reason: no offline e
 up in this tier, the reference server not running, or web search turned off. To set up the
 offline encyclopedia, see [RUNNING.md](RUNNING.md#grounding).
 
+## Thinking ahead
+
+While you read, Primer writes the page you are most likely to open next: the **In this context**
+card of the first underlined phrase (and, set to two pages, its **General** card too). When you
+click it, it is already there. A card that has been written ahead shows a small mark (hover:
+"Already written").
+
+It only uses the GPU when nothing else wants it. The moment you ask for a page, a picture or a
+clip, the draft stops and steps aside (a page waiting for it says "finishing a draft…" for a
+fraction of a second). If you open a page while it is still being drafted, you get what is
+written so far at once and the rest as it streams. Pages written ahead are invisible until you
+open them: they don't appear in the map or your history.
+
+Choose **Off**, **One page** or **Two pages** in **Engines → Modes → Thinking ahead**. The same
+row shows how many pages were written ahead, how many you used, and the hit rate. It is on by
+default (one page) when the writing model runs on this machine's GPU in auto mode; off otherwise
+(a hosted model you pay for, a model on the CPU, or manual GPU mode, where Primer can't keep it
+out of the way of your own jobs). You can still turn it on.
+
+When you open another page, drafts for the page you left are dropped rather than finished.
+
 ## The map
 
 **Map of where I've been** lists every page you have opened, indented under the page you branched

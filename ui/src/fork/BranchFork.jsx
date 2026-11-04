@@ -8,6 +8,7 @@ import * as api from '../api.js'
 import { layoutFork } from './geometry.js'
 import { imageButton, imageChecking, imageCheckFailed, mapButton, mapChecking, mapCheckFailed, storyButton, storyChecking, storyCheckFailed } from '../reader/imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
+import { Icon } from '../kit/icons.jsx'
 import './fork.css'
 
 const TAGS = { context: 'in this context', general: 'general', sideways: 'sideways' }
@@ -111,6 +112,7 @@ export default function BranchFork({ anchor, container, node, phrase, onChoose, 
                   onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); choose(card, true) } }}
                   onAuxClick={e => { if (e.button === 1) { e.preventDefault(); choose(card, true) } }}>
             <span className="fk-tag">{TAGS[kind] || kind}</span>
+            {card.ready ? <span className="fk-ready" title="Already written" role="img" aria-label="Already written"><Icon name="ready" size={14} /></span> : null}
             <b className="fk-title">{card.title}</b>
             <span className="fk-blurb">{card.blurb}</span>
           </button>

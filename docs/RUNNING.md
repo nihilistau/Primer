@@ -449,6 +449,27 @@ Measured with the offline encyclopedia: an article opens in about 0.1 s, a Wikip
 about 1 s; Ask answers in about 3 s and a two-step click-through finishes in about 5 s with
 gemma-4-E4B writing.
 
+## Thinking ahead
+
+Phase 8 drafts the likely next page on the idle GPU (spec:
+`docs/superpowers/specs/2026-11-04-primer-phase8-drafting-design.md`). Drafting takes a
+background turn at the GPU gate: only when nothing holds or waits for it and the text model isn't
+paused for pictures, and it is pre-empted within about a second when anything else asks. That
+bound holds for local (loopback) servers, where the stream can be cancelled even before the
+server answers; a remote engine can't be stopped before it starts answering, so a page asked for
+then may wait longer. Opening another page drops the old page's drafts (the new page offers its
+own); a draft stopped for a picture is tried again once the GPU is idle.
+
+The setting is `thinking_ahead` (0, 1 or 2) in `var/settings.json`, set from the Engines window.
+Unset, it is 1 when `gpu_mode = "auto"`, the `[text]` engine has `gpu = true` and its `base_url`
+is on this machine (127.0.0.1, localhost or ::1), and 0 otherwise: hosted (paid API) and CPU-only
+tiers are off unless you turn it on. Lowering it (two pages to one) stops a draft two pages ahead.
+
+Measured with gemma-4-E4B: a draft was ready about 20 seconds after its parent page finished;
+opening the drafted card took 0.00 s instead of about 8 s; a new page asked for in the middle of a
+draft waited 0.25 s for the draft to step aside, and its first text came at 1.9 s (about 1.6 s
+without a draft).
+
 ## Tests
 
 ```

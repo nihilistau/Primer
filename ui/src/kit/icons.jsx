@@ -84,6 +84,8 @@ export const GLYPHS = {
         'M6.5 11a5.5 5.5 0 0 0 11 0'],
   // a globe: the Browser (2026-11-04); the meridian is the accent stroke
   globe: ['M12 4a8 8 0 1 0 0 16 8 8 0 1 0 0-16zM4.5 12h15', 'M12 4c-2.6 2.3-3.6 5-3.6 8s1 5.7 3.6 8c2.6-2.3 3.6-5 3.6-8s-1-5.7-3.6-8z'],
+  // a page already written (a leaf with a tick): the branch cards' "ready" mark
+  ready: ['M6 19c0-9 4-13.5 12-14-.3 8.5-4.5 13.5-12 14zM6 19c2-4 4.5-6.5 8-8.5', 'M9.5 16l1.5 1.5 3-3.5'],
   reload: ['M19 12a7 7 0 1 1-2.2-5.1M19 4.5v4h-4'],
   micOff: ['M12 3.5a2.5 2.5 0 0 1 2.5 2.5v5a2.5 2.5 0 0 1-5 0V6A2.5 2.5 0 0 1 12 3.5zM12 16.5v3.5M9 20h6',
            'M5 4l14 16'],

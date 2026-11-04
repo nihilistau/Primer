@@ -23,6 +23,7 @@ export const status = () => j('GET', '/v1/status')
 export const setTier = (name) => j('POST', '/v1/tier', { name })
 export const serverAction = (role, action) => j('POST', `/v1/servers/${encodeURIComponent(role)}/${action}`)
 export const setSourceMode = (mode) => j('POST', '/v1/source-mode', { mode })
+export const setThinkingAhead = (setting) => j('POST', '/v1/thinking-ahead', { setting })
 export const page = (id) => j('GET', `/v1/pages/${encodeURIComponent(id)}`)
 export const branches = (node, phrase) =>
   j('GET', `/v1/branches?node=${encodeURIComponent(node)}&phrase=${encodeURIComponent(phrase)}`)
