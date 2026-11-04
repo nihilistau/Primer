@@ -29,7 +29,23 @@ _TYPES = ("text/html", "text/plain")
 
 
 class WebError(Exception):
-    pass
+    """A web fetch or search failed. `http_status` is the page's HTTP status when it said no."""
+
+    def __init__(self, message: str = "", http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
+
+class WebRefused(WebError):
+    """The guard refused the address (not public, not plain, not http(s))."""
+
+
+class WebTooLarge(WebError):
+    """The body is over the size cap."""
+
+
+class WebUnsupported(WebError):
+    """The server answered with a content type this fetch doesn't take."""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -229,7 +245,7 @@ def _embedded_v4(a: ipaddress.IPv6Address):
 def _check_host(host: str, resolve) -> None:
     """Refuse unless every address the host maps to is public (ipaddress is_global)."""
     if not host:
-        raise WebError("the URL has no host")
+        raise WebRefused("the URL has no host")
     try:
         addrs = [ipaddress.ip_address(host.split("%", 1)[0])]
     except ValueError:
@@ -247,10 +263,13 @@ def _check_host(host: str, resolve) -> None:
         if isinstance(a, ipaddress.IPv6Address):
             addrs.extend(_embedded_v4(a))
     if not all(a.is_global for a in addrs):
-        raise WebError(f"{host} is not a public address")
+        raise WebRefused(f"{host} is not a public address")
 
 
-def _request(url: str) -> tuple[urllib.request.Request, str]:
+_HTML_ACCEPT = "text/html, text/plain;q=0.9"
+
+
+def _request(url: str, accept: str = _HTML_ACCEPT) -> tuple[urllib.request.Request, str]:
     """Build the Request and check the host urllib will actually connect to."""
     try:
         netloc = urllib.parse.urlsplit(url).netloc
@@ -258,12 +277,12 @@ def _request(url: str) -> tuple[urllib.request.Request, str]:
     except ValueError:
         raise WebError("bad URL") from None
     if scheme not in ("http", "https"):
-        raise WebError("only http and https URLs can be fetched")
+        raise WebRefused("only http and https URLs can be fetched")
     if "@" in netloc or "%" in re.sub(r"\[[^\]]*\]", "", netloc):
-        raise WebError("the URL host is not plain")
+        raise WebRefused("the URL host is not plain")
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": UA, "Accept": "text/html, text/plain;q=0.9"})
+            "User-Agent": UA, "Accept": accept})
         host = urllib.parse.urlsplit("//" + req.host).hostname or ""
     except ValueError:
         raise WebError("bad URL") from None
@@ -279,15 +298,49 @@ def _limit_socket(resp, remaining: float) -> None:
 
 
 def safe_fetch(url: str, *, resolve=socket.getaddrinfo, opener=None) -> tuple[str, str]:
-    """Fetch a public page; returns (final_url, readable text). Raises WebError.
+    """Fetch a public page; returns (final_url, readable text). Raises WebError."""
+    final, ctype, text = safe_fetch_html(url, resolve=resolve, opener=opener)
+    return final, (html_to_text(text) if ctype == "text/html" else text.strip())
 
+
+def safe_fetch_html(url: str, *, resolve=socket.getaddrinfo,
+                    opener=None) -> tuple[str, str, str]:
+    """Fetch a public page; returns (final_url, content_type, decoded text). Raises WebError."""
+    final, ctype, raw, charset = _guarded_fetch(
+        url, accept=_HTML_ACCEPT, allowed=lambda t: t in _TYPES, max_bytes=MAX_BYTES,
+        what="page", resolve=resolve, opener=opener, truncate=True)
+    try:
+        text = raw.decode(charset, "replace")
+    except LookupError:
+        text = raw.decode("utf-8", "replace")
+    return final, ctype, text
+
+
+IMAGE_MAX_BYTES = 5_000_000
+
+
+def safe_fetch_bytes(url: str, *, max_bytes: int = IMAGE_MAX_BYTES, resolve=socket.getaddrinfo,
+                     opener=None) -> tuple[str, str, bytes]:
+    """The same guarded fetch for a picture: returns (final_url, claimed content_type, bytes).
+    Any image/* type is fetched; the caller sniffs the bytes, which decide. Raises WebError."""
+    final, ctype, raw, _ = _guarded_fetch(
+        url, accept="image/png, image/jpeg, image/gif, image/webp, image/*;q=0.5",
+        allowed=lambda t: t.startswith("image/"), max_bytes=max_bytes, what="picture",
+        resolve=resolve, opener=opener)
+    return final, ctype, raw
+
+
+def _guarded_fetch(url: str, *, accept: str, allowed, max_bytes: int, what: str, resolve,
+                   opener, truncate: bool = False) -> tuple[str, str, bytes, str]:
+    """The one guarded fetch: scheme and host checks on every hop, redirects followed by
+    hand (at most MAX_REDIRECTS, each re-checked), type, size and total-time caps.
+    Returns (final_url, content_type, raw bytes, charset).
     Known limit: the host is resolved here and again when connecting, so a DNS
-    rebinding answer between the two is not caught (accepted for this use).
-    """
+    rebinding answer between the two is not caught (accepted for this use)."""
     opener = opener or build_opener()
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        req, host = _request(current)
+        req, host = _request(current, accept)
         _check_host(host, resolve)
         try:
             resp = opener.open(req, timeout=TIMEOUT)
@@ -299,38 +352,38 @@ def safe_fetch(url: str, *, resolve=socket.getaddrinfo, opener=None) -> tuple[st
                     raise WebError("redirect without a Location") from None
                 current = urllib.parse.urljoin(current, loc)
                 continue
-            raise WebError(f"the page returned HTTP {exc.code}") from None
+            raise WebError(f"the {what} returned HTTP {exc.code}", exc.code) from None
         except _NET_ERRORS as exc:
-            raise WebError(f"cannot fetch the page: {getattr(exc, 'reason', None) or exc}") from None
+            raise WebError(f"cannot fetch the {what}: {getattr(exc, 'reason', None) or exc}") from None
         with resp:
             ctype = resp.headers.get_content_type()
-            if ctype not in _TYPES:
-                raise WebError(f"unsupported content type {ctype}")
+            if not allowed(ctype):
+                raise WebUnsupported(f"unsupported content type {ctype}")
             length = resp.headers.get("Content-Length", "")
-            if length.isdigit() and int(length) > MAX_BYTES:
-                raise WebError("the page is too large")
+            if length.isdigit() and int(length) > max_bytes:
+                raise WebTooLarge(f"the {what} is too large")
             deadline = time.monotonic() + TIMEOUT  # total, not per socket operation
             chunks, got = [], 0
             try:
-                while got < MAX_BYTES:
+                # a page is cut at the cap; anything else reads one byte more to refuse an overrun
+                limit = max_bytes if truncate else max_bytes + 1
+                while got < limit:
                     if time.monotonic() > deadline:
-                        raise WebError("the page took too long to download")
+                        raise WebError(f"the {what} took too long to download")
                     _limit_socket(resp, deadline - time.monotonic())
                     # read1: returns after one receive, so the deadline is re-checked often
-                    chunk = (getattr(resp, "read1", resp.read))(min(65536, MAX_BYTES - got))
+                    chunk = (getattr(resp, "read1", resp.read))(min(65536, limit - got))
                     if not chunk:
                         break
                     chunks.append(chunk)
                     got += len(chunk)
             except TimeoutError:
-                raise WebError("the page took too long to download") from None
+                raise WebError(f"the {what} took too long to download") from None
             except _NET_ERRORS as exc:
-                raise WebError(f"cannot read the page: {exc}") from None
+                raise WebError(f"cannot read the {what}: {exc}") from None
+            if got > max_bytes:
+                raise WebTooLarge(f"the {what} is too large")
             raw = b"".join(chunks)
             charset = resp.headers.get_content_charset() or "utf-8"
-        try:
-            text = raw.decode(charset, "replace")
-        except LookupError:
-            text = raw.decode("utf-8", "replace")
-        return current, (html_to_text(text) if ctype == "text/html" else text.strip())
+        return current, ctype, raw, charset
     raise WebError("too many redirects")

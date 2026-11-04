@@ -15,6 +15,12 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 class KiwixError(Exception):
+    def __init__(self, message: str = "", http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
+
+class KiwixTooLarge(KiwixError):
     pass
 
 
@@ -23,12 +29,12 @@ class KiwixClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def _get(self, path: str) -> bytes:
+    def _get(self, path: str, limit: int | None = None) -> bytes:
         try:
             with _DIRECT.open(self.base_url + path, timeout=self.timeout) as resp:
-                return resp.read()
+                return resp.read() if limit is None else resp.read(limit + 1)
         except urllib.error.HTTPError as exc:
-            raise KiwixError(f"kiwix-serve returned HTTP {exc.code} for {path}") from None
+            raise KiwixError(f"kiwix-serve returned HTTP {exc.code} for {path}", exc.code) from None
         except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
             cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
             if isinstance(cause, ConnectionRefusedError):
@@ -96,6 +102,13 @@ class KiwixClient:
     def article_html(self, book: str, path: str) -> str:
         raw = self._get(f"/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}")
         return raw.decode("utf-8", "replace")
+
+    def content(self, book: str, path: str, limit: int) -> bytes:
+        """An entry's raw bytes (a picture); KiwixError when it is longer than `limit`."""
+        raw = self._get(f"/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}", limit)
+        if len(raw) > limit:
+            raise KiwixTooLarge("the entry is too large")
+        return raw
 
     def href(self, book: str, path: str) -> str:
         return f"{self.base_url}/content/{urllib.parse.quote(book, safe='')}/{urllib.parse.quote(path, safe='/')}"

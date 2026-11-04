@@ -75,6 +75,13 @@ CPU) or any OpenAI-style speech service. Numbers and years are spelled out befor
 
 ![A Story window telling the story of Warwick Castle in four scenes, the passage being read highlighted and its phrases underlined, with a strip of the scenes below, beside the Warwick Castle page](docs/screenshots/story.webp)
 
+**A browser that reads.** The **Browser** opens real web pages and offline Wikipedia articles
+inside Primer as clean text with their links and pictures. Source links open there too. Select any
+phrase to explore it as a page, **Ask** about what's on the page, **Make a page** from it, or give
+**Click through** a goal and watch the model follow links to the answer, one step at a time.
+
+![A Browser window showing Michelangelo's offline Wikipedia article, with the Click through panel showing the goal "Find the town where Michelangelo was born", the two pages it followed and the answer Caprese, beside a page about Leonardo da Vinci](docs/screenshots/browser.webp)
+
 **A map of where you've been.** Every page you open joins a concept graph. The map shows the
 trail: which page you branched from, and how (in context, general, or sideways).
 
@@ -169,9 +176,10 @@ The short version:
 5. Click **Video**, type "animate ...", or press **Animate** on a picture, for a short clip.
 6. Click **Map** to see the places a page names, pinned on a map. Click a pin to open its page.
 7. Click **Listen** to hear the page, or **Story** for an illustrated, narrated story.
-8. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
+8. Click a source, or the globe in the dock, to read the original in Primer's **Browser**.
+9. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
    encyclopedia or the web. Choose the default for new pages in **Engines**.
-9. Open **Map of where I've been** from the dock to see your trail and jump back.
+10. Open **Map of where I've been** from the dock to see your trail and jump back.
 
 The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
 
@@ -192,8 +200,9 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.6**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, the map, and narrated stories work. An embedded browser is planned next. The
+This is **v0.7**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, the map, narrated stories and the reader browser work. A browser that drives a real Chrome
+(for sites that need scripts or a login) is planned next. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

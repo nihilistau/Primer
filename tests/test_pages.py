@@ -516,3 +516,43 @@ def test_deeper_without_source_uses_default_mode(graph, text_engine, fast_engine
         s.shutdown()
     assert dict(ev)["done"]["source_mode"] == "web" and dict(ev)["node"]["source_mode"] == "web"
     assert g.calls == [("web", "Trebuchet")]
+
+
+def test_source_url_regenerates_a_version_not_grounded_in_it(graph, text_engine, fast_engine):
+    class UrlGrounder(_FakeGrounder):
+        def gather_url(self, u):
+            self.calls.append(("url", u))
+            return self.sources, self.note
+
+    g = UrlGrounder(_WEB)
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    try:
+        list(s.open(OpenRequest("Trebuchet", "typed")))  # storyteller version exists
+        n = len(text_engine.calls)
+        ev = list(s.open(OpenRequest("Trebuchet", "typed", source_url="https://example.com/t")))
+        assert dict(ev)["done"]["cached"] is False and len(text_engine.calls) == n + 1
+        again = list(s.open(OpenRequest("Trebuchet", "typed", source_url="https://example.com/t")))
+        assert dict(again)["done"]["cached"] is True and len(text_engine.calls) == n + 1
+        other = list(s.open(OpenRequest("Trebuchet", "typed", source_url="https://example.com/other")))
+        assert dict(other)["done"]["cached"] is False
+    finally:
+        s.shutdown()
+
+
+def test_open_from_source_url_uses_only_that_page(graph, text_engine, fast_engine):
+    class UrlGrounder(_FakeGrounder):
+        def gather_url(self, u):
+            self.calls.append(("url", u))
+            return self.sources, self.note
+
+    g = UrlGrounder(_WEB)
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    try:
+        ev = list(s.open(OpenRequest("Trebuchet", "typed", source_url="https://example.com/t")))
+        ref = list(s.open(OpenRequest("Whale", "typed", source_url="kiwix:wiki/Whale")))
+    finally:
+        s.shutdown()
+    assert g.calls == [("url", "https://example.com/t"), ("url", "kiwix:wiki/Whale")]  # never gather()
+    assert dict(ev)["done"]["source_mode"] == "web" and dict(ref)["node"]["source_mode"] == "reference"
+    assert dict(ev)["sources"]["sources"][0]["title"] == "Trebuchet facts"
+    assert "A trebuchet is a siege engine." in text_engine.calls[0][1]["content"]

@@ -85,3 +85,8 @@
 .rd-menu-h { font: 600 var(--fs-12)/1.3 var(--font-ui); color: var(--text-3); padding: 0 var(--sp-1) var(--sp-1); }
 .rd-menu button { text-align: left; }
 .rd-thumb-map { color: var(--accent); }
+
+.rd-md .rd-table { overflow-x: auto; margin: 1em 0; }
+.rd-md table { border-collapse: collapse; font-size: 0.9em; line-height: 1.45; }
+.rd-md th, .rd-md td { border: 1px solid var(--hair-strong); padding: 4px 8px; vertical-align: top; }
+.rd-md th { background: var(--surface-2); font-weight: 600; text-align: left; }

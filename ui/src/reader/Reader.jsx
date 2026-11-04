@@ -14,6 +14,8 @@ import { createHistory } from './history.js'
 import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState, storyButton, storyChecking, storyCheckFailed } from './imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import { safeHref } from './citations.js'
+import { openBrowser } from '../openBrowser.js'
+import { browseAddressFor, kiwixHref } from '../apps/browserNav.js'
 import { badgeLabel, rewriteOptions } from './sourceMode.js'
 import { retryBody } from './retry.js'
 import { streamEndError } from './streamEnd.js'
@@ -48,6 +50,8 @@ export default function Reader({ windowId, start, onPick }) {
   const [imgErr, setImgErr] = useState('')
   const [errTitle, setErrTitle] = useState('No image')
   const [mediaErr, setMediaErr] = useState('')
+  const [browseWeb, setBrowseWeb] = useState(false)  // whether the Browser can open web pages (else only kiwix:)
+  const [browseOk, setBrowseOk] = useState(false)     // whether source links can open in the Browser
 
   const stop = () => { if (abort.current) abort.current.abort(); abort.current = null }
   useEffect(() => stop, [])
@@ -224,7 +228,7 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { setImgErr(''); setMediaErr('') }, [view.nodeId])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
+    api.status().then(st => { if (live) { setBrowseOk(!!(st.browse_available && st.browse_available.ok)); setBrowseWeb(!!(st.browse_available && st.browse_available.web)); setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
       .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)); setStoryBtn(storyCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
@@ -349,6 +353,15 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { setMenu(null) }, [view.nodeId])
   // focus the first enabled item whenever the options (re)appear
   useEffect(() => { if (menu) badgeRef.current?.querySelector('[role=menuitem]:not(:disabled)')?.focus() }, [menu])
+  /* A plain click on a source opens it in the Browser lens; shift (or ctrl/cmd/middle) keeps
+   * the old way, a new browser tab. */
+  const openSource = (e, source) => {
+    if (!browseOk || e.shiftKey || e.ctrlKey || e.metaKey || e.button !== 0) return
+    const u = browseAddressFor(source && source.href)
+    if (!u || (!browseWeb && !kiwixHref(u))) return   // web is off: a web source opens in a new tab as before
+    e.preventDefault()
+    openBrowser(u)
+  }
   const hasPage = view.nodeId || view.streaming || view.markdown
 
   return (
@@ -410,7 +423,7 @@ export default function Reader({ windowId, start, onPick }) {
         {hasPage ? (
           <div className="rd-article" ref={articleRef} tabIndex={-1} onMouseUp={onSelect}>
             {view.grounding && !view.markdown ? <div className="rd-grounding" role="status">{view.grounding}</div> : null}
-            <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} />
+            <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} onSource={openSource} />
             {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
             {mediaItems.length || mapItems.length || storyItems.length ? (
               <ul className="rd-strip" aria-label="Images, videos, maps and stories on this page">
@@ -476,7 +489,9 @@ export default function Reader({ windowId, start, onPick }) {
                   {view.sources.map(s => (
                     <li key={s.n} value={s.n}>
                       {safeHref(s.href)
-                        ? <a href={safeHref(s.href)} target="_blank" rel="noopener noreferrer">{s.title}</a>
+                        ? <a href={safeHref(s.href)} target="_blank" rel="noopener noreferrer"
+                           title={browseOk ? 'Open in the Browser (shift-click: a new tab)' : undefined}
+                           onClick={e => openSource(e, s)}>{s.title}</a>
                         : <span>{s.title}</span>}
                       {s.where ? <span className="rd-where">{s.where}</span> : null}
                     </li>

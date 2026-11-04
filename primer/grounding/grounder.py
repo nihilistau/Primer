@@ -12,8 +12,8 @@ from urllib.parse import urlsplit
 
 from . import Source
 from .kiwix import KiwixClient, KiwixError
-from .text import clip
-from .web import Searcher, WebError, safe_fetch
+from .text import clip, html_to_text
+from .web import Searcher, WebError, safe_fetch, safe_fetch_html
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ _TOTAL_BUDGET = 6000
 _REFERENCE_DEADLINE = 20.0
 _WEB_DEADLINE = 30.0
 _TAGS = re.compile(r"<[^>]*>")
+_HEAD = re.compile(r"<head\b.*?</head\s*>|<title\b.*?</title\s*>", re.S | re.I)
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
 _OWN = "written from the model's own knowledge."
 _CHANGE = " Change the default source in Engines."
 
@@ -56,10 +58,11 @@ def _budgeted(items: list[tuple[str, dict]]) -> list[Source]:
 class Grounder:
     def __init__(self, kiwix: KiwixClient | None, searcher: Searcher | None,
                  fetch=safe_fetch, book_order: list[str] | None = None,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, fetch_html=safe_fetch_html) -> None:
         self.kiwix = kiwix
         self.searcher = searcher
         self.fetch = fetch
+        self.fetch_html = fetch_html
         self.book_order = list(book_order or [])
         self.clock = clock
 
@@ -96,6 +99,48 @@ class Grounder:
             log.exception("grounding (%s) crashed", mode)
             return [], self._down(mode, exc)
         return [], ""
+
+    def gather_url(self, u: str) -> tuple[list[Source], str]:
+        """One given page (an http(s) URL or kiwix: address) as the single source. Never
+        raises for a backend failure: returns ([], note) instead."""
+        from primer.browse.address import parse  # browse imports this module: avoid a cycle
+        try:
+            addr = parse(u)
+        except ValueError as exc:
+            return [], f"That address can't be read ({_reason(exc)}); {_OWN}"
+        if addr.kind == "web" and self.searcher is None:  # web off in this tier: fetch nothing
+            return [], f"Web search is off in this tier; {_OWN}{_CHANGE}"
+        try:
+            if addr.kind == "reference":
+                if self.kiwix is None:
+                    return [], f"Offline reference isn't set up in this tier; {_OWN}{_CHANGE}"
+                raw = self.kiwix.article_html(addr.book, addr.path)
+                titles = {b["name"]: b["title"] for b in self.kiwix.books()}
+                kw = {"origin": "reference", "book": addr.book, "path": addr.path,
+                      "where": titles.get(addr.book, addr.book.replace("_", " "))}
+                fallback_title = addr.path.rsplit("/", 1)[-1].replace("_", " ")
+            else:
+                final, ctype, raw = self.fetch_html(addr.url)
+                if ctype != "text/html":
+                    raw = "<pre>" + html.escape(raw) + "</pre>"
+                host = (urlsplit(final).hostname or "").removeprefix("www.")
+                kw = {"origin": "web", "url": final, "where": host}
+                fallback_title = host or final
+            m = _TITLE.search(raw)
+            title = _plain(m.group(1)) if m else ""
+            kw["title"] = title or fallback_title
+            body = _HEAD.sub("", raw)  # the title is the source's title, not part of its text
+            text = html_to_text(body).strip()
+        except (KiwixError, WebError) as exc:
+            log.warning("grounding (%s) failed: %s", u, exc)
+            return [], f"That page couldn't be read ({_reason(exc)}); {_OWN}"
+        except Exception as exc:  # a backend bug must not break the page
+            log.exception("grounding (%s) crashed", u)
+            return [], f"That page couldn't be read ({_reason(exc)}); {_OWN}"
+        sources = _budgeted([(text, kw)])
+        if not sources:
+            return [], f"That page had no text to read; {_OWN}"
+        return sources, ""
 
     @staticmethod
     def _down(mode: str, exc: Exception) -> str:

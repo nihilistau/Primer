@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Iterator, Literal
 
+from .browse.address import kiwix_address
 from .engines import EngineError
 from .gpu import GpuGate
 from .graph import Card, Graph, Node, Version, clean_typed
@@ -32,6 +33,7 @@ class OpenRequest:
     regenerate: bool = False
     node_id: str | None = None
     source: str | None = None
+    source_url: str | None = None  # write from this one page (http(s) or kiwix:) alone
 
 
 class PageService:
@@ -64,15 +66,17 @@ class PageService:
             return
 
         latest = self.graph.latest_version(node.id)
-        serve_cached = latest is not None and not req.regenerate and req.depth == "normal"
+        regenerate = req.regenerate or self._not_from_url(node, latest, req)
+        serve_cached = latest is not None and not regenerate and req.depth == "normal"
         # Advisory: the badge can show this early; the `done` event carries the authoritative mode.
         mode = latest.source_mode if serve_cached else self._mode(req)
         yield ("node", {"id": node.id, "title": node.title, "kind": node.kind, "parent_id": node.parent_id,
                       "source_mode": mode})
         with self._lock_for(node.id):
             latest = self.graph.latest_version(node.id)
+            regenerate = req.regenerate or self._not_from_url(node, latest, req)
             note = ""
-            if latest and not req.regenerate and req.depth == "normal":
+            if latest and not regenerate and req.depth == "normal":
                 yield ("delta", {"text": latest.markdown})
                 version, cached = latest, True
             else:
@@ -83,7 +87,7 @@ class PageService:
                         note = (f"Offline reference isn't set up in this tier; {_OWN}" if mode == "reference"
                                 else f"Web search is off in this tier; {_OWN}")
                     else:
-                        for ev in self._ground(mode, node.title):
+                        for ev in self._ground(mode, node.title, req.source_url):
                             if ev[0] == "result":
                                 sources, note = ev[1]
                             else:
@@ -169,20 +173,37 @@ class PageService:
         self.graph.add_edge(req.from_id, node.id, req.phrase or concept, req.via)
         return node
 
+    def _not_from_url(self, node: Node, latest: Version | None, req: OpenRequest) -> bool:
+        """A page made from a given URL never silently reuses a version grounded elsewhere."""
+        if not req.source_url or latest is None:
+            return False
+        for s in self.graph.sources(node.id, latest.n):
+            if s.url == req.source_url or (s.origin == "reference" and s.book and
+                                           kiwix_address(s.book, s.path) == req.source_url):
+                return False
+        return True
+
     def _mode(self, req: OpenRequest) -> str:
         """The mode to write in; an unknown request mode is storyteller (the server rejects it earlier)."""
+        if req.source_url:  # a page from a page: that page's kind decides
+            return "reference" if req.source_url.startswith("kiwix:") else "web"
         if req.source is None:
             return self.source_mode
         return req.source if req.source in MODES else "storyteller"
 
-    def _ground(self, mode: str, query: str):
-        """Yield ("grounding", ...) events as retrieval reports, then ("result", (sources, note))."""
+    def _ground(self, mode: str, query: str, url: str | None = None):
+        """Yield ("grounding", ...) events as retrieval reports, then ("result", (sources, note)).
+        With a url, the one source is that page and nothing is searched."""
         box: queue.Queue = queue.Queue()
         result: list = []
 
         def run() -> None:
             try:
-                result.append(self.grounder.gather(mode, query, box.put))
+                if url:
+                    box.put("Reading the page…")
+                    result.append(self.grounder.gather_url(url))
+                else:
+                    result.append(self.grounder.gather(mode, query, box.put))
             except Exception as exc:  # gather should not raise; never let it break the page
                 log.exception("grounder failed")
                 result.append(([], f"Grounding failed ({exc}); {_OWN}"))

@@ -8,6 +8,7 @@ import ImageWindow from './apps/ImageWindow.jsx'
 import VideoWindow from './apps/VideoWindow.jsx'
 import MapWindow from './apps/MapWindow.jsx'
 import StoryWindow from './apps/StoryWindow.jsx'
+import BrowserWindow from './apps/BrowserWindow.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -21,11 +22,13 @@ export const APPS = {
   // multi-instance: one window per map job, props { mapId, subject?, nodeId? }
   map: { title: 'Map', icon: 'map', size: [760, 640], component: MapWindow },
   // multi-instance: one window per story (or Listen), props { storyId, subject?, nodeId?, kind? }
+  // multi-instance: one window per browser, props { start? } (an address to open first)
+  browser: { title: 'Browser', icon: 'globe', size: [900, 680], component: BrowserWindow },
   story: { title: 'Story', icon: 'speaker', size: [720, 740], component: StoryWindow },
 }
 
 /* the dock's buttons, in order */
-export const DOCK = ['reader', 'graph', 'engines', 'imagemodels']
+export const DOCK = ['reader', 'browser', 'graph', 'engines', 'imagemodels']
 
 /* open an app through the window manager with its registry defaults */
 export function openApp(wm, appId, props) {

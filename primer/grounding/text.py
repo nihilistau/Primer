@@ -5,7 +5,8 @@ import re
 from html.parser import HTMLParser
 
 _SKIP_TAGS = {"script", "style", "nav", "header", "footer", "aside", "table", "figure"}
-_SKIP_CLASSES = ("infobox", "navbox", "reflist", "references", "mw-editsection", "hatnote")
+SKIP_CLASSES = ("infobox", "navbox", "reflist", "references", "mw-editsection", "hatnote")
+_SKIP_CLASSES = SKIP_CLASSES  # the old private name
 _VOID = {"br", "img", "hr", "meta", "link", "input", "area", "base", "col", "embed", "source",
          "track", "wbr"}
 _BLOCKS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "div", "section", "ul", "ol",
@@ -33,7 +34,7 @@ class _Extract(HTMLParser):
                 self._flush()
             return
         cls = (dict(attrs).get("class") or "").lower()
-        skips = (tag in _SKIP_TAGS or any(c in cls for c in _SKIP_CLASSES)
+        skips = (tag in _SKIP_TAGS or any(c in cls for c in SKIP_CLASSES)
                  or (tag == "sup" and "reference" in cls))
         if tag in _BLOCKS and not self._skipping():
             self._flush()

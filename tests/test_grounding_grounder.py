@@ -241,3 +241,64 @@ def test_reference_books_outside_book_order_still_searched(kiwix_two):
     kiwix_two.suggest = lambda book, query: seen.append(book) or orig(book, query)
     g.gather("reference", "Whale", lambda s: None)
     assert seen == ["wiki_b", "wiki_a"]
+
+
+# --- gather_url: one given page as the single source ---
+
+def test_gather_url_web():
+    html = "<html><head><title>Warwick Castle</title></head><body><nav>menu</nav><p>A castle.</p></body></html>"
+    seen = []
+
+    def fetch_html(url):
+        seen.append(url)
+        return "https://www.example.org/castle/", "text/html", html
+
+    sources, note = Grounder(None, _Searcher(), fetch_html=fetch_html).gather_url("https://example.org/castle")
+    assert note == "" and seen == ["https://example.org/castle"]
+    assert len(sources) == 1 and sources[0].n == 1 and sources[0].origin == "web"
+    assert sources[0].title == "Warwick Castle" and sources[0].where == "example.org"
+    assert sources[0].url == "https://www.example.org/castle/" and "A castle." in sources[0].text
+    assert "menu" not in sources[0].text
+
+
+def test_gather_url_web_failure_is_a_note():
+    def refuse(url):
+        raise WebError("127.0.0.1 is not a public address")
+
+    sources, note = Grounder(None, _Searcher(), fetch_html=refuse).gather_url("http://127.0.0.1/x")
+    assert sources == [] and "not a public address" in note and note.endswith("model's own knowledge.")
+    assert Grounder(None, None).gather_url("ftp://x/y")[0] == []
+
+
+def test_gather_url_strips_head_and_needs_web_on():
+    html = "<html><head><title>Castle</title></head><body><p>Body text.</p></body></html>"
+    sources, _ = Grounder(None, _Searcher(), fetch_html=lambda u: (u, "text/html", html)).gather_url(
+        "https://e.org/c")
+    assert sources[0].title == "Castle" and sources[0].text == "Body text."
+    seen = []
+
+    def fetch(u):
+        seen.append(u)
+        return u, "text/html", html
+
+    sources, note = Grounder(None, None, fetch_html=fetch).gather_url("https://e.org/c")  # web is off
+    assert sources == [] and seen == [] and note.startswith("Web search is off in this tier;")
+    assert "model's own knowledge." in note
+
+
+def test_gather_url_reference(kiwix_two):
+    g = Grounder(kiwix_two, None)
+    sources, note = g.gather_url("kiwix:wiki_b/Humpback")
+    assert note == "" and len(sources) == 1
+    s = sources[0]
+    assert (s.origin, s.book, s.path, s.n) == ("reference", "wiki_b", "Humpback", 1)
+    assert "A humpback." in s.text and s.title == "Humpback"
+    sources, note = g.gather_url("kiwix:wiki_b/Missing")
+    assert sources == [] and "couldn't be read" in note and note.endswith("model's own knowledge.")
+    assert "isn't set up" in Grounder(None, None).gather_url("kiwix:wiki_b/Humpback")[1]
+
+
+def test_gather_url_reference_where_is_the_book_title(kiwix_two):
+    title = {b["name"]: b["title"] for b in kiwix_two.books()}["wiki_b"]
+    sources, _ = Grounder(kiwix_two, None).gather_url("kiwix:wiki_b/Humpback")
+    assert sources[0].where == title

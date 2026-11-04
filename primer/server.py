@@ -6,6 +6,8 @@ import logging
 import mimetypes
 import os
 import re
+import select
+import socket
 import sys
 import threading
 import time
@@ -15,6 +17,10 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from primer.browse.address import parse as parse_address
+from primer.browse.agent import ask_stream, run_agent
+from primer.browse.prompts import DEFAULT_QUESTION
+from primer.browse.service import BrowseError, BrowseService
 from primer.config import (TIERS_DIR, ConfigError, Tier, list_tiers, load_tier, read_settings,
                            write_settings)
 from primer.engines import make_engine
@@ -83,6 +89,10 @@ STATUS_REFERENCE_TIMEOUT_S = 2.0  # /v1/status asks kiwix-serve once, and must s
 REFERENCE_STATUS_TTL_S = 5.0
 NO_REFERENCE = "No [reference] section in this tier"
 REFERENCE_DOWN = "The reference server isn't running"
+NO_BROWSE = "Web is off in this tier and there is no offline encyclopedia"
+BROWSE_REFERENCE_DOWN = "Web is off in this tier and the offline encyclopedia isn't running"
+IMAGE_HEADERS = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+                 "Cache-Control": "max-age=3600"}
 WEB_OFF = "Web search is off in this tier"
 
 
@@ -169,6 +179,7 @@ class App:
     text_pause: TextPause | None = None
     maps: MapService | None = None
     stories: StoryService | None = None
+    browse: BrowseService | None = None
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -198,6 +209,14 @@ class App:
             self.maps = self.make_maps(self.graph, self.tier, self.pages.fast)
         if self.stories is None:
             self.stories = self.make_stories(self.tier, self.pages, self.images, self.gate)
+        if self.browse is None:
+            self.browse = self.make_browse(self.tier)
+
+    @staticmethod
+    def make_browse(tier: Tier) -> BrowseService:
+        ref = tier.reference
+        return BrowseService(KiwixClient(ref.url) if ref is not None else None,
+                             tier.web.search != "off", make_searcher(tier.web))
 
     def make_stories(self, tier: Tier, pages: PageService, images: ImageService, gate: GpuGate) -> StoryService:
         def voice():
@@ -304,6 +323,16 @@ class App:
                 return {"ok": False, "reason": REFERENCE_DOWN_WEB_OFF}
         return {"ok": True, "reason": ""}
 
+    def browse_available(self) -> dict:
+        """Whether the browser can open anything: the web (a public fetch needs no search
+        engine, but web off in the tier means off) or the offline encyclopedia."""
+        ref, web = self.tier.reference, self.tier.web.search != "off"
+        reference = ref is not None and self._cached_books(ref.url) is not None
+        if web or reference:
+            return {"ok": True, "reason": "", "web": web, "reference": reference}
+        return {"ok": False, "reason": NO_BROWSE if ref is None else BROWSE_REFERENCE_DOWN,
+                "web": False, "reference": False}
+
     def voice_available(self) -> dict:
         """Whether Listen and Story can run now. A launched server's state says so; one that
         wasn't launched by Primer is asked (briefly, and at most every VOICE_STATUS_TTL_S)."""
@@ -354,6 +383,7 @@ class App:
             self.text_pause, self.gate, self.images = text_pause, gate, images
             self.maps = self.make_maps(self.graph, tier, fast)
             self.stories = self.make_stories(tier, pages, images, gate)
+            self.browse = self.make_browse(tier)
             with self._voice_lock:
                 self._voice_cache = None
             self._close_archive()  # a tile request during the switch may have reopened the old file
@@ -385,7 +415,8 @@ class App:
                 "images": self.images.server_status(), "image_available": self.image_available(),
                 "video_available": self.image_available("video"),
                 "animate_available": self.animate_available(), "gpu": self.gate.state(),
-                "map_available": self.map_available(), "voice_available": self.voice_available(),
+                "map_available": self.map_available(), "browse_available": self.browse_available(),
+                "voice_available": self.voice_available(),
                 "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""}}
 
     def sources_status(self) -> dict:
@@ -474,6 +505,16 @@ class App:
 def make_gate(tier: Tier, servers: ServerManager) -> tuple[TextPause, GpuGate]:
     text_pause = TextPause(servers)
     return text_pause, GpuGate(tier.gpu_mode, text_pause.pause, text_pause.resume)
+
+
+def _peer_gone(sock) -> bool:
+    """True when the client has closed its end (readable but peeks empty), or the socket errors."""
+    try:
+        if not select.select([sock], [], [], 0)[0]:
+            return False
+        return sock.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
 
 
 class _BadRequest(Exception):
@@ -644,6 +685,8 @@ def _make_handler(app: App):
                     self._map_tilejson()
                 elif path.startswith("/v1/map/assets/"):
                     self._map_asset(path[len("/v1/map/assets/"):])
+                elif path in ("/v1/browse", "/v1/browse/search", "/v1/browse/image"):
+                    self._browse(path, parse_qs(url.query))
                 elif path.startswith("/v1/stories/") and "/" not in path[len("/v1/stories/"):]:
                     story = app.stories.get(unquote(path[len("/v1/stories/"):]))
                     if story is None:
@@ -684,6 +727,8 @@ def _make_handler(app: App):
                     self._json(app.status())
                 elif path == "/v1/pages/open":
                     self._open(body)
+                elif path in ("/v1/browse/ask", "/v1/browse/agent"):
+                    self._browse_model(path, body)
                 elif path.startswith("/v1/servers/"):
                     self._server_action(path[len("/v1/servers/"):])
                 elif path == "/v1/intent":
@@ -736,6 +781,8 @@ def _make_handler(app: App):
                 self._json({"error": str(e)}, 400)
             except _HttpError as e:
                 self._json({"error": str(e)}, e.status)
+            except BrowseError as e:
+                self._json({"error": str(e)}, e.status)
             except StoreCorrupt as e:
                 self._json({"error": str(e)}, 500)
             except Exception:
@@ -764,6 +811,20 @@ def _make_handler(app: App):
                 return
             self._json(result)
 
+        def _browse(self, path: str, q: dict) -> None:
+            def arg(name: str) -> str:
+                return q.get(name, [""])[0]
+            try:
+                if path == "/v1/browse":
+                    self._json(app.browse.open(arg("u")))
+                elif path == "/v1/browse/search":
+                    self._json({"results": app.browse.search(arg("q"), arg("where"))})
+                else:
+                    data, ctype = app.browse.image(arg("u"))
+                    self._send(200, data, ctype, IMAGE_HEADERS)
+            except BrowseError as e:
+                self._json({"error": str(e)}, e.status)
+
         def _open_request(self, body: dict) -> OpenRequest:
             node_id = body.get("node_id")
             # with node_id set, concept and via are ignored, so they may be left out
@@ -780,12 +841,22 @@ def _make_handler(app: App):
                 raise _BadRequest("concept and phrase must be strings")
             if any(v is not None and not isinstance(v, str) for v in (from_id, node_id)):
                 raise _BadRequest("from_id and node_id must be strings")
+            source_url = body.get("source_url")
+            if source_url == "":
+                source_url = None  # empty is absent
+            if source_url is not None:
+                if not isinstance(source_url, str):
+                    raise _BadRequest("source_url must be a string")
+                try:
+                    source_url = parse_address(source_url).url  # http(s) or kiwix: only, cleaned
+                except ValueError as exc:
+                    raise _BadRequest(f"source_url: {exc}") from None
             return OpenRequest(concept=concept, via=via, from_id=from_id, phrase=phrase,
                                depth=depth, regenerate=bool(body.get("regenerate", False)),
-                               node_id=node_id, source=source)
+                               node_id=node_id, source=source, source_url=source_url)
 
-        def _open(self, body: dict) -> None:
-            req = self._open_request(body)
+        def _sse(self) -> Callable[[str, dict], None]:
+            """Start a text/event-stream response; the returned emit(kind, data) writes one event."""
             self.close_connection = True
             self.connection.settimeout(SSE_WRITE_TIMEOUT_S)
             self.send_response(200)
@@ -802,14 +873,46 @@ def _make_handler(app: App):
                 try:
                     self.wfile.write(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
                     self.wfile.flush()
-                except OSError:  # disconnect or stalled client: stop writing, keep generating
+                except OSError:  # disconnect or stalled client: stop writing
                     alive = False
+            emit.alive = lambda: alive and not _peer_gone(self.connection)  # page opens keep generating; browse model calls stop
+            return emit
 
+        def _open(self, body: dict) -> None:
+            req = self._open_request(body)
+            emit = self._sse()
             try:
                 for kind, data in app.pages.open(req):
                     emit(kind, data)
             except Exception:
                 log.exception("page open failed")
+                emit("error", {"message": "internal error"})
+
+        def _browse_model(self, path: str, body: dict) -> None:
+            """POST /v1/browse/ask {u, question} and /v1/browse/agent {u, goal}: SSE."""
+            u, agent = body.get("u"), path.endswith("/agent")
+            field = "goal" if agent else "question"
+            text = body.get(field)
+            if text is None and not agent:
+                text = DEFAULT_QUESTION
+            if not isinstance(u, str) or not u:
+                raise _BadRequest("u is required")
+            if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+                raise _BadRequest(f"{field} must be a short string")
+            text = text.strip()
+            try:
+                page = app.browse.open(u)  # errors are JSON with a status, before the stream starts
+            except ValueError as e:
+                raise _BadRequest(str(e)) from None
+            emit = self._sse()
+            try:
+                if agent:
+                    run_agent(u, text, app.browse.open, app.pages.text, app.pages.gate, emit,
+                              first_page=page)
+                else:
+                    ask_stream(page, text, app.pages.text, app.pages.gate, emit)
+            except Exception:
+                log.exception("browse model call failed")
                 emit("error", {"message": "internal error"})
 
         # images

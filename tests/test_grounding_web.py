@@ -51,7 +51,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for k, v in headers.items():
             self.send_header(k, v)
-        self.send_header("Content-Length", str(len(body)))
+        if not getattr(self.server, "no_length", False):
+            self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -341,3 +342,57 @@ def test_loopback_searxng_bypasses_the_proxy(monkeypatch):
     assert uses_proxy_handler(web.SearXNG("http://sx.example.org:8888").opener)
     for url in ("http://127.0.0.1:8888", "http://localhost:8888", "http://[::1]:8888", "http://127.1.2.3/"):
         assert not uses_proxy_handler(web.SearXNG(url).opener), url
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1/", "http://[::ffff:127.0.0.1]/", "file:///c:/x",
+                                 "http://user@127.0.0.1/"])
+def test_safe_fetch_html_shares_the_guard(url, server):
+    with pytest.raises(WebError):
+        web.safe_fetch_html(url, resolve=mapping({}), opener=NeverOpener())
+    res = mapping({"pub.example": ["93.184.216.34"]})
+    op = LocalOpener(server)
+    server.routes["/go"] = (302, {"Location": "http://127.0.0.1/secret"}, b"")
+    with pytest.raises(WebError, match="not a public"):
+        web.safe_fetch_html("http://pub.example/go", resolve=res, opener=op)
+    server.routes["/img"] = (200, {"Content-Type": "image/svg+xml"}, b"<svg/>")
+    with pytest.raises(WebError, match="content type"):
+        web.safe_fetch_html("http://pub.example/img", resolve=res, opener=op)
+    html = "<html><body><nav>MENU</nav><p>caf\u00e9 <a href='/x'>x</a></p></body></html>"
+    server.routes["/old"] = (301, {"Location": "/p"}, b"")
+    server.routes["/p"] = (200, {"Content-Type": "text/html; charset=latin-1"}, html.encode("latin-1"))
+    final, ctype, text = web.safe_fetch_html("http://pub.example/old", resolve=res, opener=op)
+    assert (final, ctype, text) == ("http://pub.example/p", "text/html", html)
+
+
+def test_safe_fetch_bytes_shares_the_guard_and_takes_images(server):
+    res = mapping({"pub.example": ["93.184.216.34"]})
+    op = LocalOpener(server)
+    with pytest.raises(web.WebRefused):
+        web.safe_fetch_bytes("http://127.0.0.1/p.png", resolve=mapping({}), opener=NeverOpener())
+    server.routes["/go"] = (302, {"Location": "http://127.0.0.1/secret.png"}, b"")
+    with pytest.raises(web.WebRefused, match="not a public"):
+        web.safe_fetch_bytes("http://pub.example/go", resolve=res, opener=op)
+    server.routes["/page"] = (200, {"Content-Type": "text/html"}, b"<html/>")
+    with pytest.raises(web.WebUnsupported):
+        web.safe_fetch_bytes("http://pub.example/page", resolve=res, opener=op)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    server.routes["/p.png"] = (200, {"Content-Type": "image/png"}, png)
+    assert web.safe_fetch_bytes("http://pub.example/p.png", resolve=res, opener=op) == (
+        "http://pub.example/p.png", "image/png", png)
+    assert "image/" in server.seen["/p.png"]["Accept"]
+    server.routes["/big.png"] = (200, {"Content-Type": "image/png"}, png)
+    with pytest.raises(WebError, match="too large"):
+        web.safe_fetch_bytes("http://pub.example/big.png", max_bytes=50, resolve=res, opener=op)
+    # no Content-Length (chunked): over the cap is refused, not truncated
+    big = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+    server.routes["/chunk.png"] = (200, {"Content-Type": "image/png"}, big)
+    server.no_length = True
+    try:
+        with pytest.raises(WebError, match="too large"):
+            web.safe_fetch_bytes("http://pub.example/chunk.png", max_bytes=100, resolve=res, opener=op)
+        assert web.safe_fetch_bytes("http://pub.example/chunk.png", max_bytes=len(big), resolve=res, opener=op)[2] == big
+    finally:
+        server.no_length = False
+    with pytest.raises(WebError) as e:
+        web.safe_fetch_bytes("http://pub.example/none.png", resolve=res, opener=op)
+    assert e.value.http_status == 404

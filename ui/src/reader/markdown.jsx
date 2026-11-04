@@ -20,17 +20,29 @@ function Phrase({ phrase, text, onPhrase }) {
 }
 
 /* [n] -> a superscript link to source n; a source with no href is just the number. */
-function Cite({ source, n }) {
+function Cite({ source, n, onSource }) {
   return (
     <sup className="rd-cite">
       {source && safeHref(source.href)
-        ? <a href={safeHref(source.href)} target="_blank" rel="noopener noreferrer" title={source.title}>{n}</a>
+        ? <a href={safeHref(source.href)} target="_blank" rel="noopener noreferrer" title={source.title}
+             onClick={onSource ? e => onSource(e, source) : undefined}>{n}</a>
         : n}
     </sup>
   )
 }
 
-export function Markdown({ source, phrases = [], sources = [], onPhrase }) {
+/* With an onLink, [text](url) is a link for http(s) and kiwix: addresses only, and an image is
+ * shown only when it is one of the Primer's own proxied pictures; anything else is its text. */
+const LINK_OK = /^(https?:\/\/|kiwix:)/i
+const PICTURE = '/v1/browse/image?'
+
+/* A plain click follows a link in this window; ctrl, cmd or the middle button asks for a new one. */
+export function followLink(e, url, onLink) {
+  e.preventDefault()
+  onLink(url, { newWindow: !!(e.ctrlKey || e.metaKey || e.button === 1) })
+}
+
+export function Markdown({ source, phrases = [], sources = [], onPhrase, onLink, onSource }) {
   const seen = new Set()
   const phrased = (s, key) => splitByPhrases(s, phrases, seen).map((part, i) =>
     typeof part === 'string' ? part : <Phrase key={key + '.' + i} {...part} onPhrase={onPhrase} />)
@@ -38,7 +50,7 @@ export function Markdown({ source, phrases = [], sources = [], onPhrase }) {
   const text = (s, key) => sources.length
     ? splitCitations(s, sources.length).map((part, i) => typeof part === 'string'
         ? <Fragment key={key + '.c' + i}>{phrased(part, key + '.c' + i)}</Fragment>
-        : <Cite key={key + '.c' + i} n={part.n} source={sources.find(x => x.n === part.n)} />)
+        : <Cite key={key + '.c' + i} n={part.n} onSource={onSource} source={sources.find(x => x.n === part.n)} />)
     : phrased(s, key)
 
   const inline = (tokens = [], key = '') => tokens.map((t, i) => {
@@ -49,8 +61,18 @@ export function Markdown({ source, phrases = [], sources = [], onPhrase }) {
       case 'del': return <del key={k}>{inline(t.tokens, k + '.')}</del>
       case 'codespan': return <code key={k}>{t.text}</code>
       case 'br': return <br key={k} />
-      case 'link': return <span key={k}>{inline(t.tokens, k + '.')}</span>
-      case 'image': return <span key={k}>{t.text}</span>
+      case 'link':
+        if (onLink && typeof t.href === 'string' && LINK_OK.test(t.href)) {
+          return <a key={k} href={t.href} className="rd-link" title={t.href}
+                    onClick={e => followLink(e, t.href, onLink)}
+                    onAuxClick={e => { if (e.button === 1) followLink(e, t.href, onLink) }}>{inline(t.tokens, k + '.')}</a>
+        }
+        return <span key={k}>{inline(t.tokens, k + '.')}</span>
+      case 'image':
+        if (onLink && typeof t.href === 'string' && t.href.startsWith(PICTURE)) {
+          return <img key={k} className="rd-pic" src={t.href} alt={t.text || ''} loading="lazy" />
+        }
+        return <span key={k}>{t.text}</span>
       case 'escape': return <span key={k}>{t.text}</span>
       case 'html': return <span key={k}>{t.raw}</span>
       default:
@@ -72,6 +94,16 @@ export function Markdown({ source, phrases = [], sources = [], onPhrase }) {
       case 'list': {
         const L = t.ordered ? 'ol' : 'ul'
         return <L key={k}>{t.items.map((it, j) => <li key={k + '.' + j}>{block(it.tokens, k + '.' + j + '.')}</li>)}</L>
+      }
+      case 'table': {
+        const al = (i) => (t.align && t.align[i]) || undefined
+        const cell = (c, i, j, Tag) => <Tag key={k + '.' + j + '.' + i} style={al(i) ? { textAlign: al(i) } : undefined}>{inline(c.tokens, k + '.' + j + '.' + i + '.')}</Tag>
+        return (
+          <div key={k} className="rd-table"><table>
+            <thead><tr>{t.header.map((c, i) => cell(c, i, 'h', 'th'))}</tr></thead>
+            <tbody>{t.rows.map((r, j) => <tr key={k + '.r' + j}>{r.map((c, i) => cell(c, i, j, 'td'))}</tr>)}</tbody>
+          </table></div>
+        )
       }
       case 'hr': return <hr key={k} />
       case 'code': return <pre key={k}><code>{t.text}</code></pre>

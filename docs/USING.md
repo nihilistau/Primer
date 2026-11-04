@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to reading, branching, grounding, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
+A guide to reading, branching, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -12,6 +12,7 @@ dock at the bottom opens:
 | Dock button | Window |
 | --- | --- |
 | Book | **New page**: a reader. You can open several readers side by side. |
+| Globe | **Browser**: web pages and offline Wikipedia articles, read inside Primer. |
 | Grid | **Map of where I've been**: every page you've opened, as a tree. |
 | Chip | **Engines**: the tier, the model servers and their states, and the GPU mode. |
 | Wrench | **Models**: add, scan, edit and choose picture and video models. |
@@ -87,7 +88,8 @@ While a grounded page is being prepared, the reader says what it is doing: "Sear
 offline encyclopedia…", "Reading 3 articles…", "Searching the web…". Then the page is written as
 usual. Facts taken from a source carry a small number, such as ¹, linking to that source. The
 **Sources** list at the end of the page names each one and where it came from (the encyclopedia's
-title, or the web site). Links open in a new browser tab.
+title, or the web site). Click one to read it in Primer's [Browser](#the-browser); shift-click
+opens it in a new tab of your own browser instead.
 
 If nothing can be found, or the encyclopedia or the web can't be reached, the page is written
 from the model's own knowledge instead. Its badge then says `storyteller`, and a line under the
@@ -230,6 +232,31 @@ because the voice model misreads digits.
 
 To set up the voice, see [RUNNING.md](RUNNING.md#voice).
 
+## The browser
+
+The **Browser** (the globe in the dock, or any source link) opens real pages inside Primer: web
+pages, and articles from the offline encyclopedia (addresses starting `kiwix:`). Pages are shown
+as clean text with their headings, lists, tables, pictures and links. There are no scripts,
+layouts, forms or logins: it is a reader, not a full browser.
+
+- Type an address or search words into the address bar. Words search the web when web search is
+  on, else the offline encyclopedia.
+- **Back**, **Forward** and **Reload** work per window. Links open in the same window
+  (ctrl-click or middle-click for a new one). **Original** opens the page in a tab of your own
+  browser.
+- **Select any text** to **Explore** it (a Primer page on it) or **Ask** about it.
+- **Ask** (side panel) answers a question about the page from its text, such as "What's on this
+  page?".
+- **Click through** takes a goal ("Find the town where Michelangelo was born") and lets the
+  writing model follow the page's links for you, up to five pages, showing each step and why. It
+  only ever follows links the page offers. How well it chooses depends on the writing model; a
+  small model can wander. **Stop** ends it at any time.
+- **Make a page** writes a Primer page about the page you're reading, grounded in it alone and
+  citing it.
+
+Pages fetched from the web go through the same checks as web sources: only public addresses,
+with size and time limits. Pictures are passed through Primer and checked to be real pictures.
+
 ## Models
 
 Open **Models** from the dock. It has two lists, **Pictures** and **Videos**, each with its own
@@ -333,6 +360,8 @@ pictures. Use it if you have enough VRAM for both, or prefer to manage memory yo
 | "already answering" for the image server | Something else holds the image port, perhaps a leftover from a crash. Primer clears its own leftovers on the next start; otherwise stop it, or change `port` under `[images]`. |
 | Thumbnails show a red cross | That picture failed. Open it to see why. |
 | Video button disabled | Hover it for the reason: no video model added, or no default video model. |
+| "Web is off in this tier; only the offline encyclopedia can be opened" in the Browser | The tier's `[web]` search is `off`, so only the offline encyclopedia (`kiwix:` addresses) can be read. |
+| A page in the Browser has no pictures | The offline Wikipedia files have none ("nopic"); web pages do. |
 | Listen and Story disabled | Hover them for the reason: no `[voice]` in the tier, or the voice server isn't running. |
 | "cannot reach the voice server … timed out" | The voice model runs on the CPU. If other programs are using most of the CPU, a passage can take minutes; close them, or raise `timeout_s` under `[voice]`. |
 | Map button disabled | Hover it for the reason: no `[map]` in the tier, the map file can't be read, or no way to look places up (no offline encyclopedia and web search off). |

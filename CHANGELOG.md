@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.7.0: the browser (2026-11-04)
+
+Real pages, read inside Primer.
+
+### Added
+
+- **Browser** (a globe in the dock): web pages and offline Wikipedia articles (`kiwix:`
+  addresses) shown as clean text with headings, lists, tables, pictures and links. An address bar
+  that also searches (the web, or the offline encyclopedia), back, forward, reload, and
+  "Original".
+- **Source links open in the Browser** (shift-click for a tab of your own browser).
+- **Select any text** to Explore it as a Primer page or Ask about it.
+- **Ask** about the page you're reading, answered from its text.
+- **Click through for me**: give a goal and the writing model follows the page's links, up to
+  five pages, showing each step and why, then answers. It can only follow links the page offers.
+- **Make a page** from the page you're reading, grounded in it alone.
+
+### Security
+
+- Pages are rebuilt as Primer's own Markdown; no third-party HTML, script, style or SVG is ever
+  served from Primer's address. Text is escaped so a page can't inject links or pictures.
+- Web pages and pictures go through the same public-address guard as web sources; pictures are
+  checked from their bytes (PNG, JPEG, GIF, WebP) and served with `nosniff` and a null
+  content-security policy.
+
+### Not yet
+
+- **Image from a selection** and **Image of the page** are deferred: use Make a page, then Image.
+
 ## v0.6.0: narrated stories (2026-11-03)
 
 Primer can now read to you.

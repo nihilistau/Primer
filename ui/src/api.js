@@ -6,12 +6,13 @@ import { parseSSE } from './sse.js'
  * refuses any other Content-Type (415). */
 const PRIMER = { 'X-Primer': '1' }
 
-async function j(method, url, body) {
+async function j(method, url, body, signal) {
   if (method === 'POST') body = body || {}
   const r = await fetch(url, {
     method,
     headers: body ? { ...PRIMER, 'Content-Type': 'application/json' } : PRIMER,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   })
   const data = await r.json().catch(() => ({}))
   if (!r.ok) throw Object.assign(new Error(data.error || data.message || `${method} ${url}: ${r.status}`), { status: r.status })
@@ -27,19 +28,17 @@ export const branches = (node, phrase) =>
   j('GET', `/v1/branches?node=${encodeURIComponent(node)}&phrase=${encodeURIComponent(phrase)}`)
 export const graph = () => j('GET', '/v1/graph')
 
-/* POST /v1/pages/open and stream its events (node, delta, done, highlights, error) to
- * onEvent({event, data}). Resolves when the stream ends, which may be before `done` if
- * Primer stopped mid-page (see reader/streamEnd.js); rejects on a non-2xx reply (400
- * carries a JSON error), a network failure, an abort (AbortError) or a throwing onEvent.
- * `signal` is an AbortSignal. */
-export async function openPage(body, onEvent, signal) {
-  const r = await fetch('/v1/pages/open', {
+/* POST a JSON body and stream the SSE reply to onEvent({event, data}). Resolves when the
+ * stream ends; rejects on a non-2xx reply (a JSON {error}), a network failure, an abort
+ * (AbortError) or a throwing onEvent. `signal` is an AbortSignal. */
+export async function postStream(url, body, onEvent, signal, what = 'request') {
+  const r = await fetch(url, {
     method: 'POST', headers: { ...PRIMER, 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
   })
   if (!r.ok) {
     const data = await r.json().catch(() => ({}))
-    throw new Error(data.error || data.message || `open page: ${r.status}`)
+    throw new Error(data.error || data.message || `${what}: ${r.status}`)
   }
   const reader = r.body.getReader()
   const dec = new TextDecoder()
@@ -56,6 +55,20 @@ export async function openPage(body, onEvent, signal) {
     reader.cancel().catch(() => {})   // a throwing onEvent must not leave the body open
   }
 }
+
+/* POST /v1/pages/open and stream its events (node, delta, done, highlights, error) to
+ * onEvent({event, data}). Resolves when the stream ends, which may be before `done` if
+ * Primer stopped mid-page (see reader/streamEnd.js). */
+export const openPage = (body, onEvent, signal) => postStream('/v1/pages/open', body, onEvent, signal, 'open page')
+
+/* the Browser: a page as Markdown, search, and the two model streams (ask, click-through) */
+export const browse = (u, signal) => j('GET', `/v1/browse?u=${encodeURIComponent(u)}`, undefined, signal)
+export const browseSearch = (q, where, signal) =>
+  j('GET', `/v1/browse/search?q=${encodeURIComponent(q)}&where=${encodeURIComponent(where)}`, undefined, signal)
+export const browseAsk = (u, question, onEvent, signal) =>
+  postStream('/v1/browse/ask', { u, question }, onEvent, signal, 'ask')
+export const browseAgent = (u, goal, onEvent, signal) =>
+  postStream('/v1/browse/agent', { u, goal }, onEvent, signal, 'click through')
 
 /* images */
 export const intent = (text) => j('POST', '/v1/intent', { text })

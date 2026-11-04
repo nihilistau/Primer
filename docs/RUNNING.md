@@ -437,6 +437,18 @@ using most of the CPU, one sentence took over four minutes. Give it a free CPU, 
 GPU (`-ngl 99`) if you have about 3 GB of video memory to spare. Primer doesn't pause a GPU
 voice server while pictures are made, so that only suits a card with room for both.
 
+## Browser
+
+Phase 7's Browser needs no setup of its own. It reads web pages through the same guarded fetcher
+as web grounding (so `[web] search = "off"` also turns off web browsing), and offline articles
+through `kiwix-serve` (`[reference]`). Primer turns each page into its own clean Markdown; a
+page's HTML, scripts and styles are never served from Primer's address. Pictures go through
+`/v1/browse/image`, which only passes PNG, JPEG, GIF and WebP, checked from their bytes.
+
+Measured with the offline encyclopedia: an article opens in about 0.1 s, a Wikipedia web page in
+about 1 s; Ask answers in about 3 s and a two-step click-through finishes in about 5 s with
+gemma-4-E4B writing.
+
 ## Tests
 
 ```
