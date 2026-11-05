@@ -556,3 +556,104 @@ def test_open_from_source_url_uses_only_that_page(graph, text_engine, fast_engin
     assert dict(ev)["done"]["source_mode"] == "web" and dict(ref)["node"]["source_mode"] == "reference"
     assert dict(ev)["sources"]["sources"][0]["title"] == "Trebuchet facts"
     assert "A trebuchet is a siege engine." in text_engine.calls[0][1]["content"]
+
+
+def test_pages_record_signals(graph, text_engine, fast_engine):
+    from primer.reader.signals import Signals
+    sig = Signals(graph)
+    s = PageService(graph, text_engine, fast_engine, signals=sig)
+    try:
+        nid = dict(list(s.open(OpenRequest("Trebuchet", "start"))))["node"]["id"]
+        list(s.open(OpenRequest("trebuchet", "typed")))  # cached: still an open
+        list(s.open(OpenRequest("counterweight", "sideways", from_id=nid, phrase="counterweight")))
+        list(s.open(OpenRequest("", "start", node_id=nid, depth="simpler")))
+        list(s.open(OpenRequest("", "start", node_id=nid, depth="deeper")))
+        list(s.open(OpenRequest("", "start", node_id=nid, regenerate=True)))
+        list(s.open(OpenRequest("", "typed")))  # never reaches a node: nothing recorded
+        list(s.open(OpenRequest("", "start", node_id="missing")))
+    finally:
+        s.shutdown()
+    c = sig.counted()
+    assert c["opens"] == 3 and c["level"] == {"deeper": 1, "simpler": 1, "lean": "even"}
+    assert c["style"]["sideways"] == 1.0 and sig.since("regenerate", 0) == 1
+    assert {t["title"]: t["opens"] for t in c["topics"]} == {"Trebuchet": 2, "counterweight": 1}
+
+
+def test_reader_block_reaches_page_prompt_and_style_reaches_cards(graph, text_engine, fast_engine):
+    s = PageService(graph, text_engine, fast_engine, reader_block=lambda: "Likes <b>plain</b> words.")
+    try:
+        list(s.open(OpenRequest("Trebuchet", "start")))
+        s.branches(graph.node_for("Trebuchet", "concept").id, "castle walls")
+    finally:
+        s.shutdown()
+    system, user = text_engine.calls[0][0]["content"], text_engine.calls[0][1]["content"]
+    assert "plain" not in system and "<reader>\nLikes plain words.\n</reader>" in user
+
+
+def test_counted_block_is_the_default_reader_block(graph, text_engine, fast_engine):
+    from primer.reader.signals import Signals
+    sig = Signals(graph)
+    s = PageService(graph, text_engine, fast_engine, signals=sig)
+    try:
+        for c in ("Castles", "Moats", "Keeps"):
+            nid = graph.node_for(c, "concept").id
+            for _ in range(2):
+                sig.record("open", nid, "sideways")
+        list(s.open(OpenRequest("Trebuchet", "start")))
+        nid = graph.node_for("Trebuchet", "concept").id
+        s.branches(nid, "castle walls")
+    finally:
+        s.shutdown()
+    assert "Follows sideways jumps most" in text_engine.calls[0][1]["content"]
+    assert any("This reader tends to follow sideways jumps." in str(m) for m in fast_engine.calls)
+
+
+def test_fast_busy_counts_fast_calls(graph, text_engine):
+    import threading
+    started, release = threading.Event(), threading.Event()
+
+    class Slow(FakeEngine):
+        def complete(self, messages, **kw):
+            started.set()
+            release.wait(5)
+            return "[]"
+
+    s = PageService(graph, text_engine, Slow([]))
+    try:
+        assert s.fast_busy() is False
+        t = threading.Thread(target=lambda: list(s.open(OpenRequest("Trebuchet", "start"))))
+        t.start()
+        assert started.wait(5)
+        assert s.fast_busy() is True
+        release.set()
+        t.join(5)
+        assert s.fast_busy() is False
+    finally:
+        release.set()
+        s.shutdown()
+
+
+def test_fast_busy_while_prefetch_is_queued(graph, text_engine):
+    import threading
+    started, release = threading.Event(), threading.Event()
+
+    class Slow(FakeEngine):
+        def complete(self, messages, **kw):
+            started.set()
+            release.wait(5)
+            return "[]"
+
+    s = PageService(graph, text_engine, Slow([]))
+    try:
+        nid = graph.node_for("Trebuchet", "concept").id
+        graph.add_version(nid, "# Trebuchet\nA counterweight.", "storyteller", "normal", [])
+        s._enqueue(nid, "counterweight")
+        s._enqueue(nid, "stone")
+        assert started.wait(5)
+        s._fast_calls = 0  # even between fast calls, queued prefetch means busy
+        assert s.fast_busy() is True
+        s._fast_calls = 1
+    finally:
+        release.set()
+        s.shutdown()
+    assert s.fast_busy() is False

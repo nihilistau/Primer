@@ -69,6 +69,11 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     pages = PageService(graph, make_engine(tier.text), fast, tier.source_mode, gate,
                         App.make_grounder(tier))
     images = ImageService(graph, store, tier.images, fast, gate, var_dir / "media")
+    # App also makes the reader model (primer.reader.profile.Profile) over its signals and wires
+    # it into the pages: its block goes into page prompts and page opens nudge its summary.
+    # It also makes Test me and Review (primer.reader.quiz.Quiz): quiz results feed the profile
+    # (quiz_facts), each answer nudges it, and the reader reset clears the quiz. And the Quest
+    # (primer.reader.quest.Quests), whose doors the quiz writes and marks; the reset clears it too.
     app = App(tier=tier, servers=servers, pages=pages, graph=graph,
               hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,
               tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause,
@@ -112,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         server = make_server(app, "127.0.0.1", args.port)
     except OSError as e:
+        app.profile.shutdown(timeout=0)
         app.installer.shutdown()
         app.shutdown_images()
         app.shutdown_maps()
@@ -132,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         # winds down can't skip them
         try:
             try:
+                app.profile.shutdown(timeout=0)  # no new reader summaries; one in flight is a daemon
                 app.installer.shutdown()  # keeps the current download's .part
                 if app.setup_api is not None:
                     app.setup_api.shutdown()  # a model move in progress stops; its .part is removed

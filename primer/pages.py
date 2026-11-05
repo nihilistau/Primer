@@ -6,7 +6,7 @@ import queue
 import threading
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Callable, Iterator, Literal
 
 from .browse.address import kiwix_address
 from .engines import EngineError, StreamCancel
@@ -15,6 +15,7 @@ from .graph import Card, Draft, Graph, Node, Version, clean_typed
 from .grounding import MODES, Source
 from .prompts import (branch_messages, highlight_messages, page_messages, parse_branches,
                       parse_highlights, sentence_around)
+from .reader.signals import counted_block, style_hint
 
 log = logging.getLogger(__name__)
 
@@ -43,8 +44,21 @@ class OpenRequest:
 
 class PageService:
     def __init__(self, graph: Graph, text, fast, source_mode: str = "storyteller",
-                 gate: GpuGate | None = None, grounder=None):
+                 gate: GpuGate | None = None, grounder=None, signals=None,
+                 reader_block: Callable[[], str] | None = None,
+                 reader_style: Callable[[], str] | None = None):
         self.graph = graph
+        self.signals = signals  # a primer.reader.signals.Signals: opens, depth and regenerate are recorded
+        # "About this reader" for page prompts; None: the counted profile of `signals` (or nothing)
+        self.reader_block = reader_block
+        # the curiosity-style line for branch-card and highlight prompts; None: the counted style
+        # of `signals`. App wires the profile's, so its switch and Reset cover cards too
+        self.reader_style = reader_style
+        # called (no arguments) after a plain page open and when the prefetch queue runs dry:
+        # the reader model may start a background summary then. Must not block or raise.
+        self.nudge: Callable[[], None] | None = None
+        self._fast_calls = 0
+        self._fast_guard = threading.Lock()
         self.gate = gate  # when set, page text generation takes turns with image jobs
         self.text = text
         self.fast = fast
@@ -70,6 +84,7 @@ class PageService:
         if isinstance(node, str):
             yield ("error", {"message": node})
             return
+        self._record_open(node, req)
 
         latest = self.graph.latest_version(node.id)
         regenerate = req.regenerate or self._not_from_url(node, latest, req)
@@ -146,6 +161,8 @@ class PageService:
         yield ("highlights", {"phrases": phrases})
         for i, phrase in enumerate(phrases):
             self._enqueue(node.id, phrase, first=i == 0)
+        if not req.regenerate and req.depth == "normal":
+            self._nudge()
 
     def page(self, node_id: str) -> dict | None:
         node = self.graph.get_node(node_id)
@@ -192,6 +209,13 @@ class PageService:
         kw = {} if cancel is None else {"cancel": cancel}
         return self.text.stream(self._messages(node, depth, sources), max_tokens=_PAGE_TOKENS[depth],
                                 temperature=0.7, **kw)
+
+    def fast_busy(self) -> bool:
+        """True while this service is calling the fast engine (highlights, branch cards) or has
+        branch-card prefetch queued: the reader model's background summary waits for a free
+        fast engine, never the reverse (the queue running dry nudges it)."""
+        with self._fast_guard:
+            return self._fast_calls > 0 or not self._queue.empty()
 
     def shutdown(self, drain: bool = True) -> None:
         """Stop the drafter (if attached) and the prefetch worker. drain=True finishes the
@@ -285,14 +309,87 @@ class PageService:
         recent = [t for t in self.graph.recent_titles(30) if t != node.title]
         return page_messages(node.title, kind=node.kind, parent_title=parent_title,
                              parent_excerpt=parent_excerpt, recent=recent, depth=depth,
-                             sources=sources)
+                             sources=sources, reader=self._reader())
+
+    # the reader model: signals in, preferences out; neither may ever break a page
+    def _record(self, kind: str, node_id: str, detail: str = "") -> None:
+        if self.signals is None:
+            return
+        try:
+            self.signals.record(kind, node_id, detail)
+        except Exception:
+            log.exception("recording a reading signal failed")
+
+    def _record_open(self, node: Node, req: OpenRequest) -> None:
+        """A plain open is an `open` (detail: how the reader came); Deeper/Simpler and Regenerate
+        re-ask for a page already open, so they are their own kinds and don't count as opens
+        (their requests carry a default via that would skew the curiosity style)."""
+        if req.regenerate:
+            self._record("regenerate", node.id)
+        if req.depth != "normal":
+            self._record("depth", node.id, req.depth)
+        if not req.regenerate and req.depth == "normal":
+            self._record("open", node.id, req.via)
+
+    def _nudge(self) -> None:
+        if self.nudge is None:
+            return
+        try:
+            self.nudge()
+        except Exception:
+            log.exception("nudging the reader model failed")
+
+    def _counted(self) -> dict | None:
+        if self.signals is None:
+            return None
+        try:
+            return self.signals.counted()
+        except Exception:
+            log.exception("counting reading signals failed")
+            return None
+
+    def _reader(self) -> str:
+        """The "About this reader" text for page prompts ("" for none)."""
+        try:
+            if self.reader_block is not None:
+                return self.reader_block() or ""
+        except Exception:
+            log.exception("the reader block failed")
+            return ""
+        counted = self._counted()
+        return counted_block(counted) if counted else ""
+
+    def _style(self) -> str:
+        if self.reader_style is not None:
+            try:
+                return self.reader_style() or ""
+            except Exception:
+                log.exception("the reader style failed")
+                return ""
+        if self.signals is None:
+            return ""
+        try:
+            return style_hint({"style": self.signals.style_counts()})
+        except Exception:
+            log.exception("counting reading signals failed")
+            return ""
+
+    def _fast(self, messages: list[dict]) -> str:
+        """One fast-engine call, counted for fast_busy()."""
+        with self._fast_guard:
+            self._fast_calls += 1
+        try:
+            return self.fast.complete(messages, max_tokens=300, temperature=0.2)
+        finally:
+            with self._fast_guard:
+                self._fast_calls -= 1
 
     def _highlights(self, node_id: str, version: Version) -> list[str]:
         stored = self.graph.get_highlights(node_id, version.n)
         if stored is not None:
             return stored
         try:
-            raw = self.fast.complete(highlight_messages(version.markdown), max_tokens=300, temperature=0.2)
+            raw = self._fast(highlight_messages(version.markdown, style=self._style()))
             phrases = parse_highlights(raw, version.markdown)
         except Exception:
             log.exception("highlight generation failed")
@@ -306,9 +403,8 @@ class PageService:
         if version is None:
             return None
         try:
-            raw = self.fast.complete(
-                branch_messages(phrase, node.title, sentence_around(version.markdown, phrase)),
-                max_tokens=300, temperature=0.2)
+            raw = self._fast(branch_messages(phrase, node.title, sentence_around(version.markdown, phrase),
+                                             style=self._style()))
         except Exception:
             log.exception("branch generation failed")
             return parse_branches("", phrase, node.title)  # fallback cards, not cached
@@ -336,3 +432,5 @@ class PageService:
                     self.drafter.offer(node_id)
             except Exception:
                 log.exception("prefetch failed")
+            if self._queue.empty():  # the fast engine is free again: a summary may be due
+                self._nudge()

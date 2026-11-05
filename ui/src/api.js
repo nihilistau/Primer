@@ -6,13 +6,14 @@ import { parseSSE } from './sse.js'
  * refuses any other Content-Type (415). */
 const PRIMER = { 'X-Primer': '1' }
 
-async function j(method, url, body, signal) {
+async function j(method, url, body, signal, extra) {
   if (method === 'POST') body = body || {}
   const r = await fetch(url, {
     method,
     headers: body ? { ...PRIMER, 'Content-Type': 'application/json' } : PRIMER,
     body: body ? JSON.stringify(body) : undefined,
     signal,
+    ...extra,
   })
   const data = await r.json().catch(() => ({}))
   if (!r.ok) throw Object.assign(new Error(data.error || data.message || `${method} ${url}: ${r.status}`), { status: r.status })
@@ -117,3 +118,29 @@ export const setupUpdates = (refresh = false) => j('GET', '/v1/setup/updates' + 
 export const setupModels = () => j('GET', '/v1/setup/models')
 export const setupMove = (paths, dest) => j('POST', '/v1/setup/move', { paths, dest })
 export const setupMoveCancel = () => j('POST', '/v1/setup/move/cancel')
+
+/* the reader model (Phase 10): its state, notes and switch, reset, a forced summary, and how
+ * long a page was on screen (204, no body; keepalive, so a report sent as the tab goes away
+ * still arrives) */
+export const readerState = () => j('GET', '/v1/reader')
+export const saveReader = (patch) => j('POST', '/v1/reader', patch)
+export const resetReader = () => j('POST', '/v1/reader/reset')
+export const refreshReader = () => j('POST', '/v1/reader/refresh')
+export const readerDwell = (nodeId, seconds) => j('POST', '/v1/reader/dwell', { node_id: nodeId, seconds }, undefined, { keepalive: true })
+
+/* Test me and Review. make may wait on the GPU gate (a real request, like a page). */
+export const quizMake = (nodeId, fresh = false) => j('POST', '/v1/quiz/make', { node_id: nodeId, fresh })
+export const quizFor = (nodeId) => j('GET', `/v1/quiz?node_id=${encodeURIComponent(nodeId)}`)
+// revealed: the model answer was shown first (marked not yet without asking the model)
+export const quizAnswer = (itemId, answer, revealed = false) =>
+  j('POST', '/v1/quiz/answer', revealed ? { item_id: itemId, answer, revealed: true } : { item_id: itemId, answer })
+export const quizDue = (limit = 20) => j('GET', `/v1/quiz/due?limit=${limit}`)
+export const quizItem = (id) => j('GET', `/v1/quiz/item?id=${encodeURIComponent(id)}`)
+
+/* the Quest: the current one, a build (from recent reading, or a page's trail), a door, a
+ * skip, leaving it */
+export const quest = () => j('GET', '/v1/quest')
+export const questBuild = (fromNodeId) => j('POST', '/v1/quest', fromNodeId ? { from_node_id: fromNodeId } : {})
+export const questAnswer = (questId, answer) => j('POST', '/v1/quest/answer', { quest_id: questId, answer })
+export const questSkip = (questId) => j('POST', '/v1/quest/skip', { quest_id: questId })
+export const questAbandon = (questId) => j('POST', '/v1/quest/abandon', { quest_id: questId })

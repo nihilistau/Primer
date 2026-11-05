@@ -502,6 +502,30 @@ Measured with the offline encyclopedia: an article opens in about 0.1 s, a Wikip
 about 1 s; Ask answers in about 3 s and a two-step click-through finishes in about 5 s with
 gemma-4-E4B writing.
 
+## The reader model, Test me and Quest
+
+See [USING.md](USING.md#the-primer-knows-you). Everything is kept in the graph database in
+`var/`: reading events and time on pages (`reader_events`, `reader_dwell`), the summary, notes
+and switch (`reader_profile`), Test me questions and answers (`quiz_items`, `quiz_answers`) and
+quests (`quests`). Reset deletes them all in one transaction and keeps the pages.
+
+Which model does what:
+
+| Job | Model | When |
+| --- | --- | --- |
+| Reader summary | fast | in the background after 8 page opens or 5 answers, at most every 2 minutes; waits up to 5 minutes for branch cards; **Refresh** runs at once |
+| Test me questions, marking answers, quest doors and room descriptions | writing | when asked, as a page request at the GPU gate (a picture being made goes first) |
+
+The "about this reader" note added to page prompts is at most 800 characters (notes 500 of
+them), stripped of markup and quoted as the reader's preferences after the page rules. Time on a
+page is reported by the reader window every 30 s while it is visible, capped at 600 s a visit.
+
+Routes (same origin rules as the rest of the API; POSTs are JSON): `GET`/`POST /v1/reader`,
+`POST /v1/reader/refresh`, `/reset`, `/dwell`; `POST /v1/quiz/make`, `/answer`,
+`GET /v1/quiz?node_id=`, `/v1/quiz/item?id=`, `/v1/quiz/due`; `POST /v1/quest`, `/answer`,
+`/skip`, `/abandon`, `GET /v1/quest`. A quest's door answers and hints are never sent before the
+reader has earned them.
+
 ## Thinking ahead
 
 Phase 8 drafts the likely next page on the idle GPU (spec:

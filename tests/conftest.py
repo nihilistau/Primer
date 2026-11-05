@@ -91,6 +91,7 @@ def app_parts(tmp_path, g):
     app = App(tier=tier, servers=servers, pages=pages, graph=g, hardware=Hardware(None, 0.0, 16.0),
               var_dir=tmp_path / "var", ui_dir=ui_dir, tiers_dir=tiers_dir)
     yield app, tiers_dir
+    app.profile.shutdown()
     app.pages.shutdown()
 
 

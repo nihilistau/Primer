@@ -1389,3 +1389,24 @@ def test_failed_tier_reload_keeps_a_live_drafter(client, app_parts):
         app.reload_tier("alt")
     assert app.drafter is not old and not app.drafter._closed and app.pages.drafter is app.drafter
     app.servers.stop_all()
+
+
+def test_reader_model_survives_tier_switch(app_parts):
+    """A tier switch builds a new PageService: the reader block and the nudge carry over, and the
+    profile uses the new tier's fast engine and busy flag (read through the app at call time)."""
+    app, tiers_dir = app_parts
+    (tiers_dir / "alt.toml").write_text(TIER_TOML)
+    profile, old = app.profile, app.pages
+    assert old.reader_block == profile.block and old.nudge == profile.nudge
+    assert old.reader_style == profile.style
+    app.reload_tier("alt")
+    try:
+        assert app.pages is not old and app.profile is profile
+        assert app.pages.reader_block == profile.block and app.pages.nudge == profile.nudge
+        assert app.pages.reader_style == profile.style  # the switch covers cards after a switch too
+        assert profile.fast_engine() is app.pages.fast
+        app.pages._fast_calls = 1
+        assert app._pages_fast_busy() is True
+        app.pages._fast_calls = 0
+    finally:
+        app.servers.stop_all()

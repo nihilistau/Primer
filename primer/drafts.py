@@ -117,6 +117,7 @@ class Drafter:
         self._run: _Run | None = None
         self._closed = False
         self._written = self._used = self._discarded = 0
+        self._epoch = 0  # bumped by discard_all(): a draft begun before it is never kept
         pages.drafter = self
         self._worker = threading.Thread(target=self._work, name="primer-drafter", daemon=True)
         self._worker.start()
@@ -222,6 +223,26 @@ class Drafter:
             run.cancelling = True
         run.cancel.cancel()
 
+    def discard_all(self) -> None:
+        """What page prompts get changed (the reader's notes, the switch, a reset): every
+        finished draft is deleted and the draft being written stops (unless a reader has
+        adopted it) and is written again; one that already finished is not kept. The waiting
+        candidates stay: they are written with the new profile."""
+        with self._cond:
+            self._epoch += 1
+            run = self._stoppable()
+            if run is not None:
+                run.cancelling = True
+        if run is not None:
+            run.cancel.cancel()
+        try:
+            gone = self.graph.clear_finished_drafts()
+        except Exception:
+            log.exception("discarding the drafts failed")
+            return
+        with self._cond:
+            self._discarded += gone
+
     def _stoppable(self) -> _Run | None:
         """The draft being written, if it can still be stopped (caller holds the condition)."""
         run = self._run
@@ -305,6 +326,7 @@ class Drafter:
             if self._closed:
                 return "drop"
             self._run = run
+            epoch = self._epoch
         stop = threading.Event()
         pieces = None
         error = ""
@@ -348,12 +370,20 @@ class Drafter:
             # A page opened in another mode between this check and the save leaves a finished
             # draft for a node that now has a version. Harmless: open serves the cached version
             # and never takes it, and prune_drafts drops it in time.
+            if not adopted and self._stale(epoch):  # the profile changed while it was written
+                return self._finish(run, "cancelled", "retry", "the reader's profile changed")
             self.graph.put_draft(node.id, mode, markdown, sources, "done")
+            if not adopted and self._stale(epoch):  # ...or just now: discard_all may have missed it
+                return self._finish(run, "cancelled", "retry", "the reader's profile changed")
             self.graph.prune_drafts(KEEP)
         except Exception as e:
             log.exception("saving the draft failed")
             return self._finish(run, "failed", "drop", str(e) or type(e).__name__)
         return self._finish(run, "done", "drop")
+
+    def _stale(self, epoch: int) -> bool:
+        with self._cond:
+            return epoch != self._epoch
 
     def _finish(self, run: _Run, state: str, outcome: str, error: str = "") -> str:
         """Record how the draft ended (the row is written or deleted first, so an adopter that

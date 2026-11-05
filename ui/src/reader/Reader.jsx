@@ -19,6 +19,8 @@ import { browseAddressFor, kiwixHref } from '../apps/browserNav.js'
 import { badgeLabel, rewriteOptions } from './sourceMode.js'
 import { retryBody } from './retry.js'
 import { streamEndError } from './streamEnd.js'
+import { dwellTracker, testMeButton } from '../apps/readerModel.js'
+import TestMe from './TestMe.jsx'
 import './reader.css'
 
 const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '', sources: [], grounding: '', note: '',
@@ -52,6 +54,8 @@ export default function Reader({ windowId, start, onPick }) {
   const [mediaErr, setMediaErr] = useState('')
   const [browseWeb, setBrowseWeb] = useState(false)  // whether the Browser can open web pages (else only kiwix:)
   const [browseOk, setBrowseOk] = useState(false)     // whether source links can open in the Browser
+  const [status, setStatus] = useState(null)          // the last /v1/status (Test me reads the writing model)
+  const [testing, setTesting] = useState(null)        // the node Test me is open for
 
   const stop = () => { if (abort.current) abort.current.abort(); abort.current = null }
   useEffect(() => stop, [])
@@ -226,9 +230,38 @@ export default function Reader({ windowId, start, onPick }) {
     return () => clearInterval(t)
   }, [unfinished, view.nodeId, loadMedia])
   useEffect(() => { setImgErr(''); setMediaErr('') }, [view.nodeId])
+
+  /* Dwell: the seconds this page is on screen (the tab visible and this window not
+   * minimised) go to /v1/reader/dwell every 30 s and on leaving; failures are dropped. */
+  const dwell = useRef(null)
+  useEffect(() => {
+    const d = dwellTracker({ report: api.readerDwell, now: Date.now })
+    dwell.current = d
+    const seen = () => {
+      const w = wm.getWindows().find(x => x.id === windowId)
+      d.visible(document.visibilityState === 'visible' && !(w && w.minimized))
+    }
+    seen()
+    const unsub = wm.subscribe(seen)
+    document.addEventListener('visibilitychange', seen)
+    const bye = () => d.flush()   // the tab may come back from the back/forward cache: the visit goes on
+    window.addEventListener('pagehide', bye)
+    const t = setInterval(d.tick, 5000)
+    return () => {
+      clearInterval(t); unsub()
+      document.removeEventListener('visibilitychange', seen)
+      window.removeEventListener('pagehide', bye)
+      d.leave()
+    }
+  }, [windowId])
+  useEffect(() => { if (dwell.current) dwell.current.show(view.nodeId) }, [view.nodeId])
+  useEffect(() => { setTesting(null) }, [view.nodeId])
+  // Deeper, Simpler, Regenerate or a rewrite: close Test me, so the new version doesn't make
+  // new questions by itself (a GPU call nobody asked for)
+  useEffect(() => { if (view.streaming) setTesting(null) }, [view.streaming])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setBrowseOk(!!(st.browse_available && st.browse_available.ok)); setBrowseWeb(!!(st.browse_available && st.browse_available.web)); setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
+    api.status().then(st => { if (live) { setStatus(st); setBrowseOk(!!(st.browse_available && st.browse_available.ok)); setBrowseWeb(!!(st.browse_available && st.browse_available.web)); setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
       .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)); setStoryBtn(storyCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
@@ -363,6 +396,7 @@ export default function Reader({ windowId, start, onPick }) {
     openBrowser(u)
   }
   const hasPage = view.nodeId || view.streaming || view.markdown
+  const tmBtn = testMeButton(status, { nodeId: view.nodeId, streaming: view.streaming })
 
   return (
     <div className="rd">
@@ -411,6 +445,13 @@ export default function Reader({ windowId, start, onPick }) {
                   title={storyBtn.enabled ? 'Retell this page as an illustrated, narrated story' : storyBtn.reason}
                   aria-label={storyBtn.enabled ? 'Story' : `Story (unavailable: ${storyBtn.reason})`}
                   onClick={() => makeStory(view.nodeId, 'story', view.title)}>Story</Button>
+          <Button size="sm" disabled={!tmBtn.enabled} aria-pressed={testing === view.nodeId && !!view.nodeId}
+                  title={tmBtn.enabled ? 'Three questions about this page' : tmBtn.reason}
+                  aria-label={tmBtn.enabled ? 'Test me' : `Test me (unavailable: ${tmBtn.reason})`}
+                  onClick={() => setTesting(t => (t === view.nodeId ? null : view.nodeId))}>Test me</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming}
+                  title="A quest through the pages that led here"
+                  onClick={() => wm.open('quest', { props: { fromNodeId: view.nodeId }, single: true, w: 600, h: 720 })}>Quest</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'deeper' })}>Deeper</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'simpler' })}>Simpler</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ regenerate: true })}>Regenerate</Button>
@@ -499,6 +540,8 @@ export default function Reader({ windowId, start, onPick }) {
                 </ol>
               </section>
             ) : null}
+            {testing && testing === view.nodeId && !view.streaming
+              ? <TestMe key={testing} nodeId={testing} onClose={() => setTesting(null)} /> : null}
             {mediaErr ? <div className="rd-media-err" role="status">{mediaErr}</div> : null}
             {view.error ? (
               <State kind="error" title="This page did not finish"

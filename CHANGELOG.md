@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.10.0: the Primer knows you, and asks back (2026-11-05)
+
+Pages shaped to how you read, and questions about what you've read.
+
+### Added
+
+- **Reader** (a person in the dock): what Primer has noticed about how you read (Deeper or
+  Simpler, which branches you follow, what you read most and longest, what you know and found
+  hard) as a short summary in plain words and the counts behind it; your own notes, which always
+  come first; a switch to use it in pages or not; and Reset. Page prompts, branch cards and
+  highlights are shaped by it, as preferences that can't override a page's rules or citations.
+- **Test me** on any page: a recall, an explain-why and a connect-to-an-earlier-page question,
+  your typed answers marked Right, Partly or Not yet against the page with a line quoting it.
+- **Review** (a brain in the dock, with the number due): questions come back after 1, 3, 7, 21
+  and 60 days as you get them right, sooner when you don't.
+- **Quest** (a pawn in the dock, or from a page): up to five rooms built from your trail, each
+  door opened by a question about its page, with hints, a nudge to reread, and Skip after three
+  tries.
+- Everything stays on your machine; Reset forgets it all and keeps your pages.
+
+### Measured
+
+With gemma-4-E4B writing and LFM3 1.7B for the fast jobs: three questions in about 4 seconds,
+an answer marked in about 1 second, a five-room quest built in about 15 seconds, a reader
+summary in about 10 seconds on the CPU.
+
 ## v0.9.0: the setup centre (2026-11-05)
 
 From a fresh copy to a working Primer in one window.

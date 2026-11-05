@@ -174,3 +174,69 @@ describe('setup calls', () => {
     }
   })
 })
+
+describe('reader, quiz and quest calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+
+  it('POSTs send X-Primer and a JSON body', async () => {
+    const cases = [
+      [() => api.saveReader({ notes: 'I am 12' }), '/v1/reader', { notes: 'I am 12' }],
+      [() => api.saveReader({ enabled: false }), '/v1/reader', { enabled: false }],
+      [() => api.resetReader(), '/v1/reader/reset', {}],
+      [() => api.refreshReader(), '/v1/reader/refresh', {}],
+      [() => api.readerDwell('n1', 30), '/v1/reader/dwell', { node_id: 'n1', seconds: 30 }],
+      [() => api.quizMake('n1'), '/v1/quiz/make', { node_id: 'n1', fresh: false }],
+      [() => api.quizMake('n1', true), '/v1/quiz/make', { node_id: 'n1', fresh: true }],
+      [() => api.quizAnswer('i1', 'an answer'), '/v1/quiz/answer', { item_id: 'i1', answer: 'an answer' }],
+      [() => api.quizAnswer('i1', 'an answer', true), '/v1/quiz/answer', { item_id: 'i1', answer: 'an answer', revealed: true }],
+      [() => api.questAbandon('q1'), '/v1/quest/abandon', { quest_id: 'q1' }],
+      [() => api.questBuild(), '/v1/quest', {}],
+      [() => api.questBuild('n1'), '/v1/quest', { from_node_id: 'n1' }],
+      [() => api.questAnswer('q1', 'yes'), '/v1/quest/answer', { quest_id: 'q1', answer: 'yes' }],
+      [() => api.questSkip('q1'), '/v1/quest/skip', { quest_id: 'q1' }],
+    ]
+    for (const [fn, url, body] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+      expect(JSON.parse(init.body)).toEqual(body)
+    }
+  })
+
+  it('GETs send X-Primer and encode their query', async () => {
+    const cases = [
+      [() => api.readerState(), '/v1/reader'],
+      [() => api.quizFor('a b'), '/v1/quiz?node_id=a%20b'],
+      [() => api.quizDue(), '/v1/quiz/due?limit=20'],
+      [() => api.quizDue(1), '/v1/quiz/due?limit=1'],
+      [() => api.quizItem('x&y'), '/v1/quiz/item?id=x%26y'],
+      [() => api.quest(), '/v1/quest'],
+    ]
+    for (const [fn, url] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('GET')
+      expect(init.headers['X-Primer']).toBe('1')
+    }
+  })
+
+  it('a dwell report is sent keepalive (it may go as the tab closes)', async () => {
+    const [, init] = await run(() => api.readerDwell('n', 5))
+    expect(init.keepalive).toBe(true)
+    const [, other] = await run(() => api.saveReader({ notes: 'x' }))
+    expect(other.keepalive).toBeUndefined()
+  })
+
+  it('a 204 (dwell) resolves', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
+    await expect(api.readerDwell('n', 5)).resolves.toEqual({})
+  })
+})

@@ -10,6 +10,9 @@ import MapWindow from './apps/MapWindow.jsx'
 import StoryWindow from './apps/StoryWindow.jsx'
 import BrowserWindow from './apps/BrowserWindow.jsx'
 import SetupWindow from './apps/SetupWindow.jsx'
+import ReaderWindow from './apps/ReaderWindow.jsx'
+import ReviewWindow from './apps/ReviewWindow.jsx'
+import QuestWindow from './apps/QuestWindow.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -28,10 +31,15 @@ export const APPS = {
   story: { title: 'Story', icon: 'speaker', size: [720, 740], component: StoryWindow },
   // kits, downloads, approvals, moving models, updates (Phase 9); opens itself on first run
   setup: { title: 'Setup', icon: 'download', size: [700, 740], component: SetupWindow, single: true },
+  // the reader model, spaced review of Test me questions, and the Quest (Phase 10)
+  readermodel: { title: 'Reader', icon: 'anon', size: [560, 680], component: ReaderWindow, single: true },
+  review: { title: 'Review', icon: 'memory', size: [600, 680], component: ReviewWindow, single: true },
+  // props { fromNodeId? }: build from that page's trail
+  quest: { title: 'Quest', icon: 'games', size: [600, 720], component: QuestWindow, single: true },
 }
 
 /* the dock's buttons, in order */
-export const DOCK = ['reader', 'browser', 'graph', 'engines', 'imagemodels', 'setup']
+export const DOCK = ['reader', 'browser', 'graph', 'readermodel', 'review', 'quest', 'engines', 'imagemodels', 'setup']
 
 /* open an app through the window manager with its registry defaults */
 export function openApp(wm, appId, props) {

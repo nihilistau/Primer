@@ -52,6 +52,11 @@ from primer.stories.service import SHUT_DOWN as STORIES_SHUT_DOWN
 from primer.stories.service import StoryService
 from primer.voice.client import VoiceError, make_voice
 from primer.pages import OpenRequest, PageService
+from primer.reader.profile import NOTES_CHARS, Profile
+from primer.reader.quest import (QuestConflict, QuestError, QuestNotFound, Quests,
+                                 QuestUnavailable)
+from primer.reader.quiz import Quiz, QuizError, QuizNotFound, QuizReset, QuizUnavailable
+from primer.reader.signals import VISIT_CAP_S, Signals
 from primer.servers import ManagedServer, ServerManager
 from primer.setup.api import ApiError, SetupApi, setup_status
 
@@ -190,6 +195,10 @@ class App:
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     installer: object | None = None  # Setup's primer.setup.installer.Installer (serve.py builds it)
     setup_api: SetupApi | None = None  # the /v1/setup/* logic; made on first use
+    signals: Signals | None = None  # reading signals; made over the graph when not passed
+    profile: Profile | None = None  # the reader model; made over the signals when not passed
+    quiz: Quiz | None = None  # Test me and Review; made over the graph when not passed
+    quests: Quests | None = None  # the Quest; made over the quiz when not passed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -205,6 +214,32 @@ class App:
         to the pages when they have none) and the image service."""
         if self.pages.grounder is None:
             self.pages.grounder = self.make_grounder(self.tier)
+        if self.signals is None:  # (tests may pass a stand-in pages object without signals)
+            self.signals = getattr(self.pages, "signals", None) or Signals(self.graph)
+        if getattr(self.pages, "signals", None) is None:
+            self.pages.signals = self.signals
+        if self.profile is None:
+            # the fast engine and the pages' busy flag are read through the app at call time:
+            # a tier switch builds a new PageService (and engines)
+            self.profile = Profile(self.graph, self.signals, lambda: getattr(self.pages, "fast", None),
+                                   pages_busy=self._pages_fast_busy)
+        if self.quiz is None:
+            # the writing engine and the gate are read through the pages at call time (a tier
+            # switch builds a new PageService, engines and gate)
+            self.quiz = Quiz(self.graph, lambda: getattr(self.pages, "text", None),
+                             lambda: getattr(self.pages, "gate", None), self.signals)
+        self.quiz.on_answer = self.profile.nudge
+        self.profile.quiz_facts = self.quiz.facts
+        if self.quiz.forget not in self.profile.on_reset:
+            self.profile.on_reset.append(self.quiz.forget)
+        if self.quests is None:  # (engine and gate read through the pages, as for the quiz)
+            self.quests = Quests(self.graph, self.quiz, lambda: getattr(self.pages, "text", None),
+                                 lambda: getattr(self.pages, "gate", None))
+        if self.quests.forget not in self.profile.on_reset:
+            self.profile.on_reset.append(self.quests.forget)
+        if self._discard_drafts not in self.profile.on_change:
+            self.profile.on_change.append(self._discard_drafts)
+        self._wire_reader(self.pages)
         self.pages.source_mode = self.saved_source_mode() or self.tier.source_mode
         if self.store is None:
             self.store = ModelStore(self.var_dir)
@@ -227,6 +262,44 @@ class App:
             self.drafter = Drafter(self.graph, self.pages, self.gate, self.thinking_ahead)
         else:
             self.drafter = self.pages.drafter
+
+    def _discard_drafts(self) -> None:
+        """The profile changed (notes, switch, reset): pages drafted ahead with the old one are
+        thrown away (Profile.on_change). Read through the app: a tier switch makes a new drafter."""
+        drafter = self.drafter
+        if drafter is not None:
+            drafter.discard_all()
+
+    def _pages_fast_busy(self) -> bool:
+        busy = getattr(self.pages, "fast_busy", None)
+        return bool(busy()) if busy is not None else False
+
+    def _wire_reader(self, pages) -> None:
+        """The reader model's block goes into page prompts and its style line into branch-card
+        and highlight prompts (both "" while it is switched off), and page opens nudge it."""
+        if getattr(pages, "reader_block", None) is None:
+            pages.reader_block = self.profile.block
+        if getattr(pages, "reader_style", None) is None:
+            pages.reader_style = self.profile.style
+        pages.nudge = self.profile.nudge
+
+    def reader_hosted(self) -> list[str]:
+        """Which models the profile leaves this machine for: "writing" (the block goes with
+        page requests) and/or "fast" (titles, counts and quiz results go to it for the
+        summary) when that model is not on a loopback address; [] when both are local."""
+        out = []
+        for name, spec in (("writing", self.tier.text), ("fast", self.tier.fast)):
+            try:
+                host = (urlsplit(spec.base_url).hostname or "").lower()
+            except ValueError:
+                host = ""
+            if host not in LOOPBACK_HOSTS:
+                out.append(name)
+        return out
+
+    def reader_state(self) -> dict:
+        hosted = self.reader_hosted()
+        return {**self.profile.state(), "hosted": bool(hosted), "hosted_models": hosted}
 
     @staticmethod
     def make_browse(tier: Tier) -> BrowseService:
@@ -436,7 +509,10 @@ class App:
                 fast = make_engine(tier.fast)
                 mode = self.saved_source_mode() or tier.source_mode
                 pages = PageService(self.graph, make_engine(tier.text), fast, mode, gate,
-                                    self.make_grounder(tier))
+                                    self.make_grounder(tier), signals=self.signals,
+                                    reader_block=getattr(self.pages, "reader_block", None),
+                                    reader_style=getattr(self.pages, "reader_style", None))
+                self._wire_reader(pages)
                 images = self.make_images(tier, gate, fast)
                 text_pause.release_gpu = images.release_gpu
                 self.tier, self.pages, self.servers = tier, pages, servers
@@ -740,6 +816,12 @@ def _make_handler(app: App):
                     self._json({"ok": True})
                 elif path == "/v1/status":
                     self._json(app.status())
+                elif path == "/v1/reader":
+                    self._json(app.reader_state())
+                elif path in ("/v1/quiz", "/v1/quiz/due", "/v1/quiz/item"):
+                    self._quiz_get(path, parse_qs(url.query))
+                elif path == "/v1/quest":
+                    self._json({"quest": app.quests.current()})
                 elif path == "/v1/graph":
                     self._json(app.graph.snapshot(visible_only=True))
                 elif path == "/v1/branches":
@@ -827,6 +909,21 @@ def _make_handler(app: App):
                     self._json(app.status())
                 elif path == "/v1/pages/open":
                     self._open(body)
+                elif path == "/v1/reader/dwell":
+                    self._dwell(body)
+                elif path == "/v1/reader":
+                    self._reader(body)
+                elif path == "/v1/reader/reset":
+                    app.profile.reset()
+                    self._json(app.reader_state())
+                elif path in ("/v1/quiz/make", "/v1/quiz/answer"):
+                    self._quiz_post(path, body)
+                elif path in ("/v1/quest", "/v1/quest/answer", "/v1/quest/skip", "/v1/quest/abandon"):
+                    self._quest_post(path, body)
+                elif path == "/v1/reader/refresh":
+                    reason = app.profile.refresh()
+                    self._json({"skipped": reason} if reason else {"started": True},
+                               200 if reason else 202)
                 elif path in ("/v1/browse/ask", "/v1/browse/agent"):
                     self._browse_model(path, body)
                 elif path.startswith("/v1/servers/"):
@@ -1007,6 +1104,129 @@ def _make_handler(app: App):
                     alive = False
             emit.alive = lambda: alive and not _peer_gone(self.connection)  # page opens keep generating; browse model calls stop
             return emit
+
+        def _dwell(self, body: dict) -> None:
+            """POST /v1/reader/dwell {node_id, seconds}: seconds a page was visible (0 < s <= 600)."""
+            node_id, seconds = body.get("node_id"), body.get("seconds")
+            if not isinstance(node_id, str) or not node_id:
+                raise _BadRequest("node_id is required")
+            number = isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+            if not number or not 0 < seconds <= VISIT_CAP_S:  # NaN fails the comparison too
+                raise _BadRequest(f"seconds must be a number above 0 and at most {VISIT_CAP_S:g}")
+            if app.graph.get_node(node_id) is None:
+                raise _HttpError(404, "page not found")
+            app.signals.dwell(node_id, seconds)
+            self._send(204, b"", "application/json")
+
+        def _reader(self, body: dict) -> None:
+            """POST /v1/reader {notes?: str (<= 1000), enabled?: bool}: the reader's state."""
+            notes, enabled = body.get("notes"), body.get("enabled")
+            if notes is not None and (not isinstance(notes, str) or len(notes) > NOTES_CHARS):
+                raise _BadRequest(f"notes must be a string of at most {NOTES_CHARS} characters")
+            if enabled is not None and not isinstance(enabled, bool):
+                raise _BadRequest("enabled must be true or false")
+            if notes is not None:
+                app.profile.set_notes(notes)
+            if enabled is not None:
+                app.profile.set_enabled(enabled)
+            self._json(app.reader_state())
+
+        def _quiz_get(self, path: str, q: dict) -> None:
+            """GET /v1/quiz?node_id= {items}, /v1/quiz/due?limit= {due, counts},
+            /v1/quiz/item?id= (the item with its model answer)."""
+            try:
+                if path == "/v1/quiz/due":
+                    raw = q.get("limit", ["20"])[0]
+                    if not (raw.isascii() and raw.isdigit()) or not 0 < int(raw) <= 200:
+                        raise _HttpError(400, "limit must be 1-200")
+                    self._json({"due": app.quiz.due(int(raw)), "counts": app.quiz.counts()})
+                    return
+                key = "node_id" if path == "/v1/quiz" else "id"
+                value = q.get(key, [""])[0]
+                if not value:
+                    raise _HttpError(400, f"{key} is required")
+                if path == "/v1/quiz":
+                    self._json({"items": app.quiz.for_node(value)})
+                else:
+                    self._json(app.quiz.item(value))
+            except QuizNotFound as e:
+                raise _HttpError(404, str(e)) from None
+
+        def _quiz_post(self, path: str, body: dict) -> None:
+            """POST /v1/quiz/make {node_id, fresh?} {items}; POST /v1/quiz/answer
+            {item_id, answer, revealed?} {mark, feedback, answer, item} (revealed: the model
+            answer was shown first, so not_yet without asking the model). 404 unknown page or item, 409 a reset
+            discarded it, 502 the model's output couldn't be read, 503 the writing model is
+            unavailable."""
+            try:
+                if path == "/v1/quiz/make":
+                    node_id, fresh = body.get("node_id"), body.get("fresh", False)
+                    if not isinstance(node_id, str) or not node_id:
+                        raise _BadRequest("node_id is required")
+                    if not isinstance(fresh, bool):
+                        raise _BadRequest("fresh must be true or false")
+                    self._json({"items": app.quiz.make(node_id, fresh=fresh)})
+                else:
+                    item_id, answer = body.get("item_id"), body.get("answer")
+                    revealed = body.get("revealed", False)
+                    if not isinstance(item_id, str) or not item_id:
+                        raise _BadRequest("item_id is required")
+                    if not isinstance(revealed, bool):
+                        raise _BadRequest("revealed must be true or false")
+                    try:
+                        self._json(app.quiz.mark(item_id, answer, revealed=revealed))
+                    except ValueError as e:
+                        raise _BadRequest(str(e)) from None
+            except QuizNotFound as e:
+                raise _HttpError(404, str(e)) from None
+            except QuizReset as e:  # discarded by a reader reset: nothing was stored
+                raise _HttpError(409, str(e)) from None
+            except QuizError as e:
+                raise _HttpError(502, str(e)) from None
+            except QuizUnavailable as e:
+                raise _HttpError(503, str(e)) from None
+
+        def _quest_post(self, path: str, body: dict) -> None:
+            """POST /v1/quest {from_node_id?, rooms? (2-8, default 5)} 202 {quest_id, quest};
+            POST /v1/quest/answer {quest_id, answer}; POST /v1/quest/skip {quest_id};
+            POST /v1/quest/abandon {quest_id} (leave the quest being played). 400 bad
+            body or too few pages read, 404 unknown page or quest, 409 a quest is being built
+            or this one can't take that now, 502 the mark couldn't be read, 503 no writing
+            model."""
+            try:
+                if path == "/v1/quest":
+                    node_id, rooms = body.get("from_node_id"), body.get("rooms", 5)
+                    if node_id is not None and (not isinstance(node_id, str) or not node_id):
+                        raise _BadRequest("from_node_id must be a page id")
+                    try:
+                        quest = app.quests.build(node_id, rooms)
+                    except ValueError as e:
+                        raise _BadRequest(str(e)) from None
+                    self._json({"quest_id": quest["id"], "quest": quest}, 202)
+                    return
+                quest_id = body.get("quest_id")
+                if not isinstance(quest_id, str) or not quest_id:
+                    raise _BadRequest("quest_id is required")
+                if path == "/v1/quest/skip":
+                    self._json(app.quests.skip(quest_id))
+                    return
+                if path == "/v1/quest/abandon":
+                    self._json(app.quests.abandon(quest_id))
+                    return
+                try:
+                    self._json(app.quests.answer(quest_id, body.get("answer")))
+                except ValueError as e:
+                    raise _BadRequest(str(e)) from None
+            except QuestError as e:
+                raise _HttpError(400, str(e)) from None
+            except (QuestNotFound, QuizNotFound) as e:
+                raise _HttpError(404, str(e)) from None
+            except QuestConflict as e:
+                raise _HttpError(409, str(e)) from None
+            except QuizError as e:
+                raise _HttpError(502, str(e)) from None
+            except (QuestUnavailable, QuizUnavailable) as e:
+                raise _HttpError(503, str(e)) from None
 
         def _open(self, body: dict) -> None:
             req = self._open_request(body)

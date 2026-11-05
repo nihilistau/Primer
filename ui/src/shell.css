@@ -127,3 +127,9 @@ body.resizing, body.resizing * { user-select: none !important; }
   .win.win-in, .win.win-min-out, .win.win-restore { animation: none; }
   .dock, .dock-tile { transition: none; }
 }
+
+/* Review's count of questions due (Phase 10): a small pill on the tile's corner */
+.dock-badge { position: absolute; top: -4px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: var(--r-pill); display: grid; place-items: center; pointer-events: none;
+  font: 600 var(--fs-11)/1 var(--font-ui); background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 0 0 2px var(--surface-0); }

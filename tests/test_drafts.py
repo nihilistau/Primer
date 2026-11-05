@@ -578,3 +578,87 @@ def test_adopter_closed_at_the_sources_event_gives_the_draft_back(tmp_path):
         assert env.graph.versions(node.id) == []
     finally:
         env.close()
+
+
+def _spy(env, block):
+    """The reader block page prompts get comes from `block["v"]`; returns the (key, prompt)
+    of every page stream."""
+    env.pages.reader_block = lambda: block["v"]
+    seen, stream = [], env.text.stream
+
+    def spy(messages, **kw):
+        seen.append((Text.key(messages), messages[-1]["content"]))
+        return stream(messages, **kw)
+    env.text.stream = spy
+    return seen
+
+
+def test_a_draft_written_before_a_profile_change_is_not_served(env):
+    block = {"v": "Old notes."}
+    seen = _spy(env, block)
+    parent = env.open_parent()
+    node = env.ctx_node(parent)
+    assert _until(lambda: env.drafter.ready(node.id, "storyteller"))
+    block["v"] = "New notes."
+    env.drafter.discard_all()
+    assert not env.drafter.ready(node.id, "storyteller") and env.drafter.status()["discarded"] == 1
+    ev = list(env.pages.open(env.card(parent)))
+    assert dict(ev)["done"]["drafted"] is False
+    prompts = [p for k, p in seen if k == DRAFT]
+    assert "Old notes." in prompts[0] and "New notes." in prompts[-1]
+
+
+def test_a_draft_being_written_at_a_profile_change_is_written_again(env):
+    block = {"v": "Old notes."}
+    seen = _spy(env, block)
+    release = threading.Event()
+    env.text.hold[DRAFT] = (2, release)
+    parent = env.open_parent()
+    node = env.ctx_node(parent)
+    assert env.mid_draft()
+    block["v"] = "New notes."
+    env.drafter.discard_all()
+    release.set()
+    assert _until(lambda: env.drafter.ready(node.id, "storyteller"))
+    prompts = [p for k, p in seen if k == DRAFT]
+    assert len(prompts) == 2 and "New notes." in prompts[1]
+
+
+def test_a_draft_finishing_as_the_profile_changes_is_not_kept(env):
+    """The change lands after the last piece, too late to stop the stream: it is still not kept."""
+    block = {"v": "Old notes."}
+    seen = _spy(env, block)
+    fired = []
+
+    def change(aborted):
+        if not fired:
+            fired.append(1)
+            block["v"] = "New notes."
+            env.drafter.discard_all()
+    env.text.after[DRAFT] = change
+    parent = env.open_parent()
+    node = env.ctx_node(parent)
+    assert _until(lambda: env.drafter.ready(node.id, "storyteller"))
+    prompts = [p for k, p in seen if k == DRAFT]
+    assert len(prompts) == 2 and "New notes." in prompts[1]
+    assert env.graph.get_draft(node.id, "storyteller").markdown == Text.reply(DRAFT)
+
+
+def test_app_discards_drafts_when_the_profile_changes(app_parts):
+    app, _ = app_parts
+    calls = []
+
+    class Stub:
+        def discard_all(self):
+            calls.append(1)
+
+        def shutdown(self):
+            pass
+    real, app.drafter = app.drafter, Stub()
+    try:
+        app.profile.set_notes("Skip the maths.")
+        app.profile.set_enabled(False)
+        app.profile.reset()
+        assert len(calls) == 3
+    finally:
+        app.drafter = real

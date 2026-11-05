@@ -153,12 +153,33 @@ CREATE TABLE IF NOT EXISTS drafts(
 CREATE TABLE IF NOT EXISTS place_cache(
     key TEXT PRIMARY KEY, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
     title TEXT NOT NULL, source TEXT NOT NULL, at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS reader_events(
+    at REAL NOT NULL, kind TEXT NOT NULL, node_id TEXT, detail TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS reader_events_kind ON reader_events(kind, at);
+CREATE TABLE IF NOT EXISTS reader_dwell(node_id TEXT PRIMARY KEY, seconds REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS reader_profile(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS quiz_items(
+    id TEXT PRIMARY KEY, node_id TEXT NOT NULL, version_n INTEGER NOT NULL, kind TEXT NOT NULL,
+    question TEXT NOT NULL, answer TEXT NOT NULL, created_at REAL NOT NULL, due_at REAL NOT NULL,
+    step INTEGER NOT NULL, last_mark TEXT, misses INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS quiz_items_due ON quiz_items(due_at);
+CREATE INDEX IF NOT EXISTS quiz_items_node ON quiz_items(node_id, version_n);
+CREATE TABLE IF NOT EXISTS quiz_answers(
+    item_id TEXT NOT NULL, at REAL NOT NULL, answer TEXT NOT NULL, mark TEXT NOT NULL,
+    feedback TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS quiz_answers_item ON quiz_answers(item_id);
+CREATE TABLE IF NOT EXISTS quests(
+    id TEXT PRIMARY KEY, created_at REAL NOT NULL, status TEXT NOT NULL, rooms_json TEXT NOT NULL,
+    at_room INTEGER NOT NULL, tries INTEGER NOT NULL, error TEXT);
 """
 
 _NODE_COLS = "id, kind, concept, title, parent_id"
 _VERSION_COLS = "node_id, n, markdown, source_mode, depth, created_at"
 _DRAFT_COLS = "node_id, depth, source_mode, markdown, sources_json, status, created_at"
 _DRAFT_STATUSES = ("writing", "done")
+_QUIZ_KEYS = ("id", "node_id", "version_n", "kind", "question", "answer", "created_at", "due_at",
+              "step", "last_mark", "misses")
+_QUIZ_COLS = ", ".join(_QUIZ_KEYS)
 _MEDIA_COLS = "id, node_id, phrase, kind, model_id, prompt, settings_json, status, file, error, created_at"
 
 
@@ -547,6 +568,12 @@ class Graph:
                 "WHERE status='done' ORDER BY created_at DESC, rowid DESC LIMIT ?)", (keep,))
         return cur.rowcount
 
+    def clear_finished_drafts(self) -> int:
+        """Delete every finished draft (the reader's profile changed); returns how many."""
+        with self._lock, self._db:
+            cur = self._db.execute("DELETE FROM drafts WHERE status='done'")
+        return cur.rowcount
+
     def clear_unfinished_drafts(self) -> int:
         """At start: a draft left half-written by a previous run is never kept."""
         with self._lock, self._db:
@@ -571,6 +598,260 @@ class Graph:
     def forget_place(self, key: str) -> None:
         with self._lock, self._db:
             self._db.execute("DELETE FROM place_cache WHERE key=?", (key,))
+
+    # reading signals (primer.reader.signals owns the meaning; these are the rows)
+    def add_reader_event(self, at: float, kind: str, node_id: str | None, detail: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO reader_events(at, kind, node_id, detail) VALUES(?,?,?,?)",
+                             (at, kind, node_id, detail))
+
+    def reader_event_counts(self, kind: str) -> dict[str, int]:
+        """{detail: count} over the events of one kind."""
+        with self._lock:
+            rows = self._db.execute("SELECT detail, COUNT(*) FROM reader_events WHERE kind=? "
+                                    "GROUP BY detail", (kind,)).fetchall()
+        return dict(rows)
+
+    def reader_events_since(self, kind: str, at: float) -> int:
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM reader_events WHERE kind=? AND at>?",
+                                    (kind, at)).fetchone()[0]
+
+    def add_dwell(self, node_id: str, seconds: float) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO reader_dwell(node_id, seconds) VALUES(?,?) "
+                "ON CONFLICT(node_id) DO UPDATE SET seconds = seconds + excluded.seconds",
+                (node_id, seconds))
+
+    def reader_topics(self, limit: int = 8) -> list[dict]:
+        """The nodes opened most (then stayed on longest): [{title, opens, seconds}]."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT n.title, COALESCE(o.opens, 0) AS opens, COALESCE(d.seconds, 0.0) AS secs "
+                "FROM nodes n "
+                "LEFT JOIN (SELECT node_id, COUNT(*) AS opens FROM reader_events WHERE kind='open' "
+                "           GROUP BY node_id) o ON o.node_id = n.id "
+                "LEFT JOIN reader_dwell d ON d.node_id = n.id "
+                "WHERE o.opens IS NOT NULL OR d.seconds IS NOT NULL "
+                "ORDER BY opens DESC, secs DESC, n.rowid LIMIT ?", (limit,)).fetchall()
+        return [{"title": t, "opens": o, "seconds": float(sec)} for t, o, sec in rows]
+
+    def reader_recent_titles(self, limit: int = 12) -> list[str]:
+        """Titles of the pages opened most recently (by open signals, so a reset forgets them)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT n.title FROM reader_events e JOIN nodes n ON n.id = e.node_id "
+                "WHERE e.kind='open' GROUP BY n.id ORDER BY MAX(e.at) DESC, MAX(e.rowid) DESC "
+                "LIMIT ?", (limit,)).fetchall()
+        return [r[0] for r in rows]
+
+    # the reader model (primer.reader.profile): summary, notes, enabled, generation, marks
+    def reader_profile(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._db.execute("SELECT key, value FROM reader_profile").fetchall())
+
+    def set_reader_profile(self, values: dict[str, str]) -> None:
+        """Upsert several keys in one transaction."""
+        with self._lock, self._db:
+            self._db.executemany(
+                "INSERT INTO reader_profile(key, value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(k, str(v)) for k, v in values.items()])
+
+    def reset_reader(self, keep: dict[str, str]) -> None:
+        """Delete every reading signal, dwell total and profile value, then store `keep`; one
+        transaction. Pages are untouched."""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM reader_events")
+            self._db.execute("DELETE FROM reader_dwell")
+            self._db.execute("DELETE FROM reader_profile")
+            self._db.executemany("INSERT INTO reader_profile(key, value) VALUES(?,?)",
+                                 [(k, str(v)) for k, v in keep.items()])
+
+    def reset_all_reader(self, keep: dict[str, str]) -> None:
+        """The reader reset, in one transaction: every reading signal, dwell total, profile
+        value (then `keep` is stored), quiz item and answer, and quest. Pages are untouched."""
+        with self._lock, self._db:
+            for table in ("reader_events", "reader_dwell", "reader_profile", "quiz_answers",
+                          "quiz_items", "quests"):
+                self._db.execute(f"DELETE FROM {table}")
+            self._db.executemany("INSERT INTO reader_profile(key, value) VALUES(?,?)",
+                                 [(k, str(v)) for k, v in keep.items()])
+
+    # Test me and Review (primer.reader.quiz)
+    def add_quiz_items(self, items: Sequence[dict], replace: tuple[str, int] | None = None) -> None:
+        """Store a batch of quiz items in one transaction. `replace` = (node_id, version_n):
+        first delete that version's items that were never answered (asked again, fresh)."""
+        with self._lock, self._db:
+            if replace is not None:
+                self._db.execute("DELETE FROM quiz_items WHERE node_id=? AND version_n=? "
+                                 "AND last_mark IS NULL", replace)
+            self._db.executemany(
+                f"INSERT INTO quiz_items({_QUIZ_COLS}) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                [tuple(i[k] for k in _QUIZ_KEYS) for i in items])
+
+    def _quiz_rows(self, where: str, args: tuple, tail: str = "") -> list[dict]:
+        rows = self._db.execute(
+            f"SELECT {', '.join('q.' + k for k in _QUIZ_KEYS)}, COALESCE(n.title, '') "
+            f"FROM quiz_items q LEFT JOIN nodes n ON n.id = q.node_id WHERE {where} {tail}",
+            args).fetchall()
+        return [{**dict(zip(_QUIZ_KEYS, r[:-1])), "title": r[-1]} for r in rows]
+
+    def get_quiz_item(self, id: str) -> dict | None:
+        """One item with its page title (and model answer), or None."""
+        with self._lock:
+            rows = self._quiz_rows("q.id=?", (id,))
+        return rows[0] if rows else None
+
+    def quiz_items_for(self, node_id: str, version_n: int | None = None) -> list[dict]:
+        """A page's items, newest batch first (one version's when given), in asked order."""
+        with self._lock:
+            if version_n is None:
+                return self._quiz_rows("q.node_id=?", (node_id,),
+                                       "ORDER BY q.created_at DESC, q.rowid")
+            return self._quiz_rows("q.node_id=? AND q.version_n=?", (node_id, version_n),
+                                   "ORDER BY q.created_at DESC, q.rowid")
+
+    def quiz_due(self, now: float, limit: int) -> list[dict]:
+        with self._lock:
+            return self._quiz_rows("q.due_at <= ?", (now,),
+                                   f"ORDER BY q.due_at, q.rowid LIMIT {int(limit)}")
+
+    def quiz_counts(self, now: float) -> dict:
+        """{due, total, next_due_at}: next_due_at is the soonest due time after `now` (None
+        when nothing is waiting)."""
+        with self._lock:
+            due, total, soonest = self._db.execute(
+                "SELECT COALESCE(SUM(due_at <= ?), 0), COUNT(*), MIN(CASE WHEN due_at > ? "
+                "THEN due_at END) FROM quiz_items", (now, now)).fetchone()
+        return {"due": int(due), "total": int(total), "next_due_at": soonest}
+
+    def mark_quiz_item(self, id: str, at: float, answer: str, mark: str, feedback: str,
+                       due_at: float, step: int, misses: int) -> None:
+        """Record an answer and the item's new schedule in one transaction."""
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO quiz_answers(item_id, at, answer, mark, feedback) "
+                             "VALUES(?,?,?,?,?)", (id, at, answer, mark, feedback))
+            self._db.execute("UPDATE quiz_items SET due_at=?, step=?, last_mark=?, misses=? "
+                             "WHERE id=?", (due_at, step, mark, misses, id))
+
+    def quiz_answers(self, item_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT at, answer, mark, feedback FROM quiz_answers "
+                                    "WHERE item_id=? ORDER BY rowid", (item_id,)).fetchall()
+        return [dict(zip(("at", "answer", "mark", "feedback"), r)) for r in rows]
+
+    def quiz_facts(self, step: int, misses: int, limit: int) -> tuple[list[str], list[str]]:
+        """Page titles (most recently answered first, each once): items last marked right at
+        `step` or above, and items missed `misses` times or more."""
+        def titles(where: str, arg: int) -> list[str]:
+            rows = self._db.execute(
+                "SELECT n.title FROM quiz_items q JOIN nodes n ON n.id = q.node_id "
+                "LEFT JOIN quiz_answers a ON a.item_id = q.id "
+                f"WHERE {where} GROUP BY n.id ORDER BY MAX(a.rowid) DESC LIMIT ?",
+                (arg, limit)).fetchall()
+            return [r[0] for r in rows]
+        with self._lock:
+            return (titles("q.last_mark='right' AND q.step >= ?", step),
+                    titles("q.misses >= ?", misses))
+
+    def reset_quiz(self) -> None:
+        """Delete every quiz item and answer (the reader reset); one transaction."""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM quiz_answers")
+            self._db.execute("DELETE FROM quiz_items")
+
+    def titles_read_before(self, node_id: str, limit: int = 5) -> list[str]:
+        """Titles of pages the reader arrived at before first arriving at this one (any page
+        with a version, most recent first); all arrivals when this page has none."""
+        with self._lock:
+            first = self._db.execute("SELECT MIN(rowid) FROM edges WHERE to_id=?",
+                                     (node_id,)).fetchone()[0]
+            rows = self._db.execute(
+                "SELECT n.title FROM edges e JOIN nodes n ON n.id = e.to_id "
+                "WHERE e.to_id != ? AND e.rowid < ? "
+                "AND EXISTS(SELECT 1 FROM versions v WHERE v.node_id = n.id) "
+                "GROUP BY n.id ORDER BY MAX(e.rowid) DESC LIMIT ?",
+                (node_id, first if first is not None else 2**62, limit)).fetchall()
+        return [r[0] for r in rows]
+
+    # the Quest (primer.reader.quest)
+    def recent_open_pages(self, limit: int) -> list[str]:
+        """Ids of pages with a version, most recently opened first (by open signals)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT e.node_id FROM reader_events e WHERE e.kind='open' "
+                "AND EXISTS(SELECT 1 FROM versions v WHERE v.node_id = e.node_id) "
+                "GROUP BY e.node_id ORDER BY MAX(e.at) DESC, MAX(e.rowid) DESC LIMIT ?",
+                (limit,)).fetchall()
+        return [r[0] for r in rows]
+
+    def recent_arrival_pages(self, limit: int) -> list[str]:
+        """Ids of pages with a version, most recently arrived at first (by edges)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT e.to_id FROM edges e "
+                "WHERE EXISTS(SELECT 1 FROM versions v WHERE v.node_id = e.to_id) "
+                "GROUP BY e.to_id ORDER BY MAX(e.rowid) DESC LIMIT ?", (limit,)).fetchall()
+        return [r[0] for r in rows]
+
+    def trail_parent(self, node_id: str) -> str | None:
+        """The page the reader came to this one from: its parent (a context page), else where
+        its first arrival came from; None at the start of a trail."""
+        with self._lock:
+            row = self._db.execute("SELECT parent_id FROM nodes WHERE id=?", (node_id,)).fetchone()
+            if row is not None and row[0]:
+                return row[0]
+            row = self._db.execute("SELECT from_id FROM edges WHERE to_id=? ORDER BY rowid LIMIT 1",
+                                   (node_id,)).fetchone()
+        return row[0] if row else None
+
+    _QUEST_KEYS = ("id", "created_at", "status", "rooms_json", "at_room", "tries", "error")
+
+    def add_quest(self, id: str, created_at: float, status: str, rooms_json: str, at_room: int,
+                  tries: int, abandon: bool = False) -> None:
+        """Store a quest; `abandon` first marks every building or active quest abandoned (one
+        transaction)."""
+        with self._lock, self._db:
+            if abandon:
+                self._db.execute("UPDATE quests SET status='abandoned' "
+                                 "WHERE status IN ('building', 'active')")
+            self._db.execute("INSERT INTO quests(id, created_at, status, rooms_json, at_room, tries) "
+                             "VALUES(?,?,?,?,?,?)", (id, created_at, status, rooms_json, at_room, tries))
+
+    def update_quest(self, id: str, **fields) -> None:
+        bad = set(fields) - set(self._QUEST_KEYS[2:])
+        if bad:
+            raise ValueError(f"unknown quest fields {sorted(bad)}")
+        if not fields:
+            return
+        with self._lock, self._db:
+            self._db.execute(f"UPDATE quests SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
+                             (*fields.values(), id))
+
+    def get_quest(self, id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {', '.join(self._QUEST_KEYS)} FROM quests WHERE id=?",
+                                   (id,)).fetchone()
+        return dict(zip(self._QUEST_KEYS, row)) if row else None
+
+    def latest_quest(self) -> dict | None:
+        """The newest quest, or None (also when the newest was abandoned: the reader left it)."""
+        with self._lock:
+            row = self._db.execute(f"SELECT {', '.join(self._QUEST_KEYS)} FROM quests "
+                                   "ORDER BY rowid DESC LIMIT 1").fetchone()
+        quest = dict(zip(self._QUEST_KEYS, row)) if row else None
+        return quest if quest is not None and quest["status"] != "abandoned" else None
+
+    def fail_building_quests(self, reason: str) -> int:
+        with self._lock, self._db:
+            return self._db.execute("UPDATE quests SET status='failed', error=? "
+                                    "WHERE status='building'", (reason,)).rowcount
+
+    def reset_quests(self) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM quests")
 
     # history and map
     def recent_titles(self, limit: int = 30) -> list[str]:

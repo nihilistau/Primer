@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to setting up, reading, branching, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
+A guide to setting up, reading, branching, testing yourself, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -16,6 +16,9 @@ dock at the bottom opens:
 | Grid | **Map of where I've been**: every page you've opened, as a tree. |
 | Chip | **Engines**: the tier, the model servers and their states, and the GPU mode. |
 | Wrench | **Models**: add, scan, edit and choose picture and video models. |
+| Person | **Reader**: what Primer has learned about how you read, your notes about yourself, and Reset. |
+| Brain | **Review**: questions from Test me that are due again (the badge shows how many). |
+| Pawn | **Quest**: a run through rooms built from your trail, each door opened by a question. |
 | Arrow | **Setup**: download a starter kit of models, programs, Wikipedia and a map, move models, check for updates. |
 
 ## Setup
@@ -166,6 +169,77 @@ header says why.
 A mode that can't be used right now is greyed out, with the reason: no offline encyclopedia set
 up in this tier, the reference server not running, or web search turned off. To set up the
 offline encyclopedia, see [RUNNING.md](RUNNING.md#grounding).
+
+## The Primer knows you
+
+Primer notices how you read and shapes the next pages to suit, and it can ask you about what you
+have read. Everything stays on your machine.
+
+**What it notices**: which branch you take from a phrase (in this context, general or sideways),
+whether you ask for **Deeper** or **Simpler**, **Regenerate**, how long a page stays open in a
+window you can see (up to 10 minutes a visit), and your answers in Test me and Review.
+
+**Reader** (the person in the dock) shows what it has made of that:
+
+- a short **summary** in plain words ("they ask for simpler pages more than deeper ones; they
+  follow sideways links most"), written by the fast model in the background after every 8 pages
+  or 5 answers, at most every 2 minutes. **Refresh** writes one now;
+- the **counts** behind it: Deeper against Simpler, your share of each kind of branch, and the
+  topics you've opened most and stayed on longest;
+- what you **know** (right twice in a row in Review) and what you **found hard** (missed twice);
+- your **notes**: your own words, which always come first ("I'm 12", "skip the maths"). Up to
+  1000 characters; the first 500 go into page prompts;
+- **Use this in pages**: on by default. Page prompts then get a short "about this reader" note
+  (your notes, the summary and the counted leans, 800 characters at most), and branch cards and
+  highlights get your branching style. It is passed to the model as your preferences, never as
+  instructions: it can't change a grounded page's rules or citations. Off, nothing of it is
+  used, and Refresh is refused;
+- **Reset**: forgets how you read, the summary, your notes, every Test me and Review question
+  and every quest, in one go. Your pages stay.
+
+Changing your notes, the switch, or Reset also throws away pages Primer had written ahead for
+you (Thinking ahead), so they are rewritten to suit. If your tier uses a hosted model, the
+Reader window says what it receives: the writing model gets the note with each page request; the
+fast model gets page titles, counts and quiz results to write the summary.
+
+The summary waits while the fast model is busy with branch cards, but never more than 5 minutes,
+and **Refresh** doesn't wait: on a CPU fast model a page's highlights may then arrive about 10
+seconds later.
+
+### Test me
+
+**Test me** on the page toolbar asks three questions about the page you're reading: one
+**recall**, one **explain why**, and one that **connects** it to a page you read earlier (it
+names that page; with no earlier pages, a second why). The writing model makes them, so they
+wait for the GPU like a page does.
+
+Type an answer and press **Check**. It is marked **Right**, **Partly** or **Not yet** against the
+page, with a line of feedback quoting it; paraphrase counts. **Show answer** gives the page's
+answer; if you look before checking, the question counts as not yet and comes back tomorrow.
+**New questions** asks for another three once all are answered. The panel closes when the page
+is rewritten (Deeper, Simpler, Regenerate).
+
+### Review
+
+Questions come back on a ladder: **Not yet** tomorrow, **Partly** in 2 days, and each **Right**
+moves one up: 1, 3, 7, 21, then every 60 days. **Review** (the brain in the dock, with the number
+due) lists what is due; answer them the same way. Click a page's title to reread it. With
+nothing due it says when the next one is.
+
+### Quest
+
+**Quest** (the pawn in the dock) builds a run of up to five rooms from the pages you read most
+recently, or, from the **Quest** button on a page, from the trail that led to it. Each room is a
+page, described in a sentence as a place ("You stand in the courtyard where the massive trebuchet
+swings its heavy arm…"), with a door that opens on a question about that page. Rooms ahead stay
+locked until you reach them.
+
+A wrong answer shows **Not yet** and the door's hint, then a nudge to reread the page (with a
+link to it); after three tries you can **Skip** the room. The page's answer is shown only once
+the door opens or you skip. The last door ends the run with how many rooms you opened. **Leave
+this quest** gives up on it so you can build another. A quest needs at least two pages read.
+
+![A page about cannons with its Test me panel open: a recall question answered "Gunpowder: an explosive powder throws the heavy ball" and marked Right with the page quoted, an explain-why question marked Right, and a connect question asking how cannons relate to the Theodosian Walls; beside it the Reader window with a summary saying the reader asks for simpler pages and follows sideways links, bars for Deeper 0 and Simpler 3, branch shares of 20% in context, 10% general and 70% sideways, and the topics read most with minutes on each](screenshots/test-me-and-reader.webp)
 
 ## Thinking ahead
 

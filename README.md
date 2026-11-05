@@ -32,6 +32,14 @@ next, so clicking it is instant. It steps aside the moment you ask for anything 
 
 ![The Rhuddlan Castle page with a phrase's branch cards open, the In this context card marked as already written, beside the Engines window showing Thinking ahead set to One page with 3 written, 1 used and a 33% hit rate](docs/screenshots/thinking-ahead.webp)
 
+**It gets to know you, and asks back.** Primer notices how you read (Deeper or Simpler, which
+branches you follow, what you linger on) and writes the next pages to suit; the **Reader** window
+shows what it has noticed in plain words, with your own notes and a Reset. **Test me** asks three
+questions about a page and marks your typed answers against it; **Review** brings them back over
+the following days; and a **Quest** turns your trail into rooms whose doors open with questions.
+
+![A page about cannons with its Test me panel open, two answers marked Right with the page quoted and a third question connecting cannons to the Theodosian Walls, beside the Reader window with a plain-words summary of how this reader reads, bars for Deeper and Simpler, branch shares with 70% sideways, and the topics read most](docs/screenshots/test-me-and-reader.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -200,10 +208,10 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.9**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, the map, narrated stories, the reader browser, thinking ahead and the Setup window work.
-Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): a reader model that
-learns what you like and asks you back. The
+This is **v0.10**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
+model, Test me, Review and the Quest work.
+Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): the continuing story. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 
