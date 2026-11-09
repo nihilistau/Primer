@@ -133,3 +133,6 @@ body.resizing, body.resizing * { user-select: none !important; }
   border-radius: var(--r-pill); display: grid; place-items: center; pointer-events: none;
   font: 600 var(--fs-11)/1 var(--font-ui); background: var(--accent); color: var(--on-accent);
   box-shadow: 0 0 0 2px var(--surface-0); }
+/* a quiet mark (Tale: pages wait for the next chapter) */
+.dock-mark { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: var(--r-pill);
+  pointer-events: none; background: var(--warm); box-shadow: 0 0 0 2px var(--surface-0); }

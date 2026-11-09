@@ -48,7 +48,7 @@ from primer.maps.service import TIER_SWITCH as MAPS_TIER_SWITCH
 from primer.maps.service import MapService
 from primer.stories.intent import match_story_request
 from primer.stories.service import KINDS as STORY_KINDS
-from primer.stories.service import SHUT_DOWN as STORIES_SHUT_DOWN
+from primer.stories.service import NO_CHAPTER_SCENES, SHUT_DOWN as STORIES_SHUT_DOWN
 from primer.stories.service import StoryService
 from primer.voice.client import VoiceError, make_voice
 from primer.pages import OpenRequest, PageService
@@ -56,7 +56,10 @@ from primer.reader.profile import NOTES_CHARS, Profile
 from primer.reader.quest import (QuestConflict, QuestError, QuestNotFound, Quests,
                                  QuestUnavailable)
 from primer.reader.quiz import Quiz, QuizError, QuizNotFound, QuizReset, QuizUnavailable
+from primer.tales.service import (TaleConflict, TaleError, TaleNotFound, TaleService,
+                                  TaleUnavailable)
 from primer.reader.signals import VISIT_CAP_S, Signals
+from primer.activity import ActivitySink
 from primer.servers import ManagedServer, ServerManager
 from primer.setup.api import ApiError, SetupApi, setup_status
 
@@ -199,6 +202,7 @@ class App:
     profile: Profile | None = None  # the reader model; made over the signals when not passed
     quiz: Quiz | None = None  # Test me and Review; made over the graph when not passed
     quests: Quests | None = None  # the Quest; made over the quiz when not passed
+    tales: TaleService | None = None  # the Tale; made over the graph and stories when not passed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -216,6 +220,8 @@ class App:
             self.pages.grounder = self.make_grounder(self.tier)
         if self.signals is None:  # (tests may pass a stand-in pages object without signals)
             self.signals = getattr(self.pages, "signals", None) or Signals(self.graph)
+        if getattr(self.signals, "activity", None) is None:  # PRIMER_ACTIVITY_DIR: tell Kairos (primer.activity)
+            self.signals.activity = ActivitySink.from_env()
         if getattr(self.pages, "signals", None) is None:
             self.pages.signals = self.signals
         if self.profile is None:
@@ -255,6 +261,15 @@ class App:
             self.maps = self.make_maps(self.graph, self.tier, self.pages.fast)
         if self.stories is None:
             self.stories = self.make_stories(self.tier, self.pages, self.images, self.gate)
+        if self.tales is None:
+            # the stories, writing engine and gate are read through the app at call time (a
+            # tier switch replaces them); the reader's notes set the tale's tone and age.
+            # The reader reset keeps tales: they are content, like pages.
+            self.tales = TaleService(self.graph, lambda: self.stories,
+                                     lambda: getattr(self.pages, "text", None),
+                                     lambda: getattr(self.pages, "gate", None), self.profile.block,
+                                     voice=lambda: self.voice_available())
+        self.stories.chapter_prefix = self.tales.prefix_for_story
         if self.browse is None:
             self.browse = self.make_browse(self.tier)
         self._thinking = self.saved_thinking_ahead()
@@ -312,9 +327,12 @@ class App:
             if tier.voice is None:
                 raise VoiceError(NO_VOICE)
             return make_voice(tier.voice)
-        return StoryService(self.graph, pages.text, pages.fast, voice, images, gate,
-                            Path(self.var_dir) / "media",
-                            voice_name=tier.voice.voice if tier.voice is not None else "")
+        stories = StoryService(self.graph, pages.text, pages.fast, voice, images, gate,
+                               Path(self.var_dir) / "media",
+                               voice_name=tier.voice.voice if tier.voice is not None else "")
+        if self.tales is not None:  # a chapter told again gets its pictures' looks from its tale
+            stories.chapter_prefix = self.tales.prefix_for_story
+        return stories
 
     @staticmethod
     def make_maps(graph, tier: Tier, fast) -> MapService:
@@ -822,6 +840,8 @@ def _make_handler(app: App):
                     self._quiz_get(path, parse_qs(url.query))
                 elif path == "/v1/quest":
                     self._json({"quest": app.quests.current()})
+                elif path == "/v1/tales":
+                    self._json(app.tales.state())
                 elif path == "/v1/graph":
                     self._json(app.graph.snapshot(visible_only=True))
                 elif path == "/v1/branches":
@@ -868,7 +888,7 @@ def _make_handler(app: App):
                     if story is None:
                         self._json({"error": "not found"}, 404)
                     else:
-                        self._json(self._with_pictures(story))
+                        self._json({**self._with_pictures(story), "tale": self._story_tale(story)})
                 elif path.startswith("/v1/maps/") and "/" not in path[len("/v1/maps/"):]:
                     job = app.maps.get(unquote(path[len("/v1/maps/"):]))
                     if job is None:
@@ -920,6 +940,9 @@ def _make_handler(app: App):
                     self._quiz_post(path, body)
                 elif path in ("/v1/quest", "/v1/quest/answer", "/v1/quest/skip", "/v1/quest/abandon"):
                     self._quest_post(path, body)
+                elif path in ("/v1/tales", "/v1/tales/open", "/v1/tales/next", "/v1/tales/edit",
+                              "/v1/tales/retry-update"):
+                    self._tales_post(path, body)
                 elif path == "/v1/reader/refresh":
                     reason = app.profile.refresh()
                     self._json({"skipped": reason} if reason else {"started": True},
@@ -1227,6 +1250,42 @@ def _make_handler(app: App):
                 raise _HttpError(502, str(e)) from None
             except (QuestUnavailable, QuizUnavailable) as e:
                 raise _HttpError(503, str(e)) from None
+
+        def _tales_post(self, path: str, body: dict) -> None:
+            """POST /v1/tales {seed?} {current} (a new tale from the reader's wish, invented
+            when empty); /v1/tales/open {tale_id} {current}; /v1/tales/next {pages?} 202
+            {story_id, n} (the bible update follows in the background); /v1/tales/edit
+            {tale_id, name?, description?, look?, remove_thread?, remove_place?} {current};
+            /v1/tales/retry-update {tale_id, n} 202 {current}. 400 bad body or no pages to draw
+            on, 404 unknown tale or chapter, 409 a chapter is being written (or nothing to
+            retry, or the voice can't narrate a chapter now), 502 the model's output couldn't be read, 503 no writing model."""
+            try:
+                if path == "/v1/tales":
+                    self._json({"current": app.tales.start(body.get("seed"))})
+                    return
+                if path == "/v1/tales/next":
+                    self._json(app.tales.next_chapter(body.get("pages")), 202)
+                    return
+                tale_id = body.get("tale_id")
+                if not isinstance(tale_id, str) or not tale_id:
+                    raise _BadRequest("tale_id is required")
+                if path == "/v1/tales/open":
+                    self._json({"current": app.tales.open(tale_id)})
+                elif path == "/v1/tales/edit":
+                    fields = {k: v for k, v in body.items() if k != "tale_id"}
+                    self._json({"current": app.tales.edit(tale_id, fields)})
+                else:
+                    self._json({"current": app.tales.retry_update(tale_id, body.get("n"))}, 202)
+            except TaleNotFound as e:
+                raise _HttpError(404, str(e)) from None
+            except TaleConflict as e:
+                raise _HttpError(409, str(e)) from None
+            except TaleError as e:
+                raise _HttpError(502, str(e)) from None
+            except TaleUnavailable as e:
+                raise _HttpError(503, str(e)) from None
+            except ValueError as e:
+                raise _BadRequest(str(e)) from None
 
         def _open(self, body: dict) -> None:
             req = self._open_request(body)
@@ -1537,6 +1596,15 @@ def _make_handler(app: App):
                 scenes.append({**sc, "picture": picture})
             return {**story, "scenes": scenes}
 
+        def _story_tale(self, story: dict) -> dict | None:
+            """A chapter's {id, title, n}: its tale and chapter number; None for other stories
+            and for a chapter told again since (the chapter follows the new story)."""
+            if story.get("kind") != "chapter":
+                return None
+            found = app.graph.chapter_for_story(story["id"])
+            tale = app.graph.get_tale(found["tale_id"]) if found else None
+            return {"id": tale["id"], "title": tale["title"], "n": found["n"]} if tale else None
+
         def _create_story(self, body: dict) -> None:
             node_id, kind = body.get("node_id"), body.get("kind", "story")
             if not isinstance(node_id, str) or not node_id:
@@ -1559,7 +1627,8 @@ def _make_handler(app: App):
             try:
                 sid = app.stories.again(story_id)
             except ValueError as e:
-                raise _HttpError(409 if str(e) == STORIES_SHUT_DOWN else 404, str(e)) from None
+                conflict = str(e) in (STORIES_SHUT_DOWN, NO_CHAPTER_SCENES)
+                raise _HttpError(409 if conflict else 404, str(e)) from None
             self._json({"id": sid}, 202)
 
         # static UI

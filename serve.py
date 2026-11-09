@@ -74,6 +74,10 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     # It also makes Test me and Review (primer.reader.quiz.Quiz): quiz results feed the profile
     # (quiz_facts), each answer nudges it, and the reader reset clears the quiz. And the Quest
     # (primer.reader.quest.Quests), whose doors the quiz writes and marks; the reset clears it too.
+    # And the Tale (primer.tales.service.TaleService): chapters are stories of kind "chapter",
+    # so the unfinished-stories sweep above covers a chapter cut off by a restart; a chapter
+    # whose bible update was cut off shows that it failed (its retry is in the Tale window).
+    # The reader reset keeps tales.
     app = App(tier=tier, servers=servers, pages=pages, graph=graph,
               hardware=hardware or detect_hardware(), var_dir=var_dir, ui_dir=ui_dir,
               tiers_dir=tiers_dir, store=store, gate=gate, images=images, text_pause=text_pause,

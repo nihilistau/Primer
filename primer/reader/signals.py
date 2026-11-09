@@ -39,9 +39,11 @@ class Signals:
     """Records what the reader does and counts it. Thread-safe (the graph serialises rows; the
     visit state has its own lock)."""
 
-    def __init__(self, graph, *, clock=time.time):
+    def __init__(self, graph, *, clock=time.time, activity=None):
         self.graph = graph
         self.clock = clock
+        # a primer.activity.ActivitySink: each signal is also told to Kairos (None: not shared)
+        self.activity = activity
         self._visit_lock = threading.Lock()
         self._visit_node: str | None = None
         self._visit_seconds = 0.0
@@ -66,6 +68,19 @@ class Signals:
             raise ValueError(f"kind must be one of {KINDS}")
         self.graph.add_reader_event(self.clock(), kind, node_id, detail)
         self._invalidate()
+        self._tell_kairos(kind, node_id, detail)
+
+    def _tell_kairos(self, kind: str, node_id: str | None, detail: str) -> None:
+        """The same signal for Kairos's activity record, when it is shared. Never raises: telling
+        Kairos must not cost a reading signal."""
+        if self.activity is None or not node_id:
+            return
+        try:
+            node = self.graph.get_node(node_id)
+            if node is not None:
+                self.activity.note(kind, node.title, node_id, detail)
+        except Exception:  # noqa: BLE001
+            pass
 
     def dwell(self, node_id: str, seconds: float) -> float:
         """Add visible seconds on a page; returns the seconds counted. A visit is the run of

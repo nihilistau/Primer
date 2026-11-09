@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import queue
+import re
 import secrets
 import tempfile
 import threading
@@ -69,6 +70,51 @@ class _Cancelled(Exception):
 
 def _a(kind: str) -> str:
     return "an image" if kind == "image" else f"a {kind}"
+
+
+_PREFIX_CAP = 400
+_TAGS_PREFIX_CAP = 150  # a tags prompt is short: the look must leave room for the scene
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _clean_prefix(prefix) -> str:
+    """A prompt prefix as one plain line (angle brackets and control characters dropped),
+    at most 400 characters."""
+    if not isinstance(prefix, str):
+        return ""
+    text = _CONTROL_CHARS.sub(" ", prefix).replace("<", "").replace(">", "")
+    return " ".join(text.split())[:_PREFIX_CAP].strip(" ,;")
+
+
+def _cut_prefix(prefix: str, limit: int) -> str:
+    if len(prefix) <= limit:
+        return prefix
+    cut = prefix[:limit + 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > limit // 2 else prefix[:limit]).rstrip(" ,;")
+
+
+def _prefixed(prefix: str, prompt: str) -> str:
+    return f"{prefix}, {prompt}"[:_PROMPT_CAP] if prefix else prompt
+
+
+def _without_look(prefix: str, text: str) -> str:
+    """The written prompt without the look it will be prefixed with: each entry of `prefix`
+    ("Name: look; ...") and each look on its own, wherever the writer repeated it."""
+    if not prefix or not text:
+        return text
+    parts = []
+    for entry in prefix.split("; "):
+        parts.append(entry)
+        if ": " in entry:
+            parts.append(entry.split(": ", 1)[1])
+    out = text
+    for part in sorted({p.strip(" ,;") for p in parts}, key=len, reverse=True):
+        if len(part) >= 12:
+            out = re.sub(re.escape(part), "", out, flags=re.IGNORECASE)
+    out = re.sub(r"\s*([,;])(?:\s*[,;])+", r"\1", out)  # the separators left behind
+    out = " ".join(out.split()).strip(" ,;")
+    return out or text
 
 
 def _default_server(spec: EngineSpec) -> ManagedServer:
@@ -170,7 +216,10 @@ class ImageService:
 
     def create(self, node_id: str, phrase: str, subject: str, model_id: str | None = None,
                overrides: dict | None = None, prompt: str | None = None, kind: str = "image",
-               animate_from: str | None = None) -> Media:
+               animate_from: str | None = None, prefix: str = "", scene: bool = False) -> Media:
+        """A job. `prefix` (a Tale's look for the hero and companions) starts the prompt,
+        before the written or given prompt. A `scene` (of a Tale's chapter) is drawn as a
+        storybook picture of the subject alone: the prompt writer gets no page excerpt."""
         if kind not in KINDS:
             raise ValueError(f"kind must be one of {', '.join(KINDS)}")
         animating = animate_from is not None
@@ -204,6 +253,11 @@ class ImageService:
         given = prompt.strip()[:_PROMPT_CAP] if isinstance(prompt, str) else ""
         if not subject and not given:
             raise ValueError("subject is required")
+        prefix = _clean_prefix(prefix)
+        if prefix and FAMILIES[model.family].prompt_style == "tags":
+            prefix = _cut_prefix(prefix, _TAGS_PREFIX_CAP)
+        if given:
+            given = _prefixed(prefix, given)
         if source is not None and not given:  # the prompt writer is told it animates a picture
             subject = (f"{subject} (this animates the given picture"
                        + (f", whose prompt was: {source.prompt[:_EXCERPT]}" if source.prompt else "")
@@ -218,7 +272,7 @@ class ImageService:
                 self._queue.put(media.id)
                 return media
             self._prompting.add(media.id)
-        threading.Thread(target=self._write_prompt, args=(media, model, subject),
+        threading.Thread(target=self._write_prompt, args=(media, model, subject, prefix, scene),
                          name="primer-image-prompt", daemon=True).start()
         return media
 
@@ -370,23 +424,31 @@ class ImageService:
             return
         self.graph.update_media(mid, status=status, error=error, **fields)
 
-    def _write_prompt(self, media: Media, model: ImageModel, subject: str) -> None:
+    def _write_prompt(self, media: Media, model: ImageModel, subject: str, prefix: str = "",
+                      scene: bool = False) -> None:
         """Prompt thread: the fast model writes the prompt, then the job is queued."""
         try:
-            node = self.graph.get_node(media.node_id)
-            latest = self.graph.latest_version(media.node_id)
+            node = None if scene else self.graph.get_node(media.node_id)
+            latest = None if scene else self.graph.latest_version(media.node_id)
             excerpt = None
             if latest:  # the sentence around the phrase, else the page's opening (headings skipped)
                 body = "\n".join(line for line in latest.markdown.splitlines()
                                  if not line.lstrip().startswith("#")).strip()
                 excerpt = sentence_around(body, media.phrase) or body[:_EXCERPT] or None
-            messages = image_prompt_messages(FAMILIES[model.family], subject,
-                                             node.title if node else None, excerpt)
+            told = subject
+            if prefix:  # the prompt writer keeps to the look the prompt will start with
+                told = (f"{subject}\n(The prompt will begin with how the people in it look: "
+                        f"{prefix}. Keep to it, but do not repeat it: write only the scene, the "
+                        "action and the setting.)")
+            messages = image_prompt_messages(FAMILIES[model.family], told,
+                                             node.title if node else None, excerpt, scene=scene)
             text = parse_image_prompt(self.fast.complete(messages, max_tokens=200, temperature=0.7),
                                       subject)
+            text = _without_look(prefix, text)  # the room goes to the scene, not a second look
         except Exception:  # the fast model failing must not lose the job
             log.warning("image prompt writing failed; using the subject", exc_info=True)
             text = subject
+        text = _prefixed(prefix, text)
         try:
             with self._lock:
                 self._prompting.discard(media.id)

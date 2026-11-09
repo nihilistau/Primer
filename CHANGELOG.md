@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.11.0: the continuing story (2026-11-09)
+
+One story that goes on as you read.
+
+### Added
+
+- **The Tale** (a journal in the dock): start a story with a hero of your own, or let Primer
+  invent one, and each **Next chapter** carries it on from the pages you've read since the last
+  chapter, keeping their facts true: 3 to 5 scenes, illustrated and read aloud in the Story
+  window.
+- **A story bible** you can see and edit: the hero's name, whether they're female or male, description and look,
+  companions, places, things carried, open threads and a summary of each chapter, updated after
+  every chapter.
+- **The same hero in every picture**: each chapter picture starts with the hero's look (and a
+  companion's when they're in the scene), drawn as a storybook scene.
+- Chapters appear in the stories of every page they drew on; older tales are kept and can be
+  reopened.
+
+### Measured
+
+With gemma-4-E4B: a tale started in about 5 seconds, a chapter's scenes in 10 to 12 seconds and
+its bible update in about 6 more.
+
+## v0.10.1: Primer and Kairos (2026-11-08)
+
+The first link to Kairos, the companion: she can know what you read, and look at Primer.
+
+### Added
+
+- **Telling Kairos what you read** (`primer/activity.py`), off unless `PRIMER_ACTIVITY_DIR` is set:
+  each reading signal (a page opened, Deeper, Simpler, Regenerate, a quiz answer) is also appended
+  to Kairos's activity record as `primer/<day>.jsonl`, with the page title and its node id.
+  `PRIMER_ACTIVITY_PRIVATE=1` marks every row private, which Kairos never reads. A failed write
+  never costs a reading signal.
+- **Primer as an MCP server** (`python -m primer.mcp_server`): one tool, `primer(action, args)`,
+  with a schema that won't change as actions are added; `help`, `status`, `page`, `reader`,
+  `quiz_due` and `quest`, all read-only, answered from a running Primer's localhost API.
+  Stdlib only. Setup is in `docs/RUNNING.md`, under Kairos.
+
 ## v0.10.0: the Primer knows you, and asks back (2026-11-05)
 
 Pages shaped to how you read, and questions about what you've read.

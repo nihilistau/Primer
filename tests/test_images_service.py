@@ -953,3 +953,66 @@ def test_next_stage(reports, stage):
             live["stage"] = service_mod.next_stage(live, {"step": step, "total_steps": total})
         live["step"], live["total"] = step, total
     assert live["stage"] == stage
+
+
+def test_prefix_starts_the_prompt(env):
+    svc = env.make(fast=FakeEngine(["a trebuchet at dawn, ink"]))
+    with env.gate.page():  # held: the jobs wait in "queued" with their prompts written
+        m = svc.create(env.node.id, "Siege", "Nell watches", prefix="a girl in a <red> scarf")
+        job = _wait_status(svc, m.id, "queued")
+        assert job["prompt"] == "a girl in a red scarf, a trebuchet at dawn, ink"
+        given = svc.create(env.node.id, "Siege", "", prompt="a castle", prefix="a girl")
+        assert svc.job(given.id)["prompt"] == "a girl, a castle"
+        plain = svc.create(env.node.id, "Siege", "Nell watches")
+        assert _wait_status(svc, plain.id, "queued")["prompt"] == "a trebuchet at dawn, ink"
+    for mid in (m.id, given.id, plain.id):
+        _wait_status(svc, mid, "done", "failed")
+
+
+def test_prefix_is_told_to_the_prompt_writer_and_short_for_tags(env):
+    seen = []
+
+    def reply(messages):
+        seen.append(messages)
+        return "a castle, ink"
+
+    svc = env.make(fast=FakeEngine(reply))
+    look = "a girl of twelve with a red scarf " + "and a very long description " * 12
+    with env.gate.page():
+        m = svc.create(env.node.id, "Siege", "Nell watches", prefix=look)
+        job = _wait_status(svc, m.id, "queued")
+    head = job["prompt"][:-len(", a castle, ink")]
+    assert job["prompt"].endswith(", a castle, ink") and len(head) <= 150  # sdxl takes tags
+    assert look.startswith(head) and not head.endswith(" ")
+    user = seen[0][1]["content"]
+    assert "a girl of twelve with a red scarf" in user and "look" in user.lower()
+    _wait_status(svc, m.id, "done", "failed")
+
+
+def test_scene_pictures_are_storybook_and_the_look_is_not_repeated(env):
+    """Live L3-L5: a chapter's scene is written from the scene alone (no page title or excerpt)
+    in the storybook style; the writer is told not to repeat the look, a repeat is dropped, and a
+    label is stripped. Page pictures still get the page's excerpt and the plate style."""
+    seen = []
+    look = "Wren, female: a girl of sixteen with a satchel of tools"
+
+    def reply(messages):
+        seen.append(messages)
+        return "Prompt: a girl of sixteen with a satchel of tools, climbing a clock tower at dusk, ink"
+
+    svc = env.make(fast=FakeEngine(reply))
+    with env.gate.page():
+        m = svc.create(env.node.id, "The Tower", "Wren climbs the clock tower.", prefix=look, scene=True)
+        job = _wait_status(svc, m.id, "queued")
+        page = svc.create(env.node.id, "Siege", "a siege")
+        _wait_status(svc, page.id, "queued")
+    assert job["prompt"] == f"{look}, climbing a clock tower at dusk, ink"
+    system, user = seen[0][0]["content"], seen[0][1]["content"]
+    assert "storybook illustration" in system and "encyclopedia plate" not in system
+    assert "Excerpt" not in user and "Page:" not in user and "Wren climbs the clock tower." in user
+    assert "do not repeat it" in user and look in user
+    page_system, page_user = seen[1][0]["content"], seen[1][1]["content"]
+    assert "encyclopedia plate" in page_system and "Page: Trebuchet" in page_user
+    assert "Excerpt from the page" in page_user
+    for mid in (m.id, page.id):
+        _wait_status(svc, mid, "done", "failed")

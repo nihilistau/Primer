@@ -13,6 +13,7 @@ import SetupWindow from './apps/SetupWindow.jsx'
 import ReaderWindow from './apps/ReaderWindow.jsx'
 import ReviewWindow from './apps/ReviewWindow.jsx'
 import QuestWindow from './apps/QuestWindow.jsx'
+import TaleWindow from './apps/TaleWindow.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -25,7 +26,7 @@ export const APPS = {
   video: { title: 'Video', icon: 'stage', size: [640, 760], component: VideoWindow },
   // multi-instance: one window per map job, props { mapId, subject?, nodeId? }
   map: { title: 'Map', icon: 'map', size: [760, 640], component: MapWindow },
-  // multi-instance: one window per story (or Listen), props { storyId, subject?, nodeId?, kind? }
+  // multi-instance: one window per story (or Listen, or a Tale's chapter), props { storyId, subject?, nodeId?, kind?, chapter? }
   // multi-instance: one window per browser, props { start? } (an address to open first)
   browser: { title: 'Browser', icon: 'globe', size: [900, 680], component: BrowserWindow },
   story: { title: 'Story', icon: 'speaker', size: [720, 740], component: StoryWindow },
@@ -36,10 +37,12 @@ export const APPS = {
   review: { title: 'Review', icon: 'memory', size: [600, 680], component: ReviewWindow, single: true },
   // props { fromNodeId? }: build from that page's trail
   quest: { title: 'Quest', icon: 'games', size: [600, 720], component: QuestWindow, single: true },
+  // the continuing story: its chapters, the story bible, the next chapter (Phase 11)
+  tale: { title: 'Tale', icon: 'journal', size: [640, 760], component: TaleWindow, single: true },
 }
 
 /* the dock's buttons, in order */
-export const DOCK = ['reader', 'browser', 'graph', 'readermodel', 'review', 'quest', 'engines', 'imagemodels', 'setup']
+export const DOCK = ['reader', 'browser', 'graph', 'readermodel', 'review', 'quest', 'tale', 'engines', 'imagemodels', 'setup']
 
 /* open an app through the window manager with its registry defaults */
 export function openApp(wm, appId, props) {

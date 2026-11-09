@@ -121,12 +121,18 @@ _STYLE = {
 }
 _HOUSE = ("Unless the subject asks for another style, make it look like an illustrated primer / "
           "encyclopedia plate.")
+# a scene of a story (a Tale's chapter): the scene is the subject, drawn as a storybook picture
+_SCENE_HOUSE = ("The subject is a scene from an illustrated children's storybook: make it a "
+                "storybook illustration of that moment, the characters in action in its setting, "
+                "warm and painterly; not a diagram, a plate or a textbook figure.")
 _CAP = 600
 
 
 def image_prompt_messages(family: Family, subject: str, page_title: str | None,
-                          excerpt: str | None) -> list[dict]:
-    system = f"{_STYLE[family.prompt_style]} {_HOUSE}"
+                          excerpt: str | None, scene: bool = False) -> list[dict]:
+    """The prompt writer's messages. A story `scene` gets the storybook style instead of the
+    primer plate (callers pass no page title or excerpt for one: the scene is the subject)."""
+    system = f"{_STYLE[family.prompt_style]} {_SCENE_HOUSE if scene else _HOUSE}"
     user = f"Subject: {subject}"
     if page_title:
         user += f"\nPage: {page_title}"
@@ -136,7 +142,11 @@ def image_prompt_messages(family: Family, subject: str, page_title: str | None,
 
 
 _FENCE = re.compile(r"```[A-Za-z0-9_-]*")
-_PREFIX = re.compile(r"^\s*(?:image\s+)?prompt\s*:\s*", re.IGNORECASE)
+# a leading label: "Prompt:", "Image prompt:", "Stable Diffusion prompt:", "Here is the prompt:",
+# "Tags:" (the colon is required, so a prompt that starts with the word "prompt" is kept)
+_PREFIX = re.compile(
+    r"^\s*(?:here(?:'s|\s+is)\s+(?:the|an?|your)\s+)?(?:(?:final|improved|stable\s+diffusion|sd|"
+    r"image|picture|illustration|video|short[- ]video)\s+)*(?:prompt|tags)\s*:\s*", re.IGNORECASE)
 _QUOTES = "\"'`“”‘’"
 _HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]*", re.MULTILINE)
 _EMPHASIS = re.compile(r"(\*\*|__)(.+?)\1|(?<![\w*])\*(?!\s)(.+?)\*(?![\w*])|(?<!\w)_(?!\s)(.+?)_(?!\w)", re.DOTALL)
@@ -146,8 +156,9 @@ def parse_image_prompt(raw: str, fallback: str) -> str:
     """Strip fences, a "Prompt:" label, quotes, Markdown headings and emphasis; an article-shaped
     answer (several paragraphs) keeps its first paragraph; cap at 600 characters; junk falls back."""
     text = _FENCE.sub("", raw).strip()
-    text = _PREFIX.sub("", text).strip().strip(_QUOTES).strip()
     text = _HEADING.sub("", text)
     text = _EMPHASIS.sub(lambda m: m.group(2) or m.group(3) or m.group(4), text).strip()
+    for _ in range(3):  # a label inside quotes, or quotes after a label
+        text = _PREFIX.sub("", text).strip().strip(_QUOTES).strip()
     text = re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
     return text[:_CAP].strip() or fallback

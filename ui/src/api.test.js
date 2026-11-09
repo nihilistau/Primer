@@ -201,6 +201,14 @@ describe('reader, quiz and quest calls', () => {
       [() => api.questBuild('n1'), '/v1/quest', { from_node_id: 'n1' }],
       [() => api.questAnswer('q1', 'yes'), '/v1/quest/answer', { quest_id: 'q1', answer: 'yes' }],
       [() => api.questSkip('q1'), '/v1/quest/skip', { quest_id: 'q1' }],
+      [() => api.taleStart('a girl called Nell'), '/v1/tales', { seed: 'a girl called Nell' }],
+      [() => api.taleStart(), '/v1/tales', {}],
+      [() => api.taleOpen('t1'), '/v1/tales/open', { tale_id: 't1' }],
+      [() => api.taleNext(['a', 'b']), '/v1/tales/next', { pages: ['a', 'b'] }],
+      [() => api.taleNext(), '/v1/tales/next', {}],
+      [() => api.taleEdit('t1', { look: 'red coat' }), '/v1/tales/edit', { tale_id: 't1', look: 'red coat' }],
+      [() => api.taleEdit('t1', { remove_thread: 'x' }), '/v1/tales/edit', { tale_id: 't1', remove_thread: 'x' }],
+      [() => api.taleRetry('t1', 2), '/v1/tales/retry-update', { tale_id: 't1', n: 2 }],
     ]
     for (const [fn, url, body] of cases) {
       const [u, init] = await run(fn)
@@ -219,6 +227,7 @@ describe('reader, quiz and quest calls', () => {
       [() => api.quizDue(1), '/v1/quiz/due?limit=1'],
       [() => api.quizItem('x&y'), '/v1/quiz/item?id=x%26y'],
       [() => api.quest(), '/v1/quest'],
+      [() => api.tales(), '/v1/tales'],
     ]
     for (const [fn, url] of cases) {
       const [u, init] = await run(fn)

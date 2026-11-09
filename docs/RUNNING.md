@@ -526,6 +526,25 @@ Routes (same origin rules as the rest of the API; POSTs are JSON): `GET`/`POST /
 `/skip`, `/abandon`, `GET /v1/quest`. A quest's door answers and hints are never sent before the
 reader has earned them.
 
+## The Tale
+
+See [USING.md](USING.md#the-tale). Tales are kept in the graph database: `tales` (the story bible
+as JSON), `tale_chapters` (each chapter's story, pages, summary and bible-update state) and
+`tale_chapter_pages`. A chapter is a story of kind `chapter`, so it uses the Story pipeline:
+highlights on the fast model, a picture per scene (each prompt starting with the hero's look,
+drawn as a storybook scene) and narration. Starting a tale, each chapter (3 to 5 scenes) and the
+bible update after it are written by the writing model as page requests at the GPU gate; the
+update runs in the background. Next chapter needs the voice and is refused (409) without it.
+
+Limits: the hero's name 60 characters (and female or male), description 300, look 200; up to 12
+companions, places, things and threads of 160 characters; chapter summaries 600; the reader's
+seed 500; three pages per chapter with excerpts of 2500 characters. Page excerpts, the bible,
+the seed and the reader's notes are all quoted to the model as material, never instructions, and
+the bible update is checked field by field.
+
+Routes: `GET /v1/tales`; `POST /v1/tales` (start), `/open`, `/next`, `/edit`, `/retry-update`.
+`GET /v1/stories/<id>` gives a chapter's `tale: {id, title, n}`.
+
 ## Thinking ahead
 
 Phase 8 drafts the likely next page on the idle GPU (spec:
@@ -546,6 +565,48 @@ Measured with gemma-4-E4B: a draft was ready about 20 seconds after its parent p
 opening the drafted card took 0.00 s instead of about 8 s; a new page asked for in the middle of a
 draft waited 0.25 s for the draft to step aside, and its first text came at 1.9 s (about 1.6 s
 without a draft).
+
+## Kairos
+
+Primer can tell Kairos (the companion) what you read, and Kairos can look at Primer. Both are off
+until you set them up, and neither starts a model or touches the GPU.
+
+### Telling Kairos what you read
+
+Set `PRIMER_ACTIVITY_DIR` to Kairos's activity folder (`var/memory/activity` in the Kairos tree,
+beside her memory registry) before starting Primer. Each page you open, Deeper, Simpler,
+Regenerate and each quiz answer is then appended as one line to
+`<that folder>/primer/<YYYY-MM-DD>.jsonl` (`primer/activity.py`; the row format is Kairos's,
+in her `harness/model/activity.py`). Her memory graph reads it as app activity, labelled as
+something you did in Primer and never as something you said.
+
+`PRIMER_ACTIVITY_PRIVATE=1` marks every row private: Primer keeps writing them for its own
+history, and Kairos never reads one. Use it as an off-the-record switch.
+
+### Letting Kairos look at Primer
+
+`python -m primer.mcp_server` is an MCP server (stdio) with one tool, `primer(action, args)`.
+It reads a running Primer through its localhost API (`PRIMER_URL`, default
+`http://127.0.0.1:8810`). Actions: `help`, `status`, `page {"id"}` (the `ref` of an activity
+row), `reader`, `quiz_due` and `quest`. All are read-only. It keeps one tool with a fixed schema
+on purpose: Kairos caches tool schemas in her prompt and refuses a bridged tool whose schema
+changes, so new actions arrive through `help` without moving anything she has cached.
+
+To give it to her, add a server to Kairos's `mcp_servers.json` (adding it changes her tool list,
+so it costs her one cold restart):
+
+```json
+"primer": {
+  "command": "python",
+  "args": ["-m", "primer.mcp_server"],
+  "cwd": "C:/Projects/illustrated-primer",
+  "env": {"PRIMER_URL": "http://127.0.0.1:8810"},
+  "group": "bridged",
+  "risk": "private"
+}
+```
+
+`risk` is `private` because it looks at what you are doing (Kairos's `harness/tools/manifest.py`: "looks at his room, his screen, or his camera"); it changes nothing in Primer. `bridged` is her group for an MCP server without one of its own.
 
 ## Tests
 

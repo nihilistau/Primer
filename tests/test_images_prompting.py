@@ -168,3 +168,23 @@ def test_match_video_request_no(text):
 def test_match_video_request_cases():
     assert len(VIDEO_YES) >= 12 and len(VIDEO_NO) >= 12
     assert len(match_video_request("make a video of " + "x" * 400)) == 300
+
+
+def test_parse_image_prompt_strips_labels():
+    """Live L5: a label from the prompt writer never lands in the prompt."""
+    for raw in ("Prompt: a moat, ink", "**Prompt:** a moat, ink", "Image prompt: a moat, ink",
+                '"Prompt: a moat, ink"', "Prompt: \"a moat, ink\"", "Stable Diffusion prompt: a moat, ink",
+                "Here is the prompt: a moat, ink", "Here's your image prompt:\n\na moat, ink",
+                "Tags: a moat, ink", "## Prompt:\na moat, ink", "Final prompt: Prompt: a moat, ink"):
+        assert parse_image_prompt(raw, "fb") == "a moat, ink", raw
+    assert parse_image_prompt("prompt delivery of mail, ink", "fb") == "prompt delivery of mail, ink"
+
+
+def test_scene_prompts_are_storybook_pictures():
+    """Live L3: a story's scene is a storybook illustration, not a primer plate."""
+    plate = image_prompt_messages(FAMILIES["sdxl"], "a moat", "Moat", "excerpt")
+    scene = image_prompt_messages(FAMILIES["sdxl"], "Wren climbs the tower", None, None, scene=True)
+    assert "encyclopedia plate" in plate[0]["content"] and "storybook" not in plate[0]["content"]
+    assert "storybook illustration" in scene[0]["content"]
+    assert "encyclopedia plate" not in scene[0]["content"]
+    assert scene[1]["content"] == "Subject: Wren climbs the tower"

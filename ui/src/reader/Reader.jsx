@@ -21,6 +21,7 @@ import { retryBody } from './retry.js'
 import { streamEndError } from './streamEnd.js'
 import { dwellTracker, testMeButton } from '../apps/readerModel.js'
 import TestMe from './TestMe.jsx'
+import { announceTale } from '../apps/tale.js'
 import './reader.css'
 
 const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '', sources: [], grounding: '', note: '',
@@ -94,6 +95,7 @@ export default function Reader({ windowId, start, onPick }) {
           setView(v => ({ ...v, waiting: '', markdown: v.markdown + data.text }))
         } else if (event === 'done') {
           setView(v => ({ ...v, n: data.n, depth: data.depth, sourceMode: data.source_mode, note: data.note || '', grounding: '' }))
+          announceTale()   // a page read: the Tale's waiting pages (and the dock's mark) change
         } else if (event === 'highlights') {
           setView(v => ({ ...v, phrases: data.phrases || [] }))
         } else if (event === 'error') {

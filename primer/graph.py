@@ -171,7 +171,20 @@ CREATE INDEX IF NOT EXISTS quiz_answers_item ON quiz_answers(item_id);
 CREATE TABLE IF NOT EXISTS quests(
     id TEXT PRIMARY KEY, created_at REAL NOT NULL, status TEXT NOT NULL, rooms_json TEXT NOT NULL,
     at_room INTEGER NOT NULL, tries INTEGER NOT NULL, error TEXT);
+CREATE TABLE IF NOT EXISTS tales(
+    id TEXT PRIMARY KEY, created_at REAL NOT NULL, updated_at REAL NOT NULL, title TEXT NOT NULL,
+    seed TEXT NOT NULL, bible_json TEXT NOT NULL, status TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tale_chapters(
+    tale_id TEXT NOT NULL, n INTEGER NOT NULL, story_id TEXT NOT NULL, pages_json TEXT NOT NULL,
+    summary TEXT NOT NULL, created_at REAL NOT NULL, bible_update TEXT NOT NULL DEFAULT 'done',
+    PRIMARY KEY(tale_id, n));
+CREATE TABLE IF NOT EXISTS tale_chapter_pages(
+    tale_id TEXT NOT NULL, n INTEGER NOT NULL, pos INTEGER NOT NULL, node_id TEXT NOT NULL,
+    PRIMARY KEY(tale_id, n, node_id));
+CREATE INDEX IF NOT EXISTS tale_chapter_pages_node ON tale_chapter_pages(node_id);
 """
+# columns added after a table first shipped: (table, column, definition)
+_ADDED_COLUMNS = (("tale_chapters", "bible_update", "TEXT NOT NULL DEFAULT 'done'"),)
 
 _NODE_COLS = "id, kind, concept, title, parent_id"
 _VERSION_COLS = "node_id, n, markdown, source_mode, depth, created_at"
@@ -205,6 +218,16 @@ class Graph:
             self._db.execute("PRAGMA journal_mode=WAL")
             with self._db:
                 self._db.executescript(_SCHEMA)
+                for table, column, definition in _ADDED_COLUMNS:
+                    have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+                    if column not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                # chapters from before tale_chapter_pages: their pages are filled in from the JSON
+                for tale_id, n, raw in self._db.execute(
+                        "SELECT c.tale_id, c.n, c.pages_json FROM tale_chapters c WHERE NOT EXISTS("
+                        "SELECT 1 FROM tale_chapter_pages p WHERE p.tale_id=c.tale_id AND p.n=c.n)"
+                        ).fetchall():
+                    self._add_chapter_pages(tale_id, n, json.loads(raw))
 
     # nodes
     @staticmethod
@@ -423,7 +446,7 @@ class Graph:
 
     # stories
     def add_story(self, node_id: str, n: int, kind: str, voice: str) -> str:
-        if kind not in ("story", "listen"):
+        if kind not in ("story", "listen", "chapter"):
             raise ValueError(f"unknown story kind {kind!r}")
         sid = uuid.uuid4().hex[:16]
         now = time.time()
@@ -507,11 +530,26 @@ class Graph:
         return out
 
     def stories_for(self, node_id: str) -> list[dict]:
+        """The page's stories, newest first: those told about it, and the Tale chapters that
+        drew on it (a chapter's story is about its first page only)."""
         with self._lock:
             rows = self._db.execute(
-                f"SELECT {_STORY_COLS} FROM stories WHERE node_id=? ORDER BY created_at DESC, rowid DESC",
-                (node_id,)).fetchall()
+                f"SELECT {_STORY_COLS} FROM stories WHERE node_id=? OR id IN ("
+                "SELECT c.story_id FROM tale_chapter_pages p JOIN tale_chapters c "
+                "ON c.tale_id = p.tale_id AND c.n = p.n WHERE p.node_id=?) "
+                "ORDER BY created_at DESC, rowid DESC", (node_id, node_id)).fetchall()
         return [dict(zip(_STORY_KEYS, r)) for r in rows]
+
+    def story_states(self, ids: Sequence[str]) -> dict[str, dict]:
+        """{story id: {title, status}} for these stories (unknown ids are left out), in one query."""
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return {}
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT id, title, status FROM stories WHERE id IN ({','.join('?' * len(ids))})",
+                ids).fetchall()
+        return {i: {"title": t, "status": s} for i, t, s in rows}
 
     def fail_unfinished_stories(self, reason: str) -> int:
         """Fail every story not done or failed, and the scene being narrated in it (scenes not
@@ -852,6 +890,164 @@ class Graph:
     def reset_quests(self) -> None:
         with self._lock, self._db:
             self._db.execute("DELETE FROM quests")
+
+    # the Tale (primer.tales)
+    _TALE_KEYS = ("id", "created_at", "updated_at", "title", "seed", "bible_json", "status")
+    _CHAPTER_KEYS = ("tale_id", "n", "story_id", "pages", "summary", "created_at", "bible_update")
+    _BIBLE_UPDATES = ("pending", "done", "failed")
+
+    def add_tale(self, seed: str, title: str, bible_json: str, at: float | None = None) -> str:
+        """Start a tale and make it the active one; the previous active tale is archived."""
+        tid = uuid.uuid4().hex[:16]
+        now = time.time() if at is None else at
+        with self._lock, self._db:
+            self._db.execute("UPDATE tales SET status='archived' WHERE status='active'")
+            self._db.execute("INSERT INTO tales(id, created_at, updated_at, title, seed, bible_json, "
+                             "status) VALUES(?,?,?,?,?,?,?)",
+                             (tid, now, now, title, seed, bible_json, "active"))
+        return tid
+
+    def get_tale(self, id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {', '.join(self._TALE_KEYS)} FROM tales WHERE id=?",
+                                   (id,)).fetchone()
+        return dict(zip(self._TALE_KEYS, row)) if row else None
+
+    def active_tale(self) -> dict | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {', '.join(self._TALE_KEYS)} FROM tales "
+                                   "WHERE status='active' ORDER BY created_at DESC, rowid DESC "
+                                   "LIMIT 1").fetchone()
+        return dict(zip(self._TALE_KEYS, row)) if row else None
+
+    def list_tales(self) -> list[dict]:
+        """Every tale, newest first."""
+        with self._lock:
+            rows = self._db.execute(f"SELECT {', '.join(self._TALE_KEYS)} FROM tales "
+                                    "ORDER BY created_at DESC, rowid DESC").fetchall()
+        return [dict(zip(self._TALE_KEYS, r)) for r in rows]
+
+    def set_tale_bible(self, id: str, bible_json: str, title: str | None = None) -> None:
+        with self._lock, self._db:
+            self._db.execute("UPDATE tales SET bible_json=?, updated_at=? WHERE id=?",
+                             (bible_json, time.time(), id))
+            if title is not None:
+                self._db.execute("UPDATE tales SET title=? WHERE id=?", (title, id))
+
+    def set_active_tale(self, id: str) -> bool:
+        """Make this tale the active one (the others are archived); False for an unknown id."""
+        with self._lock, self._db:
+            if self._db.execute("SELECT 1 FROM tales WHERE id=?", (id,)).fetchone() is None:
+                return False
+            self._db.execute("UPDATE tales SET status='archived' WHERE status='active'")
+            self._db.execute("UPDATE tales SET status='active', updated_at=? WHERE id=?",
+                             (time.time(), id))
+        return True
+
+    def add_tale_chapter(self, tale_id: str, story_id: str, pages: Sequence[str], summary: str,
+                         at: float | None = None) -> int:
+        """Add the next chapter (numbered from 1) and return its number. Its bible update starts
+        "pending" (set_chapter_update says how it ended)."""
+        now = time.time() if at is None else at
+        with self._lock, self._db:
+            n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM tale_chapters WHERE tale_id=?",
+                                 (tale_id,)).fetchone()[0]
+            self._db.execute("INSERT INTO tale_chapters(tale_id, n, story_id, pages_json, summary, "
+                             "created_at, bible_update) VALUES(?,?,?,?,?,?,?)",
+                             (tale_id, n, story_id, json.dumps(list(pages)), summary, now, "pending"))
+            self._add_chapter_pages(tale_id, n, pages)
+            self._db.execute("UPDATE tales SET updated_at=? WHERE id=?", (time.time(), tale_id))
+        return n
+
+    def _add_chapter_pages(self, tale_id: str, n: int, pages) -> None:
+        """Index a chapter's pages (call with the lock held, in a transaction)."""
+        self._db.executemany(
+            "INSERT OR IGNORE INTO tale_chapter_pages(tale_id, n, pos, node_id) VALUES(?,?,?,?)",
+            [(tale_id, n, i, p) for i, p in enumerate(pages if isinstance(pages, list) else list(pages))
+             if isinstance(p, str)])
+
+    def chapter_page_titles(self, tale_id: str) -> dict[int, list[dict]]:
+        """{chapter n: [{node_id, title}]} in the order each chapter used them; a page since
+        gone has the title ''. One query."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT p.n, p.node_id, COALESCE(nd.title, '') FROM tale_chapter_pages p "
+                "LEFT JOIN nodes nd ON nd.id = p.node_id WHERE p.tale_id=? ORDER BY p.n, p.pos",
+                (tale_id,)).fetchall()
+        out: dict[int, list[dict]] = {}
+        for n, nid, title in rows:
+            out.setdefault(n, []).append({"node_id": nid, "title": title})
+        return out
+
+    def tale_chapter_counts(self) -> dict[str, int]:
+        """{tale id: chapters} for every tale with at least one."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT tale_id, COUNT(*) FROM tale_chapters GROUP BY tale_id").fetchall()
+        return dict(rows)
+
+    def tale_chapters(self, tale_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT tale_id, n, story_id, pages_json, summary, created_at, bible_update "
+                "FROM tale_chapters WHERE tale_id=? ORDER BY n", (tale_id,)).fetchall()
+        return [dict(zip(self._CHAPTER_KEYS, (*r[:3], json.loads(r[3]), *r[4:]))) for r in rows]
+
+    def set_chapter_update(self, tale_id: str, n: int, state: str) -> None:
+        """How the chapter's bible update ended: "pending", "done" or "failed"."""
+        if state not in self._BIBLE_UPDATES:
+            raise ValueError(f"unknown bible update state {state!r}")
+        with self._lock, self._db:
+            self._db.execute("UPDATE tale_chapters SET bible_update=? WHERE tale_id=? AND n=?",
+                             (state, tale_id, n))
+
+    def chapter_for_story(self, story_id: str) -> dict | None:
+        """{tale_id, n} of the chapter told by this story, or None."""
+        with self._lock:
+            row = self._db.execute("SELECT tale_id, n FROM tale_chapters WHERE story_id=?",
+                                   (story_id,)).fetchone()
+        return {"tale_id": row[0], "n": row[1]} if row else None
+
+    def replace_chapter_story(self, old_id: str, new_id: str) -> None:
+        """A chapter's story was told again (Story's Again): the chapter follows the new one."""
+        with self._lock, self._db:
+            self._db.execute("UPDATE tale_chapters SET story_id=? WHERE story_id=?", (new_id, old_id))
+
+    def set_chapter_summary(self, tale_id: str, n: int, summary: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("UPDATE tale_chapters SET summary=? WHERE tale_id=? AND n=?",
+                             (summary, tale_id, n))
+
+    def used_pages(self, tale_id: str) -> set[str]:
+        """Node ids of every page an earlier chapter of this tale drew on."""
+        with self._lock:
+            rows = self._db.execute("SELECT pages_json FROM tale_chapters WHERE tale_id=?",
+                                    (tale_id,)).fetchall()
+        return {p for (raw,) in rows for p in json.loads(raw)}
+
+    def pages_read_since(self, since: float) -> list[dict]:
+        """Pages with a stored version opened after `since`: [{node_id, title, opens, seconds,
+        last}] (unordered). By open signals; when there are none at all (the reader was reset),
+        by arrivals along the trail."""
+        with self._lock:
+            have = self._db.execute("SELECT 1 FROM reader_events WHERE kind='open' LIMIT 1").fetchone()
+            if have:
+                rows = self._db.execute(
+                    "SELECT n.id, n.title, COUNT(*), MAX(e.at), COALESCE(d.seconds, 0.0) "
+                    "FROM reader_events e JOIN nodes n ON n.id = e.node_id "
+                    "LEFT JOIN reader_dwell d ON d.node_id = n.id "
+                    "WHERE e.kind='open' AND e.at>? "
+                    "AND EXISTS(SELECT 1 FROM versions v WHERE v.node_id = n.id) "
+                    "GROUP BY n.id", (since,)).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT n.id, n.title, COUNT(*), MAX(e.at), COALESCE(d.seconds, 0.0) "
+                    "FROM edges e JOIN nodes n ON n.id = e.to_id "
+                    "LEFT JOIN reader_dwell d ON d.node_id = n.id "
+                    "WHERE e.at>? AND EXISTS(SELECT 1 FROM versions v WHERE v.node_id = n.id) "
+                    "GROUP BY n.id", (since,)).fetchall()
+        return [{"node_id": i, "title": t, "opens": o, "last": a, "seconds": float(s)}
+                for i, t, o, a, s in rows]
 
     # history and map
     def recent_titles(self, limit: int = 30) -> list[str]:

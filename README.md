@@ -40,6 +40,13 @@ the following days; and a **Quest** turns your trail into rooms whose doors open
 
 ![A page about cannons with its Test me panel open, two answers marked Right with the page quoted and a third question connecting cannons to the Theodosian Walls, beside the Reader window with a plain-words summary of how this reader reads, bars for Deeper and Simpler, branch shares with 70% sideways, and the topics read most](docs/screenshots/test-me-and-reader.webp)
 
+**A tale that goes on as you read.** Start a story with a hero of your own (or let Primer
+invent one), and each chapter carries it on from the pages you've read since the last: same
+hero, same companions, the facts from your pages kept true, a picture per scene with the hero
+looking the same, and read aloud.
+
+![The Tale window: two chapters of "Wren and the Whirring Works of Oakhaven Keep", each with the pages it drew on and a summary, and the story bible with Wren and her look](docs/screenshots/tale.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -208,10 +215,10 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.10**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+This is **v0.11**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
 web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
-model, Test me, Review and the Quest work.
-Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): the continuing story. The
+model, Test me, Review, the Quest and the continuing Tale work.
+Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): timeline and diagram lenses. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

@@ -144,3 +144,14 @@ export const questBuild = (fromNodeId) => j('POST', '/v1/quest', fromNodeId ? { 
 export const questAnswer = (questId, answer) => j('POST', '/v1/quest/answer', { quest_id: questId, answer })
 export const questSkip = (questId) => j('POST', '/v1/quest/skip', { quest_id: questId })
 export const questAbandon = (questId) => j('POST', '/v1/quest/abandon', { quest_id: questId })
+
+/* the Tale (Phase 11): {current, tales, preview}; a new tale (invented with no seed); reopen an
+ * older one; the next chapter (the scenes are written in the request: 202 {story_id, n}); edit
+ * the bible ({name?, description?, look?, remove_thread?, remove_place?}); retry a failed bible
+ * update */
+export const tales = () => j('GET', '/v1/tales')
+export const taleStart = (seed) => j('POST', '/v1/tales', seed ? { seed } : {})
+export const taleOpen = (taleId) => j('POST', '/v1/tales/open', { tale_id: taleId })
+export const taleNext = (pages) => j('POST', '/v1/tales/next', pages ? { pages } : {})
+export const taleEdit = (taleId, fields) => j('POST', '/v1/tales/edit', { ...fields, tale_id: taleId })
+export const taleRetry = (taleId, n) => j('POST', '/v1/tales/retry-update', { tale_id: taleId, n })

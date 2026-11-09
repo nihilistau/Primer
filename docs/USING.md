@@ -1,6 +1,6 @@
 # Using Primer
 
-A guide to setting up, reading, branching, testing yourself, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
+A guide to setting up, reading, branching, testing yourself, following a tale, grounding, browsing, mapping, listening, drawing and animating with Primer. To install it and point it at your models,
 see the [README](../README.md#install). Every configuration option is in [RUNNING.md](RUNNING.md).
 
 ## The desktop
@@ -19,6 +19,7 @@ dock at the bottom opens:
 | Person | **Reader**: what Primer has learned about how you read, your notes about yourself, and Reset. |
 | Brain | **Review**: questions from Test me that are due again (the badge shows how many). |
 | Pawn | **Quest**: a run through rooms built from your trail, each door opened by a question. |
+| Journal | **Tale**: one ongoing illustrated story with your own hero, a chapter at a time from what you've read. |
 | Arrow | **Setup**: download a starter kit of models, programs, Wikipedia and a map, move models, check for updates. |
 
 ## Setup
@@ -240,6 +241,43 @@ the door opens or you skip. The last door ends the run with how many rooms you o
 this quest** gives up on it so you can build another. A quest needs at least two pages read.
 
 ![A page about cannons with its Test me panel open: a recall question answered "Gunpowder: an explosive powder throws the heavy ball" and marked Right with the page quoted, an explain-why question marked Right, and a connect question asking how cannons relate to the Theodosian Walls; beside it the Reader window with a summary saying the reader asks for simpler pages and follows sideways links, bars for Deeper 0 and Simpler 3, branch shares of 20% in context, 10% general and 70% sideways, and the topics read most with minutes on each](screenshots/test-me-and-reader.webp)
+
+## The Tale
+
+A **Tale** is one long story that goes on as you read: the same hero and companions, chapter
+after chapter, and each chapter woven from the pages you've read since the last one. Read about
+water clocks and siphons, and the next chapter has the hero puzzling over one in the castle's
+cistern.
+
+**Start a tale** in the Tale window (the journal in the dock): describe the hero ("a girl called
+Wren, apprentice to a castle engineer, who asks too many questions", up to 500 characters) or
+press **Invent one for me**. Primer writes the **story bible**: the hero's name, whether they're female or male, a
+short description and a fixed **look** for pictures, a companion or two, a place, and an opening
+thread. Your notes in Reader (for example "I'm 12") set the tone.
+
+**Next chapter** shows the pages it will draw on: up to three of the pages you've read since the
+last chapter (for the first chapter, since a day before the tale began), the ones you spent
+longest on first. Untick any, or **Add a page from your trail**. The Tale button in the dock gets
+a mark when three new pages are waiting. Pages that weren't used drop out of the list after the
+chapter; you can still add them from your trail.
+
+A chapter is 3 to 5 scenes that carry on from the last one and keep the facts from your pages
+true. It plays in the Story window ("Chapter 2 of …") with a picture per scene and the voice
+reading it, and it appears in the stories of every page it drew on. Every picture starts with the
+hero's look ("Wren, female: messy brown braid, worn leather apron…"), so the hero stays
+recognisable; companions' looks are added when they're in the scene. The pictures are drawn as
+storybook scenes.
+
+After each chapter Primer updates the bible: new companions, places, things the characters carry,
+threads opened and closed, and a summary of the chapter. If that update fails the chapter is
+kept and the window offers **Retry**. You can edit the hero (name, female or male, description, look)
+and remove a place or a thread.
+
+A chapter needs the voice (it is narrated): with no voice in the tier, or while it's starting,
+Next chapter says so. **Start a new tale** keeps the old one under **Older tales**, where you
+can reopen it. Reset in Reader doesn't touch tales.
+
+![The Tale window for "Wren and the Whirring Works of Oakhaven Keep": Next chapter waiting for new pages, two chapters each with the pages it drew on (water clock, Archimedes screw and medieval cistern; gear train and siphon) and a summary, and the story bible with Wren, female, her description and her look](screenshots/tale.webp)
 
 ## Thinking ahead
 

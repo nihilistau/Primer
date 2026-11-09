@@ -4,7 +4,11 @@
  * it starts scene 1 as soon as its narration exists, and later scenes continue automatically as
  * they finish (at the end of a scene whose successor isn't ready it waits and says so). The sentence being spoken
  * is lit in the text; highlighted phrases open the phrase's page. Again tells it anew.
- * Props: { windowId, storyId, subject?, nodeId?, kind? }. */
+ * A Tale's chapter (kind "chapter") is headed "Chapter N of <tale>": `chapter` {n, taleTitle} comes
+ * from the Tale window or the story's own `tale` field {id, title, n} (which wins); without that
+ * field (older servers) the current tale is asked once which chapter it is (else the heading is
+ * "Chapter" and the story's title).
+ * Props: { windowId, storyId, subject?, nodeId?, kind?, chapter? }. */
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { Markdown } from '../reader/markdown.jsx'
 import * as api from '../api.js'
@@ -15,11 +19,12 @@ import { openPlace, MEDIA_EVENT } from '../openImage.js'
 import { describeJob } from './imageJob.js'
 import { chunkAt, initial, next, readyList, waitingFor } from './storyPlayer.js'
 import { isEnded, pollStory, sceneSegments, storyStatusLabel, waitingLabel } from './storyJob.js'
+import { chapterHeading, findChapter, storyChapter } from './tale.js'
 import './apps.css'
 
 const SILENT_MS = 1500        // how long a scene with no audio (nothing to say) is shown before the next
 
-export default function StoryWindow({ windowId, storyId, subject = '', nodeId = '', kind = 'story' }) {
+export default function StoryWindow({ windowId, storyId, subject = '', nodeId = '', kind = 'story', chapter = null }) {
   const [curId, setCurId] = useState(storyId)
   const [nonce, setNonce] = useState(0)          // bumps on Again, so the poll restarts even on the same id
   const [story, setStory] = useState(null)
@@ -91,9 +96,22 @@ export default function StoryWindow({ windowId, storyId, subject = '', nodeId = 
   }
 
   const title = (story && story.title) || subject
+  const isChapter = (story ? story.kind : kind) === 'chapter'
+  const [chapterInfo, setChapterInfo] = useState(chapter)
+  const own = storyChapter(story)     // the story's own `tale` field, when the server sends it
+  const hasOwn = !!story && story.tale !== undefined
   useEffect(() => {
-    wm.setTitle(windowId, title ? `${listen ? 'Listen' : 'Story'}: ${title}` : (listen ? 'Listen' : 'Story'))
-  }, [windowId, title, listen])
+    // older servers: ask the current tale once which chapter this is
+    if (!isChapter || chapterInfo || !story || hasOwn) return undefined
+    let live = true
+    api.tales().then(s => { const f = findChapter(s, curId); if (live && f) setChapterInfo(f) }).catch(() => {})
+    return () => { live = false }
+  }, [isChapter, curId, !!story, hasOwn])   // eslint-disable-line react-hooks/exhaustive-deps
+  const heading = isChapter ? chapterHeading(own || chapterInfo, title) : ''
+  useEffect(() => {
+    wm.setTitle(windowId, isChapter ? heading
+      : title ? `${listen ? 'Listen' : 'Story'}: ${title}` : (listen ? 'Listen' : 'Story'))
+  }, [windowId, title, listen, isChapter, heading])
 
   const again = async () => {
     setBusy(true); setErr('')
@@ -125,6 +143,7 @@ export default function StoryWindow({ windowId, storyId, subject = '', nodeId = 
 
   return (
     <div className="st">
+      {isChapter ? <h2 className="st-chapter">{heading}</h2> : null}
       <div className="st-top">
         <div className={'st-label' + (failed || gone ? ' st-label-err' : '')} role="status">
           {ended || gone ? null : <span className="ui-spin" aria-hidden="true" />} {label}

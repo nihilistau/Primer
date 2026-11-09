@@ -317,3 +317,48 @@ def test_gate_order_with_a_real_gate(g, node, tmp_path):
         svc.shutdown()
     assert log[:2] == ["resume", "stream"]
     assert [e for e in log if isinstance(e, tuple)][0] == ("create", None)  # the page turn was released
+
+
+class KwImages(FakeImages):
+    def __init__(self):
+        super().__init__()
+        self.kws = []
+
+    def create(self, node_id, phrase, subject, **kw):
+        self.kws.append(kw)
+        return super().create(node_id, phrase, subject)
+
+
+def test_chapter_kind_takes_scenes_and_prefixes_pictures(g, node, tmp_path, made):
+    images, text = KwImages(), FakeEngine([STORY])
+    svc = made(g, tmp_path, text=text, images=images)
+    scenes = [{"title": "One", "text": "Nell meets Pip at the castle."}, {"title": "Two", "text": "Nell alone."}]
+    with pytest.raises(ValueError):
+        svc.create(node.id, kind="chapter")  # a chapter's scenes come from the tale
+    with pytest.raises(ValueError):
+        svc.create_chapter("nope", 1, "Chapter 1", scenes, "")
+    with pytest.raises(ValueError):
+        svc.create_chapter(node.id, 1, "Chapter 1", [], "")
+    sid = svc.create_chapter(node.id, 1, "Chapter 1: One", scenes,
+                             lambda t: "a girl" + ("; Pip: a mouse" if "Pip" in t else ""))
+    assert [s["title"] for s in g.get_story(sid)["scenes"]] == ["One", "Two"]  # stored at once
+    s = wait(svc, sid)
+    assert s["status"] == "done" and s["kind"] == "chapter" and s["title"] == "Chapter 1: One"
+    assert text.calls == [] and s["highlights"] == ["castle"]
+    assert [k.get("prefix") for k in images.kws] == ["a girl; Pip: a mouse", "a girl"]
+    assert all(sc["status"] == "done" and sc["media_id"] for sc in s["scenes"])
+    # a plain prefix, or none
+    sid2 = svc.create_chapter(node.id, 1, "Chapter 2", scenes, "a fixed look")
+    wait(svc, sid2)
+    assert [k.get("prefix") for k in images.kws[2:]] == ["a fixed look", "a fixed look"]
+    sid3 = svc.create_chapter(node.id, 1, "Chapter 3", scenes, "")
+    wait(svc, sid3)
+    assert images.kws[4:] == [{"scene": True}, {"scene": True}]  # drawn as storybook scenes
+    assert all(k.get("scene") is True for k in images.kws)
+    # Again redoes it from the stored scenes; the chapter_prefix hook gives the looks back
+    svc.chapter_prefix = lambda story_id, text: "hooked"
+    again = wait(svc, svc.again(sid))
+    assert again["kind"] == "chapter" and again["title"] == "Chapter 1: One"
+    assert [sc["text"] for sc in again["scenes"]] == ["Nell meets Pip at the castle.", "Nell alone."]
+    assert [k.get("prefix") for k in images.kws[6:]] == ["hooked", "hooked"]
+    assert text.calls == []
