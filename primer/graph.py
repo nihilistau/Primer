@@ -1,5 +1,5 @@
 """SQLite concept graph: nodes, edges, page versions, highlights, branch cards, media, maps,
-stories and drafts (pages written ahead, invisible until opened)."""
+diagrams, stories and drafts (pages written ahead, invisible until opened)."""
 from __future__ import annotations
 
 import hashlib
@@ -107,6 +107,16 @@ _STORY_KEYS = ("id", "node_id", "n", "kind", "title", "status", "error", "voice"
 _SCENE_FIELDS = ("title", "text", "spoken", "media_id", "audio", "status", "error")
 _SCENE_KEYS = ("idx", "title", "text", "spoken", "media_id", "audio", "chunks", "status", "error")
 _MAP_KEYS = ("id", "node_id", "n", "phrase", "status", "error")
+_TIMELINE_STATUSES = ("reading", "done", "failed")
+_TIMELINE_FINAL = ("done", "failed")
+_TIMELINE_KEYS = ("id", "node_id", "n", "status", "error", "created_at", "updated_at")
+_TIMELINE_COLS = ", ".join(_TIMELINE_KEYS)
+_EVENT_KEYS = ("label", "date_text", "year", "month", "day", "end_year", "precision", "approx")
+_EVENT_COLS = ", ".join(_EVENT_KEYS)
+_DIAGRAM_STATUSES = ("queued", "drawing", "done", "failed")
+_DIAGRAM_FINAL = ("done", "failed")
+_DIAGRAM_KEYS = ("id", "node_id", "n", "phrase", "status", "error", "caption", "created_at")
+_DIAGRAM_COLS = ", ".join(_DIAGRAM_KEYS)
 
 
 _SCHEMA = """
@@ -138,6 +148,14 @@ CREATE TABLE IF NOT EXISTS maps(
 CREATE TABLE IF NOT EXISTS map_places(
     map_id TEXT NOT NULL, idx INTEGER NOT NULL, name TEXT NOT NULL, what TEXT NOT NULL,
     lat REAL, lon REAL, title TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(map_id, idx));
+CREATE TABLE IF NOT EXISTS timelines(
+    id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), n INTEGER NOT NULL,
+    status TEXT NOT NULL, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS timelines_node ON timelines(node_id);
+CREATE TABLE IF NOT EXISTS timeline_events(
+    timeline_id TEXT NOT NULL, idx INTEGER NOT NULL, label TEXT NOT NULL, date_text TEXT NOT NULL,
+    year INTEGER NOT NULL, month INTEGER, day INTEGER, end_year INTEGER, precision TEXT NOT NULL,
+    approx INTEGER NOT NULL, PRIMARY KEY(timeline_id, idx));
 CREATE TABLE IF NOT EXISTS stories(
     id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), n INTEGER NOT NULL,
     kind TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, error TEXT, voice TEXT NOT NULL,
@@ -182,6 +200,11 @@ CREATE TABLE IF NOT EXISTS tale_chapter_pages(
     tale_id TEXT NOT NULL, n INTEGER NOT NULL, pos INTEGER NOT NULL, node_id TEXT NOT NULL,
     PRIMARY KEY(tale_id, n, node_id));
 CREATE INDEX IF NOT EXISTS tale_chapter_pages_node ON tale_chapter_pages(node_id);
+CREATE TABLE IF NOT EXISTS diagrams(
+    id TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id), n INTEGER NOT NULL,
+    phrase TEXT NOT NULL, status TEXT NOT NULL, error TEXT, svg TEXT NOT NULL, caption TEXT NOT NULL,
+    labels_json TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS diagrams_node ON diagrams(node_id);
 """
 # columns added after a table first shipped: (table, column, definition)
 _ADDED_COLUMNS = (("tale_chapters", "bible_update", "TEXT NOT NULL DEFAULT 'done'"),)
@@ -442,6 +465,156 @@ class Graph:
             cur = self._db.execute(
                 f"UPDATE maps SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
                 (reason, time.time(), *_MAP_FINAL))
+        return cur.rowcount
+
+    # timelines (Phase 12): the dated events of a page version
+    def add_timeline(self, node_id: str, n: int) -> str:
+        timeline_id = uuid.uuid4().hex[:16]
+        now = time.time()
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO timelines(id, node_id, n, status, error, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?)", (timeline_id, node_id, n, "reading", None, now, now))
+        return timeline_id
+
+    def update_timeline(self, id: str, status: str | None = None, error=_KEEP) -> None:
+        """Change a timeline's status and/or error. Failed stays failed and done stays done
+        (a late writer can't revive or un-finish one); an error is kept unless given."""
+        if status is not None and status not in _TIMELINE_STATUSES:
+            raise ValueError(f"unknown timeline status {status!r}")
+        with self._lock, self._db:
+            row = self._db.execute("SELECT status, error FROM timelines WHERE id=?", (id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown timeline {id!r}")
+            if row[0] == "failed" and status != "failed":
+                return
+            if row[0] == "done" and status == "failed":
+                return
+            self._db.execute("UPDATE timelines SET status=?, error=?, updated_at=? WHERE id=?",
+                             (status or row[0], row[1] if error is _KEEP else error, time.time(), id))
+
+    def set_timeline_events(self, id: str, events: Sequence[dict]) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM timeline_events WHERE timeline_id=?", (id,))
+            self._db.executemany(
+                f"INSERT INTO timeline_events(timeline_id, idx, {_EVENT_COLS}) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [(id, i, e["label"], e["date_text"], e["year"], e["month"], e["day"], e["end_year"],
+                  e["precision"], int(bool(e["approx"]))) for i, e in enumerate(events)])
+
+    @staticmethod
+    def _event(row) -> dict:
+        out = dict(zip(_EVENT_KEYS, row))
+        out["approx"] = bool(out["approx"])
+        return out
+
+    def get_timeline(self, id: str) -> dict | None:
+        """The timeline with its page's title and its events in time order."""
+        with self._lock:
+            row = self._db.execute(f"SELECT {_TIMELINE_COLS} FROM timelines WHERE id=?", (id,)).fetchone()
+            if row is None:
+                return None
+            title = self._db.execute("SELECT title FROM nodes WHERE id=?", (row[1],)).fetchone()
+            events = self._db.execute(
+                f"SELECT {_EVENT_COLS} FROM timeline_events WHERE timeline_id=? ORDER BY idx", (id,)).fetchall()
+        out = dict(zip(_TIMELINE_KEYS, row))
+        out["page_title"] = title[0] if title else ""
+        out["events"] = [self._event(e) for e in events]
+        return out
+
+    def timelines_for(self, node_id: str) -> list[dict]:
+        """A page's timelines, newest first: id, node_id, n, status, error, created_at, event_count."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT t.id, t.node_id, t.n, t.status, t.error, t.created_at, "
+                "(SELECT COUNT(*) FROM timeline_events e WHERE e.timeline_id=t.id) "
+                "FROM timelines t WHERE t.node_id=? ORDER BY t.created_at DESC, t.rowid DESC",
+                (node_id,)).fetchall()
+        return [dict(zip(("id", "node_id", "n", "status", "error", "created_at", "event_count"), r))
+                for r in rows]
+
+    def all_timeline_events(self) -> list[dict]:
+        """The events of the latest finished timeline of every page, each with timeline_id,
+        node_id and page_title, in time order."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT t.id, t.node_id, n.title, "
+                + ", ".join(f"e.{k}" for k in _EVENT_KEYS) +
+                " FROM timelines t JOIN nodes n ON n.id = t.node_id"
+                " JOIN timeline_events e ON e.timeline_id = t.id"
+                " WHERE t.status='done' AND t.rowid = (SELECT t2.rowid FROM timelines t2"
+                "   WHERE t2.node_id = t.node_id AND t2.status='done'"
+                "   ORDER BY t2.created_at DESC, t2.rowid DESC LIMIT 1)"
+                " ORDER BY e.year, COALESCE(e.month, 0), COALESCE(e.day, 0), e.approx, t.rowid, e.idx"
+            ).fetchall()
+        return [{"timeline_id": r[0], "node_id": r[1], "page_title": r[2], **self._event(r[3:])} for r in rows]
+
+    def fail_unfinished_timelines(self, reason: str) -> int:
+        marks = ",".join("?" * len(_TIMELINE_FINAL))
+        with self._lock, self._db:
+            cur = self._db.execute(
+                f"UPDATE timelines SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
+                (reason, time.time(), *_TIMELINE_FINAL))
+        return cur.rowcount
+
+    # diagrams (primer.diagrams)
+    def add_diagram(self, node_id: str, n: int, phrase: str) -> str:
+        diagram_id = uuid.uuid4().hex[:16]
+        now = time.time()
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO diagrams(id, node_id, n, phrase, status, error, svg, caption, labels_json, "
+                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (diagram_id, node_id, n, phrase, "queued", None, "", "", "[]", now, now))
+        return diagram_id
+
+    def update_diagram(self, id: str, status: str | None = None, error=_KEEP, svg: str | None = None,
+                       caption: str | None = None, labels: list[str] | None = None) -> None:
+        """Change a diagram's status, error or drawing. A failed diagram stays failed (a late
+        writer, such as a job running through shutdown, cannot revive it) and a done one stays
+        done; fields not given are kept."""
+        if status is not None and status not in _DIAGRAM_STATUSES:
+            raise ValueError(f"unknown diagram status {status!r}")
+        with self._lock, self._db:
+            row = self._db.execute("SELECT status, error, svg, caption, labels_json FROM diagrams "
+                                   "WHERE id=?", (id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown diagram {id!r}")
+            if row[0] == "failed" and status != "failed":
+                return
+            if row[0] == "done" and status == "failed":
+                return
+            self._db.execute(
+                "UPDATE diagrams SET status=?, error=?, svg=?, caption=?, labels_json=?, updated_at=? "
+                "WHERE id=?",
+                (status or row[0], row[1] if error is _KEEP else error,
+                 row[2] if svg is None else svg, row[3] if caption is None else caption,
+                 row[4] if labels is None else json.dumps(list(labels)), time.time(), id))
+
+    def get_diagram(self, id: str) -> dict | None:
+        """The diagram with its drawing: svg, caption and labels (a list)."""
+        with self._lock:
+            row = self._db.execute(f"SELECT {_DIAGRAM_COLS}, svg, labels_json FROM diagrams WHERE id=?",
+                                   (id,)).fetchone()
+        if row is None:
+            return None
+        out = dict(zip(_DIAGRAM_KEYS, row))
+        out["svg"], out["labels"] = row[-2], json.loads(row[-1])
+        return out
+
+    def diagrams_for(self, node_id: str) -> list[dict]:
+        """A page's diagrams, newest first, without their drawings (GET /v1/diagrams/<id> has them)."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_DIAGRAM_COLS} FROM diagrams WHERE node_id=? ORDER BY created_at DESC, rowid DESC",
+                (node_id,)).fetchall()
+        return [dict(zip(_DIAGRAM_KEYS, r)) for r in rows]
+
+    def fail_unfinished_diagrams(self, reason: str) -> int:
+        marks = ",".join("?" * len(_DIAGRAM_FINAL))
+        with self._lock, self._db:
+            cur = self._db.execute(
+                f"UPDATE diagrams SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
+                (reason, time.time(), *_DIAGRAM_FINAL))
         return cur.rowcount
 
     # stories

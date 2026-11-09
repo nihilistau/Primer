@@ -64,6 +64,10 @@ export const GLYPHS = {
   image: ['M5.5 5h13a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM3.5 16l5-5 4 4 2.5-2.5 5.5 5.5', 'M15.5 9h.01'],
   // a folded map with a pin (Phase 5, the Map window)
   map: ['M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2zM9 4.5v13M15 6.5v13', 'M12 10.5h.01'],
+  // an axis with two dated stems, their labels the detail (Phase 12, the Timeline window)
+  timeline: ['M3.5 16.5h17M7 16.5V11M14 16.5V7.5M3.5 14.5v4M20.5 14.5v4', 'M7 11h4.5M14 7.5h5'],
+  // two parts joined by a line, its arrowhead the detail (Phase 12, the Diagram window)
+  diagram: ['M4 5h6.5v5H4zM13.5 14h6.5v5h-6.5zM7.25 10v6.5h4.5', 'M10.5 14.5l2 2-2 2'],
   // the Reader's history arrows (Task 9): a chevron, its shaft as the detail
   back: ['M14.5 6l-6 6 6 6', 'M9 12h10'],
   forward: ['M9.5 6l6 6-6 6', 'M15 12H5'],

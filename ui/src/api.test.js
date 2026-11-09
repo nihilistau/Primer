@@ -249,3 +249,45 @@ describe('reader, quiz and quest calls', () => {
     await expect(api.readerDwell('n', 5)).resolves.toEqual({})
   })
 })
+
+describe('timeline and diagram calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+
+  it('POSTs send X-Primer and a JSON body', async () => {
+    const cases = [
+      [() => api.createTimeline('n1'), '/v1/timelines', { node_id: 'n1' }],
+      [() => api.timelineAgain('a/b'), '/v1/timelines/a%2Fb/again', {}],
+      [() => api.createDiagram({ node_id: 'n1' }), '/v1/diagrams', { node_id: 'n1' }],
+      [() => api.createDiagram({ node_id: 'n1', phrase: 'the sling' }), '/v1/diagrams', { node_id: 'n1', phrase: 'the sling' }],
+      [() => api.diagramAgain('d 1'), '/v1/diagrams/d%201/again', {}],
+    ]
+    for (const [fn, url, body] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+      expect(JSON.parse(init.body)).toEqual(body)
+    }
+  })
+
+  it('GETs send X-Primer and encode their id', async () => {
+    const cases = [
+      [() => api.timelineJob('a?b'), '/v1/timelines/a%3Fb'],
+      [() => api.allTimelines(), '/v1/timelines?all=1'],
+      [() => api.diagramJob('x#y'), '/v1/diagrams/x%23y'],
+    ]
+    for (const [fn, url] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('GET')
+      expect(init.headers['X-Primer']).toBe('1')
+    }
+  })
+})

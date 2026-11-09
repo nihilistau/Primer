@@ -1,4 +1,4 @@
-/* openImage — open an Image, Video, Map or Story window. A leaf module (no app imports) so the Reader can use
+/* openImage — open an Image, Video, Map, Story, Timeline or Diagram window. A leaf module (no app imports) so the Reader can use
  * it without an import cycle through apps.jsx; sizes match the registry's image and video entries.
  * Each open also announces MEDIA_EVENT on window: a new job exists, so a Reader showing its page
  * refreshes its thumbnail strip (jobs started from an Image or Video window included). */
@@ -32,9 +32,23 @@ export const openStoryWindow = (storyId, subject, nodeId, kind = 'story') => {
   return id
 }
 
+/* Timeline props { timelineId?, subject?, nodeId?, all? } (all: All my timelines first) */
+export const openTimelineWindow = (timelineId, subject, nodeId, all = false) => {
+  const id = wm.open('timeline', { props: { timelineId, subject, nodeId, all }, w: 820, h: 560 })
+  if (timelineId) announce()
+  return id
+}
+
+export const openDiagramWindow = (diagramId, subject, nodeId) => {
+  const id = wm.open('diagram', { props: { diagramId, subject, nodeId }, w: 760, h: 680 })
+  announce()
+  return id
+}
+
 /* A place on a map opens its page. The reader showing the mapped page takes it (it listens for
  * OPEN_PLACE_EVENT and marks the detail handled); with none, or on shift/middle click, a new
- * reader opens. `body` is an open-page body: {concept, via: 'general', from_id, phrase}. */
+ * reader opens. `body` is an open-page body: {concept, via: 'general' (a place) or 'context' (a
+ * timeline's event, a diagram's label), from_id, phrase}. */
 export const OPEN_PLACE_EVENT = 'primer:open-place'
 
 export const openPlace = (body, { newWindow = false } = {}) => {

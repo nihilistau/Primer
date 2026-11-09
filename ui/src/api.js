@@ -93,6 +93,16 @@ export const mapJob = (id) => j('GET', `/v1/maps/${encodeURIComponent(id)}`)
 export const mapAgain = (id) => j('POST', `/v1/maps/${encodeURIComponent(id)}/again`)
 export const mapTileJson = () => j('GET', '/v1/map/tilejson')
 
+/* timelines (the fast model's dated events of a page) and diagrams (the writing model's SVG of
+ * a page, or of a phrase on it) */
+export const createTimeline = (nodeId) => j('POST', '/v1/timelines', { node_id: nodeId })
+export const timelineJob = (id) => j('GET', `/v1/timelines/${encodeURIComponent(id)}`)
+export const timelineAgain = (id) => j('POST', `/v1/timelines/${encodeURIComponent(id)}/again`)
+export const allTimelines = () => j('GET', '/v1/timelines?all=1')
+export const createDiagram = (body) => j('POST', '/v1/diagrams', body)
+export const diagramJob = (id) => j('GET', `/v1/diagrams/${encodeURIComponent(id)}`)
+export const diagramAgain = (id) => j('POST', `/v1/diagrams/${encodeURIComponent(id)}/again`)
+
 /* stories (Listen is a story of kind "listen") */
 export const createStory = (body) => j('POST', '/v1/stories', body)
 export const storyJob = (id) => j('GET', `/v1/stories/${encodeURIComponent(id)}`)

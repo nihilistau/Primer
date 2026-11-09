@@ -31,6 +31,8 @@ from primer.grounding import MODES
 from primer.grounding.grounder import Grounder
 from primer.grounding.kiwix import KiwixClient, KiwixError
 from primer.grounding.web import make_searcher
+from primer.grounding.text import clip as clip_text
+from primer.grounding.web import safe_fetch
 from primer.hardware import Hardware, suggest_tier
 from primer.images.families import FAMILIES, SETTINGS, TWO_STAGE_SETTINGS, VIDEO_SETTINGS
 from primer.images.models import (NETWORK_PATH, ImageModel, ModelStore, StoreCorrupt, animate_model,
@@ -40,6 +42,9 @@ from primer.images.prompting import match_image_request, match_video_request
 from primer.images.scan import scan_folder_capped
 from primer.images.service import (KINDS, NO_ANIMATE_MODEL, NOT_CONFIGURED, SHUT_DOWN_REASON,
                                    ImageService)
+from primer.diagrams.intent import match_diagram_request
+from primer.diagrams.service import SHUT_DOWN as DIAGRAMS_SHUT_DOWN
+from primer.diagrams.service import DiagramService
 from primer.maps.geocode import Geocoder
 from primer.maps.intent import match_map_request
 from primer.maps.pmtiles import Archive, PMTilesError
@@ -50,6 +55,9 @@ from primer.stories.intent import match_story_request
 from primer.stories.service import KINDS as STORY_KINDS
 from primer.stories.service import NO_CHAPTER_SCENES, SHUT_DOWN as STORIES_SHUT_DOWN
 from primer.stories.service import StoryService
+from primer.timelines.intent import match_timeline_request
+from primer.timelines.service import NO_FAST as TIMELINE_NO_FAST
+from primer.timelines.service import TimelineService
 from primer.voice.client import VoiceError, make_voice
 from primer.pages import OpenRequest, PageService
 from primer.reader.profile import NOTES_CHARS, Profile
@@ -85,6 +93,7 @@ MAP_ATTRIBUTION = "© OpenStreetMap contributors · Protomaps"
 MAX_TILE_ZOOM = 26
 TILE_ENCODINGS = {1: None, 2: "gzip"}  # PMTiles tile compression -> Content-Encoding; others unsupported
 NO_MAP = "No [map] section in this tier"
+SOURCES_DEADLINE_S = 20.0  # a timeline's re-read of a grounded page's sources, all of them
 NO_VOICE = "No [voice] section in this tier"
 VOICE_DOWN = "The voice server isn't running"
 VOICE_STARTING = "The voice server is starting"
@@ -203,6 +212,8 @@ class App:
     quiz: Quiz | None = None  # Test me and Review; made over the graph when not passed
     quests: Quests | None = None  # the Quest; made over the quiz when not passed
     tales: TaleService | None = None  # the Tale; made over the graph and stories when not passed
+    timelines: TimelineService | None = None  # the Timeline lens; made over the graph when not passed
+    diagrams: DiagramService | None = None  # the diagram lens; made over the graph when not passed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -270,6 +281,17 @@ class App:
                                      lambda: getattr(self.pages, "gate", None), self.profile.block,
                                      voice=lambda: self.voice_available())
         self.stories.chapter_prefix = self.tales.prefix_for_story
+        if self.timelines is None:
+            # the fast engine is read through the pages at call time (a tier switch replaces it)
+            self.timelines = TimelineService(self.graph, lambda: getattr(self.pages, "fast", None),
+                                             sources_text=self.page_sources_text,
+                                             text_getter=lambda: getattr(self.pages, "text", None),
+                                             gate_getter=lambda: getattr(self.pages, "gate", None))
+        if self.diagrams is None:
+            # the writing engine and the gate are read through the pages at call time (a tier
+            # switch builds a new PageService, engines and gate), so the service outlives it
+            self.diagrams = DiagramService(self.graph, lambda: getattr(self.pages, "text", None),
+                                           lambda: getattr(self.pages, "gate", None))
         if self.browse is None:
             self.browse = self.make_browse(self.tier)
         self._thinking = self.saved_thinking_ahead()
@@ -426,10 +448,66 @@ class App:
         finally:
             self._close_archive()
 
+    def shutdown_timelines(self) -> None:
+        """Stop timeline jobs; unfinished ones fail."""
+        if self.timelines is not None:
+            self.timelines.shutdown()
+
+    def timeline_available(self) -> dict:
+        """Timelines need the fast model."""
+        if getattr(self.pages, "fast", None) is None:
+            return {"ok": False, "reason": TIMELINE_NO_FAST}
+        return {"ok": True, "reason": ""}
+
+    def page_sources_text(self, node_id: str, n: int, budget: int = 4000, stop=None,
+                          deadline_s: float = SOURCES_DEADLINE_S, clock=time.monotonic) -> str:
+        """A grounded version's sources read again (their text is not stored): reference articles
+        from the current tier's kiwix-serve, web pages through the guarded fetch when web search
+        is on. At most `budget` characters, shared between the sources; "" when there are none
+        or none can be read. No new read starts once `deadline_s` has passed or `stop()` is true
+        (the timeline service shutting down): what was read by then is used."""
+        sources = self.graph.sources(node_id, n)
+        if not sources:
+            return ""
+        ref = self.tier.reference
+        web = self.tier.web.search != "off"
+        share = max(200, budget // len(sources))
+        end = clock() + deadline_s
+        parts: list[str] = []
+        for s in sources:
+            left = end - clock()
+            if left <= 0 or (stop is not None and stop()):
+                break
+            try:
+                if s.origin == "reference" and ref is not None and s.book and s.path:
+                    text = KiwixClient(ref.url, timeout=max(1.0, min(10.0, left))).article(s.book, s.path)
+                elif s.origin == "web" and web and s.url.lower().startswith(("http://", "https://")):
+                    text = safe_fetch(s.url)[1]
+                else:
+                    continue
+            except Exception as e:  # a source that can't be read again is left out
+                log.info("timeline source %s unreadable: %s", s.title, e)
+                continue
+            text = clip_text(" ".join((text or "").split()), share)
+            if text:
+                parts.append(f"[{s.n}] {s.title}: {text}")
+        return clip_text("\n\n".join(parts), budget)
+
     def shutdown_stories(self, reason: str = STORIES_SHUT_DOWN) -> None:
         """Stop story jobs; unfinished stories fail with `reason`."""
         if self.stories is not None:
             self.stories.shutdown(reason)
+
+    def shutdown_diagrams(self, reason: str = DIAGRAMS_SHUT_DOWN) -> None:
+        """Stop diagram jobs; unfinished diagrams fail with `reason`."""
+        if self.diagrams is not None:
+            self.diagrams.shutdown(reason)
+
+    def diagram_available(self) -> dict:
+        """{ok, reason}: a diagram is drawn by the writing model."""
+        if self.diagrams is None:
+            return {"ok": False, "reason": DIAGRAMS_SHUT_DOWN}
+        return self.diagrams.available()
 
     def _close_archive(self) -> None:
         with self._map_lock:
@@ -583,7 +661,9 @@ class App:
                 "video_available": self.image_available("video"),
                 "animate_available": self.animate_available(), "gpu": self.gate.state(),
                 "map_available": self.map_available(), "browse_available": self.browse_available(),
+                "timeline_available": self.timeline_available(),
                 "voice_available": self.voice_available(),
+                "diagram_available": self.diagram_available(),
                 "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""},
                 "thinking_ahead": {**(self.drafter.status() if self.drafter is not None else {}),
                                    "setting": self.thinking_ahead()}}
@@ -863,7 +943,9 @@ def _make_handler(app: App):
                                     "versions": page["versions"], "highlights": page["highlights"],
                                     "media": [asdict(m) for m in app.graph.media_for_node(node.id)],
                                     "maps": app.graph.maps_for(node.id),
-                                    "stories": app.graph.stories_for(node.id)})
+                                    "timelines": app.graph.timelines_for(node.id),
+                                    "stories": app.graph.stories_for(node.id),
+                                    "diagrams": app.graph.diagrams_for(node.id)})
                 elif path == "/v1/image-models":
                     self._image_models()
                 elif path == "/v1/setup" or path.startswith("/v1/setup/"):
@@ -889,6 +971,23 @@ def _make_handler(app: App):
                         self._json({"error": "not found"}, 404)
                     else:
                         self._json({**self._with_pictures(story), "tale": self._story_tale(story)})
+                elif path == "/v1/timelines":
+                    if parse_qs(url.query).get("all", [""])[0] != "1":
+                        self._json({"error": "all=1 is required"}, 400)
+                    else:
+                        self._json({"events": app.timelines.all_events()})
+                elif path.startswith("/v1/timelines/") and "/" not in path[len("/v1/timelines/"):]:
+                    timeline = app.timelines.get(unquote(path[len("/v1/timelines/"):]))
+                    if timeline is None:
+                        self._json({"error": "not found"}, 404)
+                    else:
+                        self._json(timeline)
+                elif path.startswith("/v1/diagrams/") and "/" not in path[len("/v1/diagrams/"):]:
+                    diagram = app.diagrams.get(unquote(path[len("/v1/diagrams/"):]))
+                    if diagram is None:
+                        self._json({"error": "not found"}, 404)
+                    else:
+                        self._json(diagram)
                 elif path.startswith("/v1/maps/") and "/" not in path[len("/v1/maps/"):]:
                     job = app.maps.get(unquote(path[len("/v1/maps/"):]))
                     if job is None:
@@ -955,22 +1054,42 @@ def _make_handler(app: App):
                     text = body.get("text")
                     if not isinstance(text, str):
                         raise _BadRequest("text must be a string")
+                    diagram = match_diagram_request(text)
+                    if diagram and not app.diagram_available()["ok"]:
+                        diagram = None  # no writing model: route it as before (a picture...)
+                    timeline = None if diagram else match_timeline_request(text)
+                    if timeline and not app.timeline_available()["ok"]:
+                        timeline = None  # no fast model: route it as before (a picture, a page)
                     video = match_video_request(text)
                     place = match_map_request(text)
                     tale = match_story_request(text)
                     if tale and not app.voice_available()["ok"]:
                         tale = None  # no voice: route it as before (a page, a picture...)
-                    if tale:  # a story request is not also a picture, clip or map request
-                        self._json({"image": None, "video": None, "map": None, "story": tale})
+                    none = {"image": None, "video": None, "map": None, "story": None,
+                            "timeline": None, "diagram": None}
+                    if diagram:  # a diagram request is not also a picture, clip, map, story or timeline
+                        self._json({**none, "diagram": diagram})
+                    elif timeline:  # a timeline request is not also a picture, map or story request
+                        self._json({**none, "timeline": timeline})
+                    elif tale:  # a story request is not also a picture, clip or map request
+                        self._json({**none, "story": tale})
                     elif place:  # a map request is not also a picture or clip request
-                        self._json({"image": None, "video": None, "map": place, "story": None})
+                        self._json({**none, "map": place})
                     else:
-                        self._json({"image": None if video else match_image_request(text), "video": video,
-                                    "map": None, "story": None})
+                        self._json({**none, "image": None if video else match_image_request(text),
+                                    "video": video})
                 elif path == "/v1/stories":
                     self._create_story(body)
                 elif path.startswith("/v1/stories/") and path.endswith("/again"):
                     self._again_story(unquote(path[len("/v1/stories/"):-len("/again")]))
+                elif path == "/v1/timelines":
+                    self._create_timeline(body)
+                elif path.startswith("/v1/timelines/") and path.endswith("/again"):
+                    self._again_timeline(unquote(path[len("/v1/timelines/"):-len("/again")]))
+                elif path == "/v1/diagrams":
+                    self._create_diagram(body)
+                elif path.startswith("/v1/diagrams/") and path.endswith("/again"):
+                    self._again_diagram(unquote(path[len("/v1/diagrams/"):-len("/again")]))
                 elif path == "/v1/maps":
                     self._create_map(body)
                 elif path.startswith("/v1/maps/") and path.endswith("/again"):
@@ -1579,6 +1698,68 @@ def _make_handler(app: App):
             except ValueError as e:
                 raise _HttpError(409 if str(e) == MAPS_SHUT_DOWN else 404, str(e)) from None
             self._json({"id": mid}, 202)
+
+        # timelines
+        def _check_timeline(self) -> None:
+            status = app.timeline_available()
+            if not status["ok"]:
+                raise _HttpError(503, status["reason"])
+
+        def _create_timeline(self, body: dict) -> None:
+            node_id = body.get("node_id")
+            if not isinstance(node_id, str) or not node_id:
+                raise _BadRequest("node_id is required")
+            if app.graph.get_node(node_id) is None or app.graph.latest_version(node_id) is None:
+                raise _HttpError(404, "page not found")
+            self._check_timeline()
+            try:
+                tid = app.timelines.create(node_id)
+            except ValueError as e:
+                raise _HttpError(404 if str(e) == "unknown page" else 409, str(e)) from None
+            self._json({"id": tid}, 202)
+
+        def _again_timeline(self, timeline_id: str) -> None:
+            if app.timelines.get(timeline_id) is None:
+                raise _HttpError(404, "not found")
+            self._check_timeline()
+            try:
+                tid = app.timelines.again(timeline_id)
+            except ValueError as e:
+                raise _HttpError(404 if str(e) == "unknown timeline" else 409, str(e)) from None
+            self._json({"id": tid}, 202)
+        # diagrams
+        def _check_diagram(self) -> None:
+            status = app.diagram_available()
+            if not status["ok"]:
+                raise _HttpError(503, status["reason"])
+
+        def _create_diagram(self, body: dict) -> None:
+            """POST /v1/diagrams {node_id, phrase?}: 202 {id}; 400 bad fields, 404 no such page
+            (or no page written yet), 503 no writing model, 409 shutting down."""
+            node_id, phrase = body.get("node_id"), body.get("phrase", "")
+            if not isinstance(node_id, str) or not node_id:
+                raise _BadRequest("node_id is required")
+            if not isinstance(phrase, str):
+                raise _BadRequest("phrase must be a string")
+            phrase = clean_typed(phrase) if phrase.strip() else ""
+            if app.graph.get_node(node_id) is None or app.graph.latest_version(node_id) is None:
+                raise _HttpError(404, "page not found")
+            self._check_diagram()
+            try:
+                did = app.diagrams.create(node_id, phrase)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == DIAGRAMS_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": did}, 202)
+
+        def _again_diagram(self, diagram_id: str) -> None:
+            if app.diagrams.get(diagram_id) is None:
+                raise _HttpError(404, "not found")
+            self._check_diagram()
+            try:
+                did = app.diagrams.again(diagram_id)
+            except ValueError as e:
+                raise _HttpError(409 if str(e) == DIAGRAMS_SHUT_DOWN else 404, str(e)) from None
+            self._json({"id": did}, 202)
 
         # stories
         def _check_voice(self) -> None:

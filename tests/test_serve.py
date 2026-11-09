@@ -143,3 +143,34 @@ def test_build_app_wires_setup_approvals_to_retry_servers(tmp_path):
         app.installer.shutdown()
         app.images.shutdown()
         app.pages.shutdown(drain=False)
+
+
+def test_shutdown_stops_timelines_even_if_maps_shutdown_is_interrupted(tmp_path, monkeypatch):
+    """Final review, item 5: maps and timelines each get their own try/finally."""
+    from primer.server import App
+    calls = []
+
+    class Server:
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def maps(self, *a, **kw):
+        calls.append("maps")
+        raise KeyboardInterrupt  # the second Ctrl+C
+
+    monkeypatch.setattr(App, "shutdown_maps", maps)
+    monkeypatch.setattr(App, "shutdown_timelines", lambda self: calls.append("timelines"))
+    monkeypatch.setattr(App, "shutdown_stories", lambda self, *a: calls.append("stories"))
+    monkeypatch.setattr(App, "shutdown_diagrams", lambda self, *a: calls.append("diagrams"))
+    monkeypatch.setattr(serve, "ROOT", tmp_path)
+    monkeypatch.setattr(serve, "make_server", lambda *a, **kw: Server())
+    monkeypatch.setattr(serve, "detect_hardware", lambda: HW)
+    monkeypatch.setattr(serve.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(serve.ServerManager, "start_all", lambda self, wait=False: None)
+    monkeypatch.setattr(serve.ServerManager, "stop_all", lambda self: calls.append("stop_all"))
+    with pytest.raises(KeyboardInterrupt):
+        serve.main(["--tier", "light"])
+    assert calls == ["maps", "timelines", "stories", "diagrams", "stop_all"]

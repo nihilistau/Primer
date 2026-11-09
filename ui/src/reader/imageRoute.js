@@ -1,7 +1,7 @@
 /* imageRoute — what a typed line means (an image or a page) and whether the Image buttons work. */
 import * as api from '../api.js'
 
-/* Ask the server whether `text` is a story, map, video or image request (checked in that order, as the
+/* Ask the server whether `text` is a diagram, timeline, story, map, video or image request (checked in that order, as the
  * server does). A map request routes to its place as a typed page (the Map window follows once
  * the page is written); a video or image routes to a createImage body (the page's node, or the subject as a concept
  * when the reader is empty; a video adds kind video); anything else, or an intent call that
@@ -12,6 +12,9 @@ export async function routePrompt(text, { nodeId } = {}) {
   const where = (subject) => (nodeId ? { node_id: nodeId, subject } : { concept: subject, subject })
   // a map request opens the place's page as a typed page; the Map window follows once its node is known
   // a story request does the same: the topic's page first, then its story once the node is known
+  // a diagram or timeline request does the same, then makes the page's diagram or timeline
+  if (r.diagram) return { kind: 'diagram', body: { concept: r.diagram, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
+  if (r.timeline) return { kind: 'timeline', body: { concept: r.timeline, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
   if (r.story) return { kind: 'story', body: { concept: r.story, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
   if (r.map) return { kind: 'map', body: { concept: r.map, via: 'typed', ...(nodeId ? { from_id: nodeId } : {}) } }
   if (r.video) return { kind: 'video', body: { ...where(r.video), kind: 'video' } }
@@ -62,3 +65,18 @@ export function storyButton(status) {
 export const storyChecking = { enabled: false, checking: true, reason: 'Checking whether narration is available…' }
 export const storyCheckFailed = (e) =>
   ({ enabled: false, reason: `Couldn't check narration availability: ${(e && e.message) || 'Primer did not answer.'}` })
+
+/* {enabled, reason} for the Timeline and Diagram buttons from a /v1/status reply */
+const availability = (key, what) => (status) => {
+  const a = status && status[key]
+  if (a && a.ok) return { enabled: true, reason: '' }
+  return { enabled: false, reason: (a && a.reason) || `${what} are not available right now.` }
+}
+export const timelineButton = availability('timeline_available', 'Timelines')
+export const timelineChecking = { enabled: false, checking: true, reason: 'Checking whether timelines are available…' }
+export const timelineCheckFailed = (e) =>
+  ({ enabled: false, reason: `Couldn't check timeline availability: ${(e && e.message) || 'Primer did not answer.'}` })
+export const diagramButton = availability('diagram_available', 'Diagrams')
+export const diagramChecking = { enabled: false, checking: true, reason: 'Checking whether diagrams are available…' }
+export const diagramCheckFailed = (e) =>
+  ({ enabled: false, reason: `Couldn't check diagram availability: ${(e && e.message) || 'Primer did not answer.'}` })

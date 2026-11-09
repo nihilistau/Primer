@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.12.0: timelines and diagrams (2026-11-09)
+
+Two more ways to look at a page.
+
+### Added
+
+- **Timeline** (in a page's header): the dates a page names on an axis, points for years and
+  bars for spans, centuries and reigns, before the common era too. Zoom, pan, Fit; click an event
+  to read about it. **All my timelines** puts every page's latest timeline on one axis, coloured
+  by page. Type "timeline of the Tudors" to open a page and its timeline together.
+- **Diagram** (in a page's header and on branch forks): a labelled line drawing of how a thing
+  works, with a caption. Click a label to read about that part. Type "diagram of a trebuchet" or
+  "show me a diagram of how a siphon works".
+- Every diagram is rebuilt from an allowlist of plain shapes, text and arrowheads on the server
+  and checked again in the window, so a drawing can't run code, load anything or link anywhere.
+- `/v1/intent` always answers with `timeline` and `diagram` alongside the other lenses.
+
+### Fixed during the live run
+
+- A small fast model that thinks aloud no longer loses a timeline: citation marks like `[1]`,
+  a quoted "reply []", an array of one-event arrays and a run of arrays with no outer brackets
+  are all read correctly, and an answer that can't be read is asked once more of the writing
+  model.
+
+### Measured
+
+On the local-gpu tier: a timeline in 10 to 30 seconds on LFM3 1.7B (about 100 when it thinks
+aloud), a diagram in 12 to 20 seconds on gemma-4-E4B.
+
 ## v0.11.0: the continuing story (2026-11-09)
 
 One story that goes on as you read.

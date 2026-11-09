@@ -8,6 +8,8 @@ import ImageWindow from './apps/ImageWindow.jsx'
 import VideoWindow from './apps/VideoWindow.jsx'
 import MapWindow from './apps/MapWindow.jsx'
 import StoryWindow from './apps/StoryWindow.jsx'
+import TimelineWindow from './apps/TimelineWindow.jsx'
+import DiagramWindow from './apps/DiagramWindow.jsx'
 import BrowserWindow from './apps/BrowserWindow.jsx'
 import SetupWindow from './apps/SetupWindow.jsx'
 import ReaderWindow from './apps/ReaderWindow.jsx'
@@ -26,6 +28,10 @@ export const APPS = {
   video: { title: 'Video', icon: 'stage', size: [640, 760], component: VideoWindow },
   // multi-instance: one window per map job, props { mapId, subject?, nodeId? }
   map: { title: 'Map', icon: 'map', size: [760, 640], component: MapWindow },
+  // multi-instance: one window per timeline (or All my timelines), props { timelineId?, subject?, nodeId?, all? }
+  timeline: { title: 'Timeline', icon: 'timeline', size: [820, 560], component: TimelineWindow },
+  // multi-instance: one window per diagram, props { diagramId, subject?, nodeId? }
+  diagram: { title: 'Diagram', icon: 'diagram', size: [760, 680], component: DiagramWindow },
   // multi-instance: one window per story (or Listen, or a Tale's chapter), props { storyId, subject?, nodeId?, kind?, chapter? }
   // multi-instance: one window per browser, props { start? } (an address to open first)
   browser: { title: 'Browser', icon: 'globe', size: [900, 680], component: BrowserWindow },

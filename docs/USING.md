@@ -113,6 +113,8 @@ The buttons beside it rewrite the page you are on:
 | **Image** | Draws a picture of the whole page (see [Pictures](#pictures)). |
 | **Video** | Makes a short clip of the whole page (see [Video](#video)). |
 | **Map** | Pins the places the page names on a map (see [Maps](#maps)). |
+| **Timeline** | Puts the dates the page names on a timeline (see [Timelines](#timelines)). |
+| **Diagram** | Draws a labelled diagram of how the page's subject works (see [Diagrams](#diagrams)). |
 | **Listen** | Reads the page aloud (see [Stories](#stories-and-listening)). |
 | **Story** | Retells the page as a short illustrated, narrated story. |
 
@@ -406,6 +408,49 @@ so the pin lands on the right one. If web search is on in your tier, Wikipedia a
 online fill the gaps, for example for counties and regions whose articles carry no coordinates.
 
 To set the map up, see [RUNNING.md](RUNNING.md#maps).
+
+## Timelines
+
+Click **Timeline** in a page's header. The fast model reads the page (and, for a grounded page,
+its sources again) for the events it dates, and a **Timeline window** shows them on an axis:
+
+- A year is a point; a span ("1277 to 1283", "the 12th century", "the 1640s") is a bar. Dates
+  before the common era work too ("300 BC"). "c." and "about" dates are marked as approximate.
+- Labels stack in rows so they never overlap. **Zoom** with the + and − buttons, the + and − keys
+  or ctrl + wheel; **pan** with the arrow keys or by dragging; **Fit** (or 0) shows every event.
+  A plain wheel scrolls a tall timeline.
+- **Click an event** to open a page about it (shift-click or middle-click for a new reader).
+- **All my timelines** puts every page's latest timeline on one axis, coloured by page, with a
+  legend. **Again** reads the dates afresh.
+- A page that dates nothing says "No dated events on this page". Primer never guesses a date the
+  page doesn't give, though a small model can pin a date to the wrong event: the page is the
+  authority.
+
+You can also type a request such as "timeline of the Wars of the Roses" or "the Tudors on a
+timeline". Primer opens the page and its timeline together.
+
+![All my timelines: eleven events from two pages on one axis from 1000 to 1500, a bar for the late 11th century when William the Conqueror ordered a motte-and-bailey castle at Caernarfon, the founding of Caernarfonshire in 1284, and the Wars of the Roses from St Albans in 1455 to the Tudor dynasty in 1485, with a legend for the two pages](screenshots/timeline-lens.webp)
+
+## Diagrams
+
+Click **Diagram** in a page's header for a labelled, black-on-cream line drawing of how the
+page's subject works: the parts of a trebuchet, the vessels of a water clock, the path of water
+through a siphon. The writing model draws it as SVG; it takes a GPU turn like a page.
+
+- **Click a label** (on the drawing or in the list under it) to open a page about that part.
+- **Zoom** with the + and − buttons or ctrl + wheel (scroll to move around), **Fit** to see it all.
+  **Again** draws a new one.
+- The caption under it says in a sentence what the drawing shows.
+- On a branch fork, **Diagram** draws just that phrase. Or type "diagram of a trebuchet", "draw
+  me a diagram of a water clock" or "show me a diagram of how a siphon works".
+
+Diagrams are schematic: boxes, lines, arrows and labels, as good as the writing model's sense of
+the machine. A small model's drawing can be muddled or physically wrong; **Again** often helps.
+Every drawing is checked twice before it is shown (on the server and again in the window): only
+plain shapes, text and arrowheads are kept, and nothing in it can run code, load anything or
+link anywhere.
+
+![The Diagram window for a water clock: a source vessel feeding a larger vessel with its water level and time markings, an arrowhead on the flow, the caption "The diagram illustrates the basic principle of a water clock where regulated water flow through a vessel allows observers to track the passage of time against markings", and clickable label buttons for each part](screenshots/diagram-lens.webp)
 
 ## Stories and listening
 

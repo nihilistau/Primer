@@ -335,3 +335,58 @@
 .tl-hero { margin-bottom: var(--sp-3); }
 .tl-hero-name { font: 600 var(--fs-13)/1.4 var(--font-ui); color: var(--text-1); }
 .tl-hero-line { font: 400 var(--fs-13)/1.5 var(--font-voice); color: var(--text-1); margin-top: var(--sp-1); }
+
+/* the Timeline window (Phase 12) */
+.tmw { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface-1); }
+.tmw-top, .dg-top { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--hair); }
+.tmw-label, .dg-status { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); display: flex; align-items: center; gap: var(--sp-2); }
+.tmw-label-err, .tmw-err, .dg-status-err, .dg-err, .dg-note-err { color: var(--err); }
+.tmw-err, .dg-err { font: 400 var(--fs-12)/1.4 var(--font-ui); padding: var(--sp-1) var(--sp-3); }
+.tmw-tools, .dg-tools { display: flex; align-items: center; gap: var(--sp-1); flex-wrap: wrap; }
+.tmw-stage { position: relative; flex: 1; min-height: 120px; overflow-x: hidden; overflow-y: auto; background: var(--surface-0);
+  cursor: grab; touch-action: pan-y; outline: none; }
+.tmw-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-dim); }
+.tmw-stage:active { cursor: grabbing; }
+.tmw-svg { display: block; user-select: none; }
+.tmw-tick line { stroke: var(--hair); stroke-width: 1; }
+.tmw-tick text { fill: var(--text-3); font: 400 var(--fs-11)/1 var(--font-ui); }
+.tmw-axis { stroke: var(--hair-strong); stroke-width: 1; }
+.tmw-ev { --tmw-c: var(--accent); cursor: pointer; outline: none; }
+.tmw-pin { fill: var(--surface-1); stroke: var(--tmw-c); stroke-width: 2; }
+.tmw-approx { fill: var(--tmw-c); fill-opacity: .14; stroke: none; }
+.tmw-range { fill: var(--tmw-c); fill-opacity: .55; stroke: none; }
+.tmw-ev-label { fill: var(--text-1); font: 400 var(--fs-12)/1 var(--font-ui); }
+.tmw-ev:hover .tmw-pin, .tmw-ev:focus-visible .tmw-pin { fill: var(--tmw-c); }
+.tmw-ev:hover .tmw-ev-label, .tmw-ev:focus-visible .tmw-ev-label { fill: var(--warm); text-decoration: underline; }
+.tmw-note, .dg-note { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%;
+  padding: var(--sp-2) var(--sp-3); background: rgba(var(--surface-1-rgb), .9); border: 1px solid var(--hair-strong);
+  border-radius: var(--r-sm); color: var(--text-2); font: 400 var(--fs-13)/1.4 var(--font-ui); text-align: center; pointer-events: none; }
+.tmw-legend { list-style: none; margin: 0; padding: var(--sp-2) var(--sp-3); display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3);
+  border-top: 1px solid var(--hair); max-height: 84px; overflow-y: auto; font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-2); }
+.tmw-legend li { display: flex; align-items: center; gap: var(--sp-1); }
+.tmw-swatch { width: 10px; height: 10px; border-radius: 50%; background: var(--tmw-c, var(--accent)); flex: none; }
+/* All my timelines: a page's colour */
+.tmw-c0 { --tmw-c: var(--accent); }
+.tmw-c1 { --tmw-c: var(--warm); }
+.tmw-c2 { --tmw-c: var(--ok); }
+.tmw-c3 { --tmw-c: var(--an); }
+.tmw-c4 { --tmw-c: var(--feeling); }
+.tmw-c5 { --tmw-c: var(--recall); }
+.tmw-c6 { --tmw-c: var(--self-narrative); }
+.tmw-c7 { --tmw-c: var(--err-soft); }
+
+/* the Diagram window (Phase 12): the drawing is black on a light ground, as the model drew it */
+.dg { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface-1); }
+.dg-stage { position: relative; flex: 1; min-height: 160px; overflow: auto; background: var(--surface-0); padding: var(--sp-2); }
+.dg-paper { box-sizing: border-box; background: var(--card-face); border-radius: var(--r-sm); }
+.dg-paper:empty { background: none; }
+.dg-svg { display: block; }
+.dg-svg .dg-label { cursor: pointer; outline: none; }
+.dg-svg .dg-label:hover, .dg-svg .dg-label:focus-visible { fill: var(--card-red); text-decoration: underline; }
+.dg-caption { margin: 0; padding: var(--sp-2) var(--sp-3); font: 400 var(--fs-13)/1.5 var(--font-voice); color: var(--text-1);
+  border-top: 1px solid var(--hair); }
+.dg-parts { list-style: none; margin: 0; padding: var(--sp-1) var(--sp-3) var(--sp-2); display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.dg-part { padding: 2px var(--sp-2); background: var(--surface-2); border: 1px solid var(--hair-strong); border-radius: var(--r-pill);
+  color: var(--text-1); font: 400 var(--fs-12)/1.4 var(--font-ui); cursor: pointer; }
+.dg-part:hover, .dg-part:focus-visible { border-color: var(--warm); color: var(--warm); outline: none; }

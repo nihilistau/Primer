@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 let impl
 vi.mock('../api.js', () => ({ intent: (...a) => impl(...a) }))
+import { timelineButton, timelineChecking, timelineCheckFailed, diagramButton, diagramChecking, diagramCheckFailed } from './imageRoute.js'
 import { routePrompt, storyButton, storyChecking, mapButton, typedMapBody, imageButton, thumbState, imageChecking, imageCheckFailed } from './imageRoute.js'
 
 beforeEach(() => { impl = null })
@@ -113,5 +114,38 @@ describe('storyButton', () => {
     expect(storyButton(null).enabled).toBe(false)
     expect(storyButton({ voice_available: { ok: false } }).reason).toBeTruthy()
     expect(storyChecking.enabled).toBe(false)
+  })
+})
+
+describe('timeline and diagram requests', () => {
+  it('routes a timeline request to the subject as a typed page, then its timeline', async () => {
+    impl = async () => ({ image: null, video: null, map: null, story: null, timeline: 'the Tudors', diagram: null })
+    expect(await routePrompt('timeline of the Tudors', { nodeId: 'n1' }))
+      .toEqual({ kind: 'timeline', body: { concept: 'the Tudors', via: 'typed', from_id: 'n1' } })
+    expect(await routePrompt('timeline of the Tudors', { nodeId: null }))
+      .toEqual({ kind: 'timeline', body: { concept: 'the Tudors', via: 'typed' } })
+  })
+  it('routes a diagram request to the subject as a typed page, then its diagram, before anything else', async () => {
+    impl = async () => ({ image: 'x', video: null, map: 'y', story: 'z', timeline: 'w', diagram: 'a trebuchet' })
+    expect(await routePrompt('diagram of a trebuchet', { nodeId: 'n1' }))
+      .toEqual({ kind: 'diagram', body: { concept: 'a trebuchet', via: 'typed', from_id: 'n1' } })
+  })
+  it('a timeline outranks a story or a map, as the server checks them', async () => {
+    impl = async () => ({ map: 'Rome', story: 'Rome', timeline: 'Rome' })
+    expect((await routePrompt('Rome timeline', {})).kind).toBe('timeline')
+  })
+  it('timelineButton and diagramButton read their availability with the reason', () => {
+    expect(timelineButton({ timeline_available: { ok: true, reason: '' } })).toEqual({ enabled: true, reason: '' })
+    expect(timelineButton({ timeline_available: { ok: false, reason: 'No fast model in this tier' } }))
+      .toEqual({ enabled: false, reason: 'No fast model in this tier' })
+    expect(timelineButton({}).reason).toMatch(/not available/)
+    expect(diagramButton({ diagram_available: { ok: true, reason: '' } })).toEqual({ enabled: true, reason: '' })
+    expect(diagramButton({ diagram_available: { ok: false, reason: 'No writing model' } }))
+      .toEqual({ enabled: false, reason: 'No writing model' })
+    expect(diagramButton(null).enabled).toBe(false)
+    expect(timelineChecking.enabled).toBe(false)
+    expect(diagramCheckFailed(new Error('down')).reason).toMatch(/down/)
+    expect(timelineCheckFailed(new Error('down')).reason).toMatch(/down/)
+    expect(diagramChecking.checking).toBe(true)
   })
 })

@@ -47,6 +47,13 @@ looking the same, and read aloud.
 
 ![The Tale window: two chapters of "Wren and the Whirring Works of Oakhaven Keep", each with the pages it drew on and a summary, and the story bible with Wren and her look](docs/screenshots/tale.webp)
 
+**Timelines and diagrams.** Click **Timeline** and the dates a page names are laid out on an
+axis you can zoom and pan, with spans for centuries and reigns; **All my timelines** puts
+everything you've read on one axis. Click **Diagram** for a labelled line drawing of how a thing
+works. Click an event or a label to read about it.
+
+![All my timelines: events from a page on Caernarfon Castle and a page on the Wars of the Roses on one axis from 1000 to 1500, with a bar for the late 11th century and a legend for the two pages](docs/screenshots/timeline-lens.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -215,10 +222,10 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.11**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+This is **v0.12**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
 web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
-model, Test me, Review, the Quest and the continuing Tale work.
-Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): timeline and diagram lenses. The
+model, Test me, Review, the Quest, the continuing Tale, timelines and diagrams work.
+Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): your book, an EPUB of your trail. The
 design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

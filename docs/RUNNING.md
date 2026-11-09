@@ -545,6 +545,44 @@ the bible update is checked field by field.
 Routes: `GET /v1/tales`; `POST /v1/tales` (start), `/open`, `/next`, `/edit`, `/retry-update`.
 `GET /v1/stories/<id>` gives a chapter's `tale: {id, title, n}`.
 
+## Timelines and diagrams
+
+See [USING.md](USING.md#timelines). **Timelines** need the fast model (Timeline is greyed out
+with the reason when the tier has none). The fast model lists the page's dated events as JSON
+(the page up to 8000 characters, a grounded page's sources read again up to 4000, with a
+20-second budget for re-reading them); Primer normalises each date itself (day, month, year,
+decade, century or millennium; years −10000 to 2100; at most 40 events, labels 120 characters)
+and orders them. A small fast model often thinks aloud before its answer: Primer skips citation
+marks like `[1]` in the chatter and reads the list (or run of one-event lists) with the most
+events, the last of equally full ones, so a quoted format line or example, a shorter draft
+before the answer, or one event quoted again after it, doesn't replace it (a longer draft
+does, keeping any event the model then took back). Placeholder labels such as `...`
+and the prompt's own example events are dropped, and the model's year for a date is used only
+when the date text names one. An answer it can't read is asked once more of the writing model,
+inside a GPU page turn. Only an answer that is just `[]` means nothing is dated.
+
+**Diagrams** use the writing model at the GPU gate (max 4000 tokens, one retry if the drawing
+can't be used). The SVG is rebuilt from an allowlist: plain shapes, paths, text, groups and
+arrow markers; no scripts, styles, images, links, `use`, `foreignObject` or outside `url()`;
+numbers −2000 to 3000; at most 80 elements and 60 KB; a 1000 × 700 view box; ids prefixed per
+diagram. It needs at least 3 labels (60 characters each) and a caption of up to 200. The
+Diagram window checks the drawing again in the browser with the same element and attribute
+allowlist before adding it
+to the page, and never uses `innerHTML`.
+
+Both are kept in the graph database (`timelines` with `timeline_events`, and `diagrams`) and
+listed with the page; unfinished jobs are marked failed when Primer restarts.
+
+Routes: `POST /v1/timelines {node_id}`, `GET /v1/timelines/<id>`, `GET /v1/timelines?all=1`
+(every page's latest finished timeline), `POST /v1/timelines/<id>/again`; `POST /v1/diagrams
+{node_id, phrase?}`, `GET /v1/diagrams/<id>`, `POST /v1/diagrams/<id>/again`. `/v1/intent` now
+always answers with `{image, video, map, story, timeline, diagram}`.
+
+Measured on the local-gpu tier (LFM3 1.7B on the CPU as the fast model, gemma-4-E4B on an RTX
+2060): a timeline in 10 to 30 seconds, or about 100 when the fast model thinks aloud to its
+2000-token limit; a diagram in 12 to 20 seconds. Right after start, a timeline asked for before
+the fast model has loaded fails with "HTTP 503"; **Again** works once it's up.
+
 ## Thinking ahead
 
 Phase 8 drafts the likely next page on the idle GPU (spec:

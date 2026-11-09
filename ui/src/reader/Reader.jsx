@@ -4,14 +4,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { mediaUrl, videoUrl } from '../api.js'
-import { MEDIA_EVENT, OPEN_PLACE_EVENT, openImageWindow, openMapWindow, openStoryWindow, openVideoWindow } from '../openImage.js'
+import { MEDIA_EVENT, OPEN_PLACE_EVENT, openDiagramWindow, openImageWindow, openMapWindow, openStoryWindow, openTimelineWindow, openVideoWindow } from '../openImage.js'
 import * as wm from '../windowManager.js'
 import { Button, Chip, Input, State } from '../kit/parts.jsx'
 import { Icon } from '../kit/icons.jsx'
 import BranchFork from '../fork/BranchFork.jsx'
 import { Markdown } from './markdown.jsx'
 import { createHistory } from './history.js'
-import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState, storyButton, storyChecking, storyCheckFailed } from './imageRoute.js'
+import { routePrompt, imageButton, imageChecking, imageCheckFailed, mapButton, typedMapBody, mapChecking, mapCheckFailed, thumbState, storyButton, storyChecking, storyCheckFailed,
+         timelineButton, timelineChecking, timelineCheckFailed, diagramButton, diagramChecking, diagramCheckFailed } from './imageRoute.js'
 import { videoButton, videoChecking, videoCheckFailed } from '../apps/videoJob.js'
 import { safeHref } from './citations.js'
 import { openBrowser } from '../openBrowser.js'
@@ -45,11 +46,14 @@ export default function Reader({ windowId, start, onPick }) {
   const promptRef = useRef(null)
   const [fork, setFork] = useState(null)       // {phrase, anchor, container, node, key} while the fork is open
   nodeRef.current = view.nodeId
-  const [media, setMedia] = useState({ node: null, items: [], maps: [], stories: [] })   // this page's images, videos, maps and stories
+  // this page's images, videos, maps, stories, timelines and diagrams
+  const [media, setMedia] = useState({ node: null, items: [], maps: [], stories: [], timelines: [], diagrams: [] })
   const [imgBtn, setImgBtn] = useState(imageChecking)
   const [mapBtn, setMapBtn] = useState(mapChecking)
   const [vidBtn, setVidBtn] = useState(videoChecking)
   const [storyBtn, setStoryBtn] = useState(storyChecking)
+  const [timelineBtn, setTimelineBtn] = useState(timelineChecking)
+  const [diagramBtn, setDiagramBtn] = useState(diagramChecking)
   const [imgErr, setImgErr] = useState('')
   const [errTitle, setErrTitle] = useState('No image')
   const [mediaErr, setMediaErr] = useState('')
@@ -157,6 +161,9 @@ export default function Reader({ windowId, start, onPick }) {
     else if (r.kind === 'map') run(r.body, 'push', (id) => makeMap(typedMapBody(id, r.body.concept)))
     // a typed story request: the topic's page first, then its story once the page is written
     else if (r.kind === 'story') run(r.body, 'push', (id) => makeStory(id, 'story', r.body.concept))
+    // a typed timeline or diagram request: the subject's page first, then its timeline or diagram
+    else if (r.kind === 'timeline') run(r.body, 'push', (id) => makeTimeline(id, r.body.concept))
+    else if (r.kind === 'diagram') run(r.body, 'push', (id) => makeDiagram({ node_id: id, subject: r.body.concept }))
     else run(r.body)
   }
 
@@ -205,12 +212,44 @@ export default function Reader({ windowId, start, onPick }) {
     } finally { makingStory.current = false }
   }
 
+  /* Create a timeline of a page; the Timeline window opens only on success. */
+  const makingTimeline = useRef(false)
+  const makeTimeline = async (nodeId, subject) => {
+    if (makingTimeline.current) return          // a double click must not start two
+    makingTimeline.current = true
+    setImgErr('')
+    try {
+      const r = await api.createTimeline(nodeId)
+      openTimelineWindow(r.id, subject, nodeId)
+    } catch (e) {
+      setErrTitle('No timeline')
+      setImgErr(e.message || 'The timeline could not be started.')
+    } finally { makingTimeline.current = false }
+  }
+
+  /* Create a diagram of a page, or of a phrase on it ({node_id, phrase?, subject}); the Diagram
+   * window opens only on success. */
+  const makingDiagram = useRef(false)
+  const makeDiagram = async ({ subject, ...body }) => {
+    if (makingDiagram.current) return           // a double click must not start two
+    makingDiagram.current = true
+    setImgErr('')
+    try {
+      const r = await api.createDiagram(body)
+      openDiagramWindow(r.id, subject, body.node_id)
+    } catch (e) {
+      setErrTitle('No diagram')
+      setImgErr(e.message || 'The diagram could not be started.')
+    } finally { makingDiagram.current = false }
+  }
+
   const loadMedia = useCallback(async (id) => {
     if (!id) return
     try {
       const p = await api.page(id)
       if (id !== nodeRef.current) return              // the reader moved on: this page's images are stale
-      setMedia({ node: id, items: p.media || [], maps: p.maps || [], stories: p.stories || [] }); setMediaErr('')
+      setMedia({ node: id, items: p.media || [], maps: p.maps || [], stories: p.stories || [],
+                 timelines: p.timelines || [], diagrams: p.diagrams || [] }); setMediaErr('')
     } catch (e) {
       if (id === nodeRef.current) setMediaErr(`Couldn't refresh this page's images: ${e.message || 'Primer did not answer.'}`)
     }
@@ -224,7 +263,9 @@ export default function Reader({ windowId, start, onPick }) {
   const mediaItems = media.node === view.nodeId ? media.items : []
   const mapItems = media.node === view.nodeId ? media.maps : []
   const storyItems = media.node === view.nodeId ? media.stories : []
-  const unfinished = mediaItems.concat(mapItems, storyItems).some(m => thumbState(m) === 'busy')
+  const timelineItems = media.node === view.nodeId ? media.timelines : []
+  const diagramItems = media.node === view.nodeId ? media.diagrams : []
+  const unfinished = mediaItems.concat(mapItems, storyItems, timelineItems, diagramItems).some(m => thumbState(m) === 'busy')
   useEffect(() => { if (view.nodeId && !view.streaming) loadMedia(view.nodeId) }, [view.nodeId, view.streaming, loadMedia])
   useEffect(() => {
     if (!unfinished) return
@@ -263,8 +304,8 @@ export default function Reader({ windowId, start, onPick }) {
   useEffect(() => { if (view.streaming) setTesting(null) }, [view.streaming])
   useEffect(() => {
     let live = true
-    api.status().then(st => { if (live) { setStatus(st); setBrowseOk(!!(st.browse_available && st.browse_available.ok)); setBrowseWeb(!!(st.browse_available && st.browse_available.web)); setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)) } })
-      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)); setStoryBtn(storyCheckFailed(e)) } })
+    api.status().then(st => { if (live) { setStatus(st); setBrowseOk(!!(st.browse_available && st.browse_available.ok)); setBrowseWeb(!!(st.browse_available && st.browse_available.web)); setImgBtn(imageButton(st)); setVidBtn(videoButton(st)); setMapBtn(mapButton(st)); setStoryBtn(storyButton(st)); setTimelineBtn(timelineButton(st)); setDiagramBtn(diagramButton(st)) } })
+      .catch(e => { if (live) { setImgBtn(imageCheckFailed(e)); setVidBtn(videoCheckFailed(e)); setMapBtn(mapCheckFailed(e)); setStoryBtn(storyCheckFailed(e)); setTimelineBtn(timelineCheckFailed(e)); setDiagramBtn(diagramCheckFailed(e)) } })
     return () => { live = false }
   }, [view.nodeId])
 
@@ -325,6 +366,11 @@ export default function Reader({ windowId, start, onPick }) {
     const phrase = fork.phrase, node = fork.node
     closeFork()
     makeMap({ node_id: node, phrase, subject: phrase })
+  }
+  const forkDiagram = () => {
+    const phrase = fork.phrase, node = fork.node
+    closeFork()
+    makeDiagram({ node_id: node, phrase, subject: phrase })
   }
   const forkStory = () => {
     const phrase = fork.phrase, node = fork.node
@@ -439,6 +485,14 @@ export default function Reader({ windowId, start, onPick }) {
                   title={mapBtn.enabled ? 'Show the places this page names on a map' : mapBtn.reason}
                   aria-label={mapBtn.enabled ? 'Map' : `Map (unavailable: ${mapBtn.reason})`}
                   onClick={() => makeMap({ node_id: view.nodeId, subject: view.title })}>Map</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !timelineBtn.enabled}
+                  title={timelineBtn.enabled ? 'Put the dates this page names on a timeline' : timelineBtn.reason}
+                  aria-label={timelineBtn.enabled ? 'Timeline' : `Timeline (unavailable: ${timelineBtn.reason})`}
+                  onClick={() => makeTimeline(view.nodeId, view.title)}>Timeline</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming || !diagramBtn.enabled}
+                  title={diagramBtn.enabled ? 'Draw a labelled diagram of how this works' : diagramBtn.reason}
+                  aria-label={diagramBtn.enabled ? 'Diagram' : `Diagram (unavailable: ${diagramBtn.reason})`}
+                  onClick={() => makeDiagram({ node_id: view.nodeId, subject: view.title })}>Diagram</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !storyBtn.enabled}
                   title={storyBtn.enabled ? 'Read this page aloud' : storyBtn.reason}
                   aria-label={storyBtn.enabled ? 'Listen' : `Listen (unavailable: ${storyBtn.reason})`}
@@ -468,8 +522,8 @@ export default function Reader({ windowId, start, onPick }) {
             {view.grounding && !view.markdown ? <div className="rd-grounding" role="status">{view.grounding}</div> : null}
             <Markdown source={view.markdown} phrases={view.phrases} sources={view.sources} onPhrase={pick} onSource={openSource} />
             {view.streaming && !view.error ? <div className="rd-writing"><Chip busy tone="accent">{view.waiting ? 'paused for a picture or video' : 'writing…'}</Chip></div> : null}
-            {mediaItems.length || mapItems.length || storyItems.length ? (
-              <ul className="rd-strip" aria-label="Images, videos, maps and stories on this page">
+            {mediaItems.length || mapItems.length || storyItems.length || timelineItems.length || diagramItems.length ? (
+              <ul className="rd-strip" aria-label="Images, videos, maps, stories, timelines and diagrams on this page">
                 {mediaItems.map(m => {
                   const video = m.kind === 'video', what = video ? 'Video' : 'Image'
                   const st = thumbState(m), url = st !== 'done' ? '' : video ? videoUrl(m.file) : mediaUrl(m.file)
@@ -523,6 +577,39 @@ export default function Reader({ windowId, start, onPick }) {
                     </li>
                   )
                 })}
+                {timelineItems.map(m => {
+                  const st = thumbState(m)
+                  const n = st === 'done' && typeof m.event_count === 'number' ? m.event_count : null
+                  return (
+                    <li key={m.id}>
+                      <button type="button" className={`rd-thumb rd-thumb-map rd-thumb-${st}`}
+                              title={n === null ? 'Timeline of this page' : `Timeline: ${n} ${n === 1 ? 'event' : 'events'}`}
+                              aria-label={`Timeline: ${view.title || 'this page'} (${st === 'busy' ? 'in progress' : st})`}
+                              onClick={() => openTimelineWindow(m.id, view.title, m.node_id || view.nodeId)}>
+                        <span className="rd-thumb-glyph" aria-hidden="true">
+                          {st === 'busy' ? <span className="ui-spin" /> : st === 'failed' ? '✕' : <Icon name="timeline" size={32} />}
+                        </span>
+                      </button>
+                      <span className="rd-thumb-cap">Timeline</span>
+                    </li>
+                  )
+                })}
+                {diagramItems.map(m => {
+                  const st = thumbState(m)
+                  return (
+                    <li key={m.id}>
+                      <button type="button" className={`rd-thumb rd-thumb-map rd-thumb-${st}`}
+                              title={m.caption || m.phrase || 'Diagram of this page'}
+                              aria-label={`Diagram: ${m.phrase || view.title || 'this page'} (${st === 'busy' ? 'in progress' : st})`}
+                              onClick={() => openDiagramWindow(m.id, m.phrase || view.title, m.node_id || view.nodeId)}>
+                        <span className="rd-thumb-glyph" aria-hidden="true">
+                          {st === 'busy' ? <span className="ui-spin" /> : st === 'failed' ? '✕' : <Icon name="diagram" size={32} />}
+                        </span>
+                      </button>
+                      <span className="rd-thumb-cap">{m.phrase || 'Diagram'}</span>
+                    </li>
+                  )
+                })}
               </ul>
             ) : null}
             {view.sources.length && !view.streaming ? (
@@ -556,7 +643,7 @@ export default function Reader({ windowId, start, onPick }) {
         {fork ? (
           <div className="rd-fork" style={{ left: fork.at.x, top: fork.at.y }}>
             <BranchFork key={fork.key} anchor={fork.anchor} container={fork.container} node={fork.node}
-                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onMap={forkMap} onStory={forkStory} onClose={closeFork} />
+                        phrase={fork.phrase} onChoose={choose} onAction={act} onImage={forkImage} onVideo={forkVideo} onMap={forkMap} onDiagram={forkDiagram} onStory={forkStory} onClose={closeFork} />
           </div>
         ) : null}
       </div>
