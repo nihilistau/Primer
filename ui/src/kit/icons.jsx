@@ -68,6 +68,9 @@ export const GLYPHS = {
   timeline: ['M3.5 16.5h17M7 16.5V11M14 16.5V7.5M3.5 14.5v4M20.5 14.5v4', 'M7 11h4.5M14 7.5h5'],
   // two parts joined by a line, its arrowhead the detail (Phase 12, the Diagram window)
   diagram: ['M4 5h6.5v5H4zM13.5 14h6.5v5h-6.5zM7.25 10v6.5h4.5', 'M10.5 14.5l2 2-2 2'],
+  // a closed book with its spine and a ribbon marker as the detail (Phase 13, the Book window)
+  book: ['M6.5 3.5h11a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1.5-1.5zM8.5 3.5v17',
+         'M13 3.5v6l1.75-1.5 1.75 1.5v-6'],
   // the Reader's history arrows (Task 9): a chevron, its shaft as the detail
   back: ['M14.5 6l-6 6 6 6', 'M9 12h10'],
   forward: ['M9.5 6l6 6-6 6', 'M15 12H5'],

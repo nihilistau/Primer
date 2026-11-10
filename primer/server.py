@@ -42,6 +42,8 @@ from primer.images.prompting import match_image_request, match_video_request
 from primer.images.scan import scan_folder_capped
 from primer.images.service import (KINDS, NO_ANIMATE_MODEL, NOT_CONFIGURED, SHUT_DOWN_REASON,
                                    ImageService)
+from primer.book.service import (SHUT_DOWN as BOOKS_SHUT_DOWN, BookBusy, BookService,
+                                 BookTooBig)
 from primer.diagrams.intent import match_diagram_request
 from primer.diagrams.service import SHUT_DOWN as DIAGRAMS_SHUT_DOWN
 from primer.diagrams.service import DiagramService
@@ -110,6 +112,9 @@ NO_REFERENCE = "No [reference] section in this tier"
 REFERENCE_DOWN = "The reference server isn't running"
 NO_BROWSE = "Web is off in this tier and there is no offline encyclopedia"
 BROWSE_REFERENCE_DOWN = "Web is off in this tier and the offline encyclopedia isn't running"
+BOOK_TYPES = {"epub": "application/epub+zip", "html": "text/html; charset=utf-8"}
+BOOK_HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store",
+                "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'"}
 IMAGE_HEADERS = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
                  "Cache-Control": "max-age=3600"}
 WEB_OFF = "Web search is off in this tier"
@@ -214,6 +219,7 @@ class App:
     tales: TaleService | None = None  # the Tale; made over the graph and stories when not passed
     timelines: TimelineService | None = None  # the Timeline lens; made over the graph when not passed
     diagrams: DiagramService | None = None  # the diagram lens; made over the graph when not passed
+    books: BookService | None = None  # your book; made over the graph when not passed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -292,6 +298,9 @@ class App:
             # switch builds a new PageService, engines and gate), so the service outlives it
             self.diagrams = DiagramService(self.graph, lambda: getattr(self.pages, "text", None),
                                            lambda: getattr(self.pages, "gate", None))
+        if self.books is None:
+            # the map file is read through the app when a job starts (a tier switch changes it)
+            self.books = BookService(self.graph, self.var_dir, self.book_archive)
         if self.browse is None:
             self.browse = self.make_browse(self.tier)
         self._thinking = self.saved_thinking_ahead()
@@ -509,6 +518,18 @@ class App:
             return {"ok": False, "reason": DIAGRAMS_SHUT_DOWN}
         return self.diagrams.available()
 
+    def shutdown_books(self, reason: str = BOOKS_SHUT_DOWN) -> None:
+        """Stop the book job; an unfinished book fails with `reason`."""
+        if self.books is not None:
+            self.books.shutdown(reason)
+
+    def book_archive(self) -> Archive | None:
+        """The tier's map file for a book's map plates, or None: plain plates."""
+        try:
+            return self.map_archive()
+        except PMTilesError:
+            return None
+
     def _close_archive(self) -> None:
         with self._map_lock:
             archive, self._archive = self._archive, None
@@ -664,6 +685,7 @@ class App:
                 "timeline_available": self.timeline_available(),
                 "voice_available": self.voice_available(),
                 "diagram_available": self.diagram_available(),
+                "book_available": {"ok": True, "reason": ""},  # a book needs no model and no GPU
                 "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""},
                 "thinking_ahead": {**(self.drafter.status() if self.drafter is not None else {}),
                                    "setting": self.thinking_ahead()}}
@@ -988,6 +1010,12 @@ def _make_handler(app: App):
                         self._json({"error": "not found"}, 404)
                     else:
                         self._json(diagram)
+                elif path == "/v1/books":
+                    self._json({"books": app.books.list()})
+                elif path == "/v1/books/pages":  # the read pages a branch book can start from
+                    self._json({"pages": app.graph.read_pages()})
+                elif path.startswith("/v1/books/"):
+                    self._book_get(path[len("/v1/books/"):])
                 elif path.startswith("/v1/maps/") and "/" not in path[len("/v1/maps/"):]:
                     job = app.maps.get(unquote(path[len("/v1/maps/"):]))
                     if job is None:
@@ -1090,6 +1118,14 @@ def _make_handler(app: App):
                     self._create_diagram(body)
                 elif path.startswith("/v1/diagrams/") and path.endswith("/again"):
                     self._again_diagram(unquote(path[len("/v1/diagrams/"):-len("/again")]))
+                elif path == "/v1/books/preview":
+                    self._preview_book(body)
+                elif path == "/v1/books":
+                    self._create_book(body)
+                elif path.startswith("/v1/books/") and path.endswith("/delete"):
+                    if not app.books.delete(unquote(path[len("/v1/books/"):-len("/delete")])):
+                        raise _HttpError(404, "not found")
+                    self._json({"deleted": True})
                 elif path == "/v1/maps":
                     self._create_map(body)
                 elif path.startswith("/v1/maps/") and path.endswith("/again"):
@@ -1698,6 +1734,74 @@ def _make_handler(app: App):
             except ValueError as e:
                 raise _HttpError(409 if str(e) == MAPS_SHUT_DOWN else 404, str(e)) from None
             self._json({"id": mid}, 202)
+
+        # books
+        def _book_get(self, rest: str) -> None:
+            """GET /v1/books/<id> (the row) or /v1/books/<id>/epub|html (the file to download)."""
+            book_id, _, fmt = unquote(rest).partition("/")
+            if not fmt:
+                book = app.books.get(book_id)
+                if book is None:
+                    raise _HttpError(404, "not found")
+                self._json(book)
+                return
+            target = app.books.path(book_id, fmt)
+            if target is None:
+                raise _HttpError(404, "not found")
+            try:
+                f = target.open("rb")
+                size = os.fstat(f.fileno()).st_size
+            except OSError:
+                raise _HttpError(404, "not found") from None
+            with f:
+                self.send_response(200)
+                self.send_header("Content-Type", BOOK_TYPES[fmt])
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="{app.books.download_name(book_id, fmt)}"')
+                for k, v in BOOK_HEADERS.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                left = size
+                while left > 0:
+                    chunk = f.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+                if left:  # the file shrank under us: the response can't be completed
+                    self.close_connection = True
+
+        def _book_request(self, body: dict) -> tuple:
+            if "scope" not in body:
+                raise _BadRequest("scope is required")
+            return body["scope"], body.get("include")
+
+        def _preview_book(self, body: dict) -> None:
+            """POST /v1/books/preview {scope, include}: {chapters, pictures, bytes, title}; 400."""
+            scope, include = self._book_request(body)
+            try:
+                self._json(app.books.preview(scope, include))
+            except ValueError as e:
+                raise _BadRequest(str(e)) from None
+
+        def _create_book(self, body: dict) -> None:
+            """POST /v1/books {scope, include, title?, by?}: 202 {id}; 400 a bad request, 404 an
+            unknown or unread branch page, 409 a book is being made, 413 too big."""
+            scope, include = self._book_request(body)
+            try:
+                book_id = app.books.create(scope, include, body.get("title"), body.get("by"))
+            except BookBusy as e:
+                raise _HttpError(409, str(e)) from None
+            except BookTooBig as e:
+                raise _HttpError(413, str(e)) from None
+            except ValueError as e:
+                if str(e) in ("unknown page", "that page was never read"):
+                    raise _HttpError(404, str(e)) from None
+                if str(e) == BOOKS_SHUT_DOWN:
+                    raise _HttpError(409, str(e)) from None
+                raise _BadRequest(str(e)) from None
+            self._json({"id": book_id}, 202)
 
         # timelines
         def _check_timeline(self) -> None:

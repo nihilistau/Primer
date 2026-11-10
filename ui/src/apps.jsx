@@ -16,6 +16,7 @@ import ReaderWindow from './apps/ReaderWindow.jsx'
 import ReviewWindow from './apps/ReviewWindow.jsx'
 import QuestWindow from './apps/QuestWindow.jsx'
 import TaleWindow from './apps/TaleWindow.jsx'
+import BookWindow from './apps/BookWindow.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -45,10 +46,12 @@ export const APPS = {
   quest: { title: 'Quest', icon: 'games', size: [600, 720], component: QuestWindow, single: true },
   // the continuing story: its chapters, the story bible, the next chapter (Phase 11)
   tale: { title: 'Tale', icon: 'journal', size: [640, 760], component: TaleWindow, single: true },
+  // your book: the trail as an EPUB and an HTML file, and the books made before (Phase 13)
+  book: { title: 'Book', icon: 'book', size: [620, 760], component: BookWindow, single: true },
 }
 
 /* the dock's buttons, in order */
-export const DOCK = ['reader', 'browser', 'graph', 'readermodel', 'review', 'quest', 'tale', 'engines', 'imagemodels', 'setup']
+export const DOCK = ['reader', 'browser', 'graph', 'readermodel', 'review', 'quest', 'tale', 'book', 'engines', 'imagemodels', 'setup']
 
 /* open an app through the window manager with its registry defaults */
 export function openApp(wm, appId, props) {

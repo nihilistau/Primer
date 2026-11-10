@@ -390,3 +390,40 @@
 .dg-part { padding: 2px var(--sp-2); background: var(--surface-2); border: 1px solid var(--hair-strong); border-radius: var(--r-pill);
   color: var(--text-1); font: 400 var(--fs-12)/1.4 var(--font-ui); cursor: pointer; }
 .dg-part:hover, .dg-part:focus-visible { border-color: var(--warm); color: var(--warm); outline: none; }
+
+/* the Book window (Phase 13) */
+.bkw { height: 100%; min-height: 0; overflow-y: auto; background: var(--surface-1); padding: var(--sp-2) var(--sp-3); }
+.bkw-sec { padding: var(--sp-3) 0; border-bottom: 1px solid var(--hair); display: flex; flex-direction: column; gap: var(--sp-2); }
+.bkw-sec:last-child { border-bottom: 0; }
+.bkw-h { font: 600 var(--fs-11)/1 var(--font-ui); letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); margin: 0; }
+.bkw-scopes, .bkw-includes { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+.bkw-scopes { flex-direction: column; flex-wrap: nowrap; border: 0; margin: 0; padding: 0; min-width: 0; }
+.bkw-scopes > legend { padding: 0; margin-bottom: var(--sp-2); }
+.bkw-radio, .bkw-check { display: inline-flex; align-items: center; gap: var(--sp-1); font: 400 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); }
+.bkw-field { display: flex; flex-direction: column; gap: 2px; font: 400 var(--fs-12)/1.3 var(--font-ui); color: var(--text-2); }
+.bkw-picker { display: flex; flex-direction: column; gap: var(--sp-1); }
+.bkw-pages { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; border: 1px solid var(--hair); border-radius: var(--r-sm);
+  background: var(--surface-0); }
+.bkw-page { display: block; width: 100%; text-align: left; padding: var(--sp-1) var(--sp-2); background: none; border: 0;
+  border-bottom: 1px solid var(--hair); color: var(--text-1); font: 400 var(--fs-13)/1.3 var(--font-ui); overflow-wrap: anywhere; }
+.bkw-page:hover, .bkw-page:focus-visible { background: var(--hover-tint); outline: none; }
+.bkw-page-sel { background: rgba(var(--accent-rgb), .14); color: var(--accent); }
+.bkw-page-note { color: var(--text-3); }
+.bkw-note { font: 400 var(--fs-12)/1.4 var(--font-ui); color: var(--text-3); }
+.bkw-preview { font: 500 var(--fs-13)/1.4 var(--font-ui); color: var(--text-1); }
+.bkw-make { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.bkw-progress { display: inline-flex; align-items: center; gap: var(--sp-2); font: 400 var(--fs-13)/1.3 var(--font-ui); color: var(--text-2); }
+.bkw-err { color: var(--err); font: 400 var(--fs-12)/1.4 var(--font-ui); }
+.bkw-dl { display: inline-flex; gap: var(--sp-3); flex-wrap: wrap; }
+.bkw-link { color: var(--accent); font: 500 var(--fs-13)/1.3 var(--font-ui); text-decoration: underline; }
+.bkw-link:hover, .bkw-link:focus-visible { color: var(--warm); }
+.bkw-books { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.bkw-book { padding: var(--sp-2) 0; border-bottom: 1px solid var(--hair); display: flex; flex-direction: column; gap: 2px; }
+.bkw-book:last-child { border-bottom: 0; }
+.bkw-book-top { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; }
+.bkw-book-title { font: 500 var(--fs-13)/1.3 var(--font-ui); color: var(--text-1); overflow-wrap: anywhere; }
+.bkw-book-date, .bkw-book-state { font: 400 var(--fs-11)/1.4 var(--font-ui); color: var(--text-3); }
+.bkw-book-date { margin-left: auto; }
+.bkw-book-state.bkw-err { color: var(--err); }
+.bkw-book-actions { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.bkw-confirm { display: inline-flex; align-items: center; gap: var(--sp-2); font: 400 var(--fs-12)/1.3 var(--font-ui); color: var(--text-1); }

@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.13.0: your book (2026-11-10)
+
+Your trail, bound as a book.
+
+### Added
+
+- **Book** (a button in the dock): make a book from what you've read. Choose everything, a page
+  and what branched from it, or everything since a date; set the title and the By line; switch
+  pictures, maps, timelines, diagrams and stories on or off. A preview line says how many
+  chapters and pictures, and about how big. The book is made in the background ("EPUB: chapter 12
+  of 40") and comes as an **EPUB 3** for e-readers and phones and a single **HTML** file for any
+  browser.
+- Each page you read is a chapter, in trail order, with a "From phrase in Parent page" line, the
+  page text, citations linked to a numbered Sources list, its pictures, each finished map drawn
+  as a plate from the offline world map with numbered pins and a list of places, its timeline as
+  a list of dates, and its diagram.
+- Stories and Tale chapters go in a Stories part, text only. The cover has the title, the By
+  line, the date range and the first picture. The contents follow the trail, at most 6 deep. A
+  closing note says what the limits left out.
+- Earlier books are listed in the window, can be downloaded again and can be deleted after a
+  confirm step. Books are kept in `var/books/`.
+- Routes: `GET /v1/books`, `GET /v1/books/pages`, `POST /v1/books/preview`, `POST /v1/books`,
+  `GET /v1/books/<id>` with `/epub` and `/html`, and `POST /v1/books/<id>/delete`.
+- A book needs no model and no GPU. The reader notes and profile, quiz items, quests and the
+  Tale's bible are never put in a book.
+
+### Measured
+
+On the local-gpu tier, with the real trail: everything was 42 chapters and 12 pictures, an EPUB
+of 26 MB and an HTML file of 62 MB, made in about 2 seconds. A branch from Trebuchet was 9
+chapters in about 1 second. Since 8 November without pictures was an EPUB of 19 KB and an HTML
+file of 33 KB. Every map plate was drawn from the world map in well under a second.
+
+### Known
+
+- The tests check the EPUB's structure, but epubcheck is not run on it.
+- A page with several finished maps gets a plate for each one.
+
 ## v0.12.0: timelines and diagrams (2026-11-09)
 
 Two more ways to look at a page.

@@ -117,6 +117,12 @@ _DIAGRAM_STATUSES = ("queued", "drawing", "done", "failed")
 _DIAGRAM_FINAL = ("done", "failed")
 _DIAGRAM_KEYS = ("id", "node_id", "n", "phrase", "status", "error", "caption", "created_at")
 _DIAGRAM_COLS = ", ".join(_DIAGRAM_KEYS)
+_BOOK_STATUSES = ("queued", "making", "done", "failed")
+_BOOK_FINAL = ("done", "failed")
+_BOOK_KEYS = ("id", "title", "params", "status", "error", "progress", "epub_size", "html_size",
+              "created_at", "updated_at")
+_BOOK_COLS = ("id, title, params_json, status, error, progress_json, epub_size, html_size, "
+              "created_at, updated_at")
 
 
 _SCHEMA = """
@@ -205,6 +211,10 @@ CREATE TABLE IF NOT EXISTS diagrams(
     phrase TEXT NOT NULL, status TEXT NOT NULL, error TEXT, svg TEXT NOT NULL, caption TEXT NOT NULL,
     labels_json TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS diagrams_node ON diagrams(node_id);
+CREATE TABLE IF NOT EXISTS books(
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, params_json TEXT NOT NULL, status TEXT NOT NULL,
+    error TEXT, progress_json TEXT, epub_size INTEGER, html_size INTEGER, created_at REAL NOT NULL,
+    updated_at REAL NOT NULL);
 """
 # columns added after a table first shipped: (table, column, definition)
 _ADDED_COLUMNS = (("tale_chapters", "bible_update", "TEXT NOT NULL DEFAULT 'done'"),)
@@ -396,6 +406,13 @@ class Graph:
             rows = self._db.execute(
                 f"SELECT {_MEDIA_COLS} FROM media WHERE node_id=? ORDER BY created_at, rowid",
                 (node_id,)).fetchall()
+        return [_media(r) for r in rows]
+
+    def done_media(self) -> list[Media]:
+        """Every finished picture or clip, oldest first (one query, for the book)."""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT {_MEDIA_COLS} FROM media WHERE status='done' ORDER BY created_at, rowid").fetchall()
         return [_media(r) for r in rows]
 
     def fail_unfinished_media(self, reason: str) -> int:
@@ -615,6 +632,70 @@ class Graph:
             cur = self._db.execute(
                 f"UPDATE diagrams SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
                 (reason, time.time(), *_DIAGRAM_FINAL))
+        return cur.rowcount
+
+    # books (Phase 13): the trail written out as an EPUB and an HTML file
+    def add_book(self, title: str, params: dict) -> str:
+        book_id = uuid.uuid4().hex[:16]
+        now = time.time()
+        with self._lock, self._db:
+            self._db.execute(
+                f"INSERT INTO books({_BOOK_COLS}) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (book_id, title, json.dumps(params), "queued", None, None, None, None, now, now))
+        return book_id
+
+    def update_book(self, id: str, status: str | None = None, error=_KEEP, progress: dict | None = None,
+                    epub_size: int | None = None, html_size: int | None = None) -> None:
+        """Change a book's status, error, progress or file sizes. Failed stays failed and done
+        stays done (a late writer can't revive or un-finish one); what isn't given is kept."""
+        if status is not None and status not in _BOOK_STATUSES:
+            raise ValueError(f"unknown book status {status!r}")
+        with self._lock, self._db:
+            row = self._db.execute("SELECT status, error, progress_json, epub_size, html_size FROM books "
+                                   "WHERE id=?", (id,)).fetchone()
+            if row is None:
+                raise ValueError(f"unknown book {id!r}")
+            if row[0] == "failed" and status != "failed":
+                return
+            if row[0] == "done" and status == "failed":
+                return
+            self._db.execute(
+                "UPDATE books SET status=?, error=?, progress_json=?, epub_size=?, html_size=?, "
+                "updated_at=? WHERE id=?",
+                (status or row[0], row[1] if error is _KEEP else error,
+                 row[2] if progress is None else json.dumps(progress),
+                 row[3] if epub_size is None else int(epub_size),
+                 row[4] if html_size is None else int(html_size), time.time(), id))
+
+    @staticmethod
+    def _book(row) -> dict:
+        out = dict(zip(_BOOK_KEYS, row))
+        out["params"] = json.loads(out["params"])
+        out["progress"] = json.loads(out["progress"]) if out["progress"] else None
+        return out
+
+    def get_book(self, id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute(f"SELECT {_BOOK_COLS} FROM books WHERE id=?", (id,)).fetchone()
+        return self._book(row) if row else None
+
+    def list_books(self) -> list[dict]:
+        """Every book, newest first."""
+        with self._lock:
+            rows = self._db.execute(f"SELECT {_BOOK_COLS} FROM books ORDER BY created_at DESC, rowid DESC"
+                                    ).fetchall()
+        return [self._book(r) for r in rows]
+
+    def delete_book(self, id: str) -> bool:
+        with self._lock, self._db:
+            return self._db.execute("DELETE FROM books WHERE id=?", (id,)).rowcount > 0
+
+    def fail_unfinished_books(self, reason: str) -> int:
+        marks = ",".join("?" * len(_BOOK_FINAL))
+        with self._lock, self._db:
+            cur = self._db.execute(
+                f"UPDATE books SET status='failed', error=?, updated_at=? WHERE status NOT IN ({marks})",
+                (reason, time.time(), *_BOOK_FINAL))
         return cur.rowcount
 
     # stories
@@ -1229,6 +1310,17 @@ class Graph:
                 "SELECT n.title FROM nodes n JOIN edges e ON e.to_id = n.id "
                 "GROUP BY n.id ORDER BY MAX(e.at) DESC, MAX(e.rowid) DESC LIMIT ?", (limit,)).fetchall()
         return [r[0] for r in rows]
+
+    def read_pages(self) -> list[dict]:
+        """Every node with at least one page version (so visible), as {id, title, concept},
+        sorted by title case-insensitively (then id): the pages a book can branch from."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, title, concept FROM nodes"
+                " WHERE EXISTS(SELECT 1 FROM versions WHERE node_id=nodes.id)").fetchall()
+        pages = [{"id": r[0], "title": r[1], "concept": r[2]} for r in rows]
+        pages.sort(key=lambda p: (p["title"].casefold(), p["id"]))
+        return pages
 
     def snapshot(self, visible_only: bool = False) -> dict:
         """All nodes and edges; visible_only leaves out nodes a draft made ahead of the reader."""

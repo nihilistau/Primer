@@ -103,6 +103,19 @@ export const createDiagram = (body) => j('POST', '/v1/diagrams', body)
 export const diagramJob = (id) => j('GET', `/v1/diagrams/${encodeURIComponent(id)}`)
 export const diagramAgain = (id) => j('POST', `/v1/diagrams/${encodeURIComponent(id)}/again`)
 
+/* your book (Phase 13): a preview count ({chapters, pictures, bytes, title}), making one (202
+ * {id}), its row (status queued|making|done|failed, progress {done, total, stage}, error), the
+ * list (newest first), deleting one, and the two files' download URLs (attachments, plain GETs) */
+export const bookPreview = (body, signal) => j('POST', '/v1/books/preview', { scope: body.scope, include: body.include }, signal)
+export const bookMake = (body) => j('POST', '/v1/books', body)
+export const bookGet = (id) => j('GET', `/v1/books/${encodeURIComponent(id)}`)
+export const books = () => j('GET', '/v1/books')
+// the read pages a branch book can start from: {pages: [{id, title, concept}]}, by title
+export const bookPages = () => j('GET', '/v1/books/pages')
+export const bookDelete = (id) => j('POST', `/v1/books/${encodeURIComponent(id)}/delete`)
+export const bookFileUrl = (id, fmt) =>
+  (fmt === 'epub' || fmt === 'html') && typeof id === 'string' && id ? `/v1/books/${encodeURIComponent(id)}/${fmt}` : ''
+
 /* stories (Listen is a story of kind "listen") */
 export const createStory = (body) => j('POST', '/v1/stories', body)
 export const storyJob = (id) => j('GET', `/v1/stories/${encodeURIComponent(id)}`)

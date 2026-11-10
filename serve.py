@@ -60,6 +60,7 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     graph.fail_unfinished_timelines("Primer restarted")
     graph.fail_unfinished_stories("Primer restarted")
     graph.fail_unfinished_diagrams("Primer restarted")
+    graph.fail_unfinished_books("Primer restarted")
     graph.clear_unfinished_drafts()
     store = ModelStore(var_dir)
     # Setup: a run that was going when Primer stopped comes back paused (Resume continues it)
@@ -130,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         app.shutdown_timelines()
         app.shutdown_stories()
         app.shutdown_diagrams()
+        app.shutdown_books()
         app.pages.shutdown(drain=False)
         print(f"error: cannot listen on port {args.port}: {e}", file=sys.stderr)
         return 2
@@ -164,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
                             try:
                                 app.shutdown_diagrams()
                             finally:
-                                app.servers.stop_all()
+                                try:
+                                    app.shutdown_books()
+                                finally:
+                                    app.servers.stop_all()
         finally:
             server.server_close()
             app.pages.shutdown(drain=False)

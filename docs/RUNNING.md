@@ -583,6 +583,35 @@ Measured on the local-gpu tier (LFM3 1.7B on the CPU as the fast model, gemma-4-
 2000-token limit; a diagram in 12 to 20 seconds. Right after start, a timeline asked for before
 the fast model has loaded fails with "HTTP 503"; **Again** works once it's up.
 
+## Your book
+
+See [USING.md](USING.md#your-book). Phase 13 writes an EPUB 3 and a single HTML file from the
+pages you've read. It needs **no model and no GPU**: the book is built from what is already in
+the graph database and the image store. Books are kept in `var/books/`.
+
+Each map is drawn as a plate from the tier's `[maps]` `pmtiles` file (see [Maps](#maps)), with
+numbered pins. With no map file, or if the file can't be read, the plate is the pins on a plain
+grid with the note "Drawn without the world map".
+
+Limits: 1000 chapters, 300 pictures (6 a chapter), 6 levels of contents, a title of 120
+characters and a By line of 80. A file over 400 MB is refused with "Too big: leave out pictures
+or choose less". One book is made at a time. The Reader's notes and profile, quiz items, quests
+and the Tale's bible are never read into a book. The HTML file has no scripts, inline images and
+no link back to Primer; only http and https source links are kept as links.
+
+Routes: `GET /v1/books` (earlier books); `GET /v1/books/pages` (the pages you've read, for the
+picker); `POST /v1/books/preview` (chapter and picture counts and a size guess); `POST
+/v1/books` (make one; 202 started, 400 a bad request, 404 an unknown page, 409 a book is
+already being made, 413 too big); `GET /v1/books/<id>` (status and progress), `/epub` and
+`/html` (the files); `POST /v1/books/<id>/delete`.
+
+A book that was unfinished when Primer stopped is marked failed on the next start, and its
+files are swept from `var/books/`.
+
+Measured on the local-gpu tier with a real trail: 42 chapters and 12 pictures made an EPUB of 26
+MB and an HTML file of 62 MB in about 2 seconds; a branch of 9 chapters took about 1 second;
+each map plate was drawn in well under a second.
+
 ## Thinking ahead
 
 Phase 8 drafts the likely next page on the idle GPU (spec:

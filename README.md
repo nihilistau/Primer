@@ -54,6 +54,14 @@ works. Click an event or a label to read about it.
 
 ![All my timelines: events from a page on Caernarfon Castle and a page on the Wars of the Roses on one axis from 1000 to 1500, with a bar for the late 11th century and a legend for the two pages](docs/screenshots/timeline-lens.webp)
 
+**Your book.** Click **Book** to bind the pages you've read into a book: everything, a page and
+what branched from it, or everything since a date. Each page is a chapter in trail order, with
+its pictures, its maps drawn as plates from the offline world map, its timeline and its diagram.
+You get an EPUB for an e-reader or phone and a single HTML file for any browser. It needs no
+model.
+
+![The Book window: the scope choices, the title and By line, the include switches, the preview line and the list of earlier books](docs/screenshots/book-window.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -222,11 +230,10 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.12**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+This is **v0.13**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
 web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
-model, Test me, Review, the Quest, the continuing Tale, timelines and diagrams work.
-Next on the [roadmap](docs/superpowers/specs/2026-11-04-primer-roadmap.md): your book, an EPUB of your trail. The
-design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
+model, Test me, Review, the Quest, the continuing Tale, timelines, diagrams and your book work.
+The design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 
 Primer is a sibling of [Kairos](https://github.com/nihilistau/Kairos) and shares its desktop

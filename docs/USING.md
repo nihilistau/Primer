@@ -452,6 +452,55 @@ link anywhere.
 
 ![The Diagram window for a water clock: a source vessel feeding a larger vessel with its water level and time markings, an arrowhead on the flow, the caption "The diagram illustrates the basic principle of a water clock where regulated water flow through a vessel allows observers to track the passage of time against markings", and clickable label buttons for each part](screenshots/diagram-lens.webp)
 
+## Your book
+
+Click **Book** in the dock to turn what you've read into a book. Choose what goes in:
+
+- **Everything I've read.**
+- **A page and what branched from it.** Pick the page from a searchable list of the pages you've
+  read.
+- **Since a date.**
+
+The title starts as "My wanderings", the page's title, or "Since" and the date. Change it, and
+add a **By** line if you like. The switches turn pictures, maps, timelines, diagrams and stories
+on or off. A line under them tells you what you'll get, for example "42 chapters, 12 pictures,
+about 64 MB".
+
+Click **Make the book**. It is made in the background and shows its progress ("EPUB: chapter 12
+of 40"). Then you can click **Download EPUB** or **Download HTML**. Earlier books are listed
+below; download one again, or delete it (the window asks you to confirm first).
+
+![The Book window: the scope choices, the title and By line, the include switches, the preview line and the list of earlier books](screenshots/book-window.webp)
+
+Each page you read is a chapter, in the order of your trail. A chapter has:
+
+- a "From phrase in Parent page" line saying where it branched from;
+- the page text, with citations linked to a numbered Sources list at the end (web links only;
+  offline encyclopedia links show as plain text);
+- the page's pictures, up to 6 a chapter;
+- each finished map as a drawn plate, with numbered pins and a list of the places. The plate is
+  drawn from your offline world map. Without one, the pins sit on a plain grid with the note
+  "Drawn without the world map";
+- the timeline as a list of dates, and the diagram;
+- "A video clip was made of this page in Primer." where a clip was made.
+
+Stories and Tale chapters go in a Stories part, with the words only and no audio. The cover has
+the title, the By line, the dates and the first picture. The contents follow your trail: a
+chapter sits under the page it branched from. A note at the end says what was left out.
+
+Pick the format by where you will read it:
+
+- **EPUB** opens in an e-reader or a reading app on a phone.
+- **HTML** is one file that opens in any browser. The pictures are inside it, it runs no
+  scripts and it doesn't link back to Primer. A browser can print it.
+
+A book holds up to 1000 chapters and 300 pictures, and a file up to 400 MB. If it is too big,
+Primer says "Too big: leave out pictures or choose less". Titles are up to 120 characters and
+the By line up to 80. One book is made at a time. Your Reader notes, profile, Test me
+questions, quests and the Tale's bible are never put in a book.
+
+![A chapter of the HTML book: the text of the Bodiam Castle page with a map plate, numbered pins and a list of places](screenshots/book-chapter.webp)
+
 ## Stories and listening
 
 Primer can read to you.

@@ -250,6 +250,66 @@ describe('reader, quiz and quest calls', () => {
   })
 })
 
+describe('book calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+  const body = { scope: { kind: 'since', since: 1762646400 }, include: { pictures: false, maps: true, timelines: true, diagrams: true, stories: true },
+                 title: 'Castles', by: 'Nell' }
+
+  it('POSTs send X-Primer and a JSON body', async () => {
+    const cases = [
+      [() => api.bookPreview(body), '/v1/books/preview', { scope: body.scope, include: body.include }],
+      [() => api.bookMake(body), '/v1/books', body],
+      [() => api.bookMake({ scope: { kind: 'branch', node_id: 'n1' }, include: {}, title: '', by: '' }), '/v1/books',
+       { scope: { kind: 'branch', node_id: 'n1' }, include: {}, title: '', by: '' }],
+      [() => api.bookDelete('a/b'), '/v1/books/a%2Fb/delete', {}],
+    ]
+    for (const [fn, url, sent] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+      expect(JSON.parse(init.body)).toEqual(sent)
+    }
+  })
+
+  it('a preview can be aborted (its signal goes to fetch)', async () => {
+    const ac = new AbortController()
+    const [, init] = await run(() => api.bookPreview(body, ac.signal))
+    expect(init.signal).toBe(ac.signal)
+  })
+
+  it('GETs send X-Primer and encode their id', async () => {
+    for (const [fn, url] of [[() => api.books(), '/v1/books'], [() => api.bookPages(), '/v1/books/pages'], [() => api.bookGet('x?y'), '/v1/books/x%3Fy']]) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('GET')
+      expect(init.headers['X-Primer']).toBe('1')
+    }
+  })
+
+  it('bookFileUrl gives the two formats only', () => {
+    expect(api.bookFileUrl('0123456789abcdef', 'epub')).toBe('/v1/books/0123456789abcdef/epub')
+    expect(api.bookFileUrl('0123456789abcdef', 'html')).toBe('/v1/books/0123456789abcdef/html')
+    expect(api.bookFileUrl('a b', 'html')).toBe('/v1/books/a%20b/html')
+    for (const [id, fmt] of [['x', 'pdf'], ['x', ''], ['', 'epub'], [null, 'epub'], ['x', '../epub']]) {
+      expect(api.bookFileUrl(id, fmt)).toBe('')
+    }
+  })
+
+  it('a 413 carries the server reason and status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 413,
+      json: async () => ({ error: 'Too big: leave out pictures or choose less' }) })))
+    await expect(api.bookMake(body)).rejects.toMatchObject({ message: 'Too big: leave out pictures or choose less', status: 413 })
+  })
+})
+
 describe('timeline and diagram calls', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 
