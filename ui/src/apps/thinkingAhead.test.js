@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { THINKING_OPTIONS, gpuBackgroundNote, thinkingNow, thinkingSetting, thinkingStats } from './thinkingAhead.js'
+import { KAIROS_HINT, KAIROS_LABEL, THINKING_OPTIONS, gpuBackgroundNote, remoteEnabled, thinkingNow, thinkingSetting, thinkingStats } from './thinkingAhead.js'
 
 describe('thinkingAhead', () => {
   test('options are Off / One page / Two pages', () => {
@@ -26,5 +26,18 @@ describe('thinkingAhead', () => {
     expect(gpuBackgroundNote({ background: true })).toBe('thinking ahead')
     expect(gpuBackgroundNote({ background: false })).toBe('')
     expect(gpuBackgroundNote(undefined)).toBe('')
+  })
+})
+
+describe('the Kairos switch', () => {
+  test('words, verbatim', () => {
+    expect(KAIROS_LABEL).toBe('Let Kairos drive Primer')
+    expect(KAIROS_HINT).toBe('Kairos can open pages and lenses here when you ask it to.')
+  })
+  test('on only when the status says so', () => {
+    expect(remoteEnabled({ remote: { enabled: true, listening: false } })).toBe(true)
+    expect(remoteEnabled({ remote: { enabled: false } })).toBe(false)
+    expect(remoteEnabled({})).toBe(false)
+    expect(remoteEnabled(null)).toBe(false)
   })
 })

@@ -69,6 +69,7 @@ from primer.reader.quiz import Quiz, QuizError, QuizNotFound, QuizReset, QuizUna
 from primer.tales.service import (TaleConflict, TaleError, TaleNotFound, TaleService,
                                   TaleUnavailable)
 from primer.reader.signals import VISIT_CAP_S, Signals
+from primer.remote import LENS_KINDS, OFF as REMOTE_OFF, TEXT_MAX, TITLE_MAX, WHATS, RemoteError, RemoteHub
 from primer.activity import ActivitySink
 from primer.servers import ManagedServer, ServerManager
 from primer.setup.api import ApiError, SetupApi, setup_status
@@ -78,13 +79,14 @@ log = logging.getLogger(__name__)
 SSE_WRITE_TIMEOUT_S = 30
 MAX_BODY = 1_000_000
 DRAIN_TIMEOUT_S = 2.0  # a refused request's body is read and dropped for at most this long
-VIAS = ("start", "typed", "context", "general", "sideways")
+VIAS = ("start", "typed", "context", "general", "sideways", "kairos")
 DEPTHS = ("normal", "deeper", "simpler")
 UI_NOT_BUILT = {"error": "UI not built: run npm run build in ui/"}
 # GET routes that run a model or write, so they need a header a cross-site <img> or form can't
-# send (the UI sends it on every request; a fetch that adds it gets a preflight, which fails)
+# send (the UI sends it on every request; a fetch that adds it gets a preflight, which fails);
+# and Kairos's command stream, which only Primer's own page may hold open
 PRIMER_HEADER = "X-Primer"
-NEEDS_PRIMER_HEADER = ("/v1/branches", "/v1/setup/updates")
+NEEDS_PRIMER_HEADER = ("/v1/branches", "/v1/setup/updates", "/v1/tool/stream")
 MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm|wav)")
 MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm", ".wav": "audio/wav"}
 RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
@@ -118,6 +120,13 @@ BOOK_HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"
 IMAGE_HEADERS = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
                  "Cache-Control": "max-age=3600"}
 WEB_OFF = "Web search is off in this tier"
+TOOL_PING_S = 15.0  # a comment on the tool stream this often, so a dead tab is noticed
+TOOL_WAIT_S = 1.0  # the tool stream checks its client this often between commands
+TRAIL_DEFAULT, TRAIL_MAX = 20, 100
+FIND_MAX, FIND_Q_MAX = 20, 200
+NO_SUCH_PAGE = "Primer has no page with that id"
+REMOTE_SETTINGS_ONLY = "Turn this on in Primer's Settings"
+COMMAND_ID = re.compile(r"[0-9a-f]{16}")
 
 
 class TextPause:
@@ -220,6 +229,7 @@ class App:
     timelines: TimelineService | None = None  # the Timeline lens; made over the graph when not passed
     diagrams: DiagramService | None = None  # the diagram lens; made over the graph when not passed
     books: BookService | None = None  # your book; made over the graph when not passed
+    remote: RemoteHub | None = None  # Kairos drives Primer (/v1/tool/*); made when not passed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _ref_cache: tuple | None = field(default=None, repr=False)  # (expires, url, books or None)
@@ -262,6 +272,10 @@ class App:
             self.profile.on_reset.append(self.quests.forget)
         if self._discard_drafts not in self.profile.on_change:
             self.profile.on_change.append(self._discard_drafts)
+        if self.remote is None:
+            self.remote = RemoteHub()
+        self.remote.enabled = self.saved_remote_enabled()
+        self.signals.kairos_claim = self.remote.claim_open  # an open a command asked for is Kairos's
         self._wire_reader(self.pages)
         self.pages.source_mode = self.saved_source_mode() or self.tier.source_mode
         if self.store is None:
@@ -442,6 +456,28 @@ class App:
             drafter.cancel_current()
         else:  # lowered (2 -> 1): a draft two pages ahead stops
             drafter.cancel_beyond(value)
+
+    def saved_remote_enabled(self) -> bool:
+        """The saved "Let Kairos drive Primer" switch; off unless it was turned on."""
+        try:
+            return read_settings(self.var_dir).get("remote_enabled") is True
+        except ConfigError:
+            return False
+
+    def set_remote_enabled(self, value: bool) -> None:
+        """Turn Kairos's driving on or off, remembered across restarts and tiers."""
+        with self._lock:
+            self.remote.enabled = value
+            try:
+                settings = read_settings(self.var_dir)
+            except ConfigError:
+                settings = {}
+            write_settings(self.var_dir, {**settings, "remote_enabled": value})
+
+    def shutdown_remote(self) -> None:
+        """Fail Kairos's unfinished command and end the tool streams, so the server can stop."""
+        if self.remote is not None:
+            self.remote.shutdown()
 
     def shutdown_images(self) -> None:
         """Stop image jobs and sd-server without restarting text servers that are about to stop."""
@@ -688,7 +724,8 @@ class App:
                 "book_available": {"ok": True, "reason": ""},  # a book needs no model and no GPU
                 "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""},
                 "thinking_ahead": {**(self.drafter.status() if self.drafter is not None else {}),
-                                   "setting": self.thinking_ahead()}}
+                                   "setting": self.thinking_ahead()},
+                "remote": {"enabled": self.remote.enabled, "listening": self.remote.listening()}}
 
     def cards_json(self, node_id: str, phrase: str) -> list[dict]:
         """The phrase's branch cards, each with `ready`: a finished draft of the page opening
@@ -1010,6 +1047,8 @@ def _make_handler(app: App):
                         self._json({"error": "not found"}, 404)
                     else:
                         self._json(diagram)
+                elif path.startswith("/v1/tool/"):
+                    self._tool_get(path, parse_qs(url.query))
                 elif path == "/v1/books":
                     self._json({"books": app.books.list()})
                 elif path == "/v1/books/pages":  # the read pages a branch book can start from
@@ -1053,6 +1092,16 @@ def _make_handler(app: App):
                     if not _is_setting(value):
                         raise _BadRequest("setting must be 0, 1 or 2")
                     app.set_thinking_ahead(value)
+                    self._json(app.status())
+                elif path == "/v1/remote-enabled":
+                    # only Primer's own page sets it: a browser sends same-origin, another
+                    # program on this machine (Kairos) sends no such header
+                    if (self.headers.get("Sec-Fetch-Site") or "").lower() != "same-origin":
+                        raise _HttpError(403, REMOTE_SETTINGS_ONLY)
+                    value = body.get("value")
+                    if type(value) is not bool:
+                        raise _BadRequest("value must be true or false")
+                    app.set_remote_enabled(value)
                     self._json(app.status())
                 elif path == "/v1/pages/open":
                     self._open(body)
@@ -1118,6 +1167,8 @@ def _make_handler(app: App):
                     self._create_diagram(body)
                 elif path.startswith("/v1/diagrams/") and path.endswith("/again"):
                     self._again_diagram(unquote(path[len("/v1/diagrams/"):-len("/again")]))
+                elif path.startswith("/v1/tool/"):
+                    self._tool_post(path, body)
                 elif path == "/v1/books/preview":
                     self._preview_book(body)
                 elif path == "/v1/books":
@@ -1280,8 +1331,155 @@ def _make_handler(app: App):
                     self.wfile.flush()
                 except OSError:  # disconnect or stalled client: stop writing
                     alive = False
+            def comment(text: str) -> None:  # ": text", which EventSource ignores (a heartbeat)
+                nonlocal alive
+                if not alive:
+                    return
+                try:
+                    self.wfile.write(f": {text}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                except OSError:
+                    alive = False
             emit.alive = lambda: alive and not _peer_gone(self.connection)  # page opens keep generating; browse model calls stop
+            emit.comment = comment
             return emit
+
+        # Kairos drives Primer (primer.remote): Kairos's side, then the window's
+        def _tool_get(self, path: str, q: dict) -> None:
+            """GET /v1/tool/now | trail?limit= | find?q= | commands/<id> | stream."""
+            if path == "/v1/tool/now":
+                self._json({"enabled": app.remote.enabled, **app.remote.now()})
+            elif path == "/v1/tool/trail":
+                raw = q.get("limit", [str(TRAIL_DEFAULT)])[0]
+                limit = int(raw) if re.fullmatch(r"[0-9]{1,4}", raw) else 0  # ASCII digits only
+                if not 1 <= limit <= TRAIL_MAX:
+                    raise _HttpError(400, f"limit must be a whole number from 1 to {TRAIL_MAX}")
+                self._json({"pages": app.graph.trail(limit)})
+            elif path == "/v1/tool/find":
+                text = " ".join(q.get("q", [""])[0].split())
+                if not text or len(text) > FIND_Q_MAX:
+                    raise _HttpError(400, f"q is required, at most {FIND_Q_MAX} characters")
+                needle = text.casefold()
+                found = [{"id": p["id"], "title": p["title"]} for p in app.graph.read_pages()
+                         if needle in p["title"].casefold()]
+                self._json({"pages": found[:FIND_MAX]})
+            elif path == "/v1/tool/stream":
+                self._tool_stream()
+            elif path.startswith("/v1/tool/commands/"):
+                cid = path[len("/v1/tool/commands/"):]
+                cmd = app.remote.command(cid) if COMMAND_ID.fullmatch(cid) else None
+                if cmd is None:
+                    raise _HttpError(404, "not found")
+                self._json(cmd)
+            else:
+                raise _HttpError(404, "not found")
+
+        def _read_page_id(self, value) -> str:
+            """A page id from Kairos: a string naming a page with a version (400, 404)."""
+            if not isinstance(value, str) or not value.strip():
+                raise _BadRequest("id is required")
+            if app.graph.get_node(value) is None or app.graph.latest_version(value) is None:
+                raise _HttpError(404, NO_SUCH_PAGE)
+            return value
+
+        def _tool_post(self, path: str, body: dict) -> None:
+            """POST /v1/tool/show {text} | open {id} | lens {kind, id?}: 202 {command}; 403 the
+            switch is off, 400, 404, 409 busy or no tab, 429. And the window's focus and done."""
+            rest = path[len("/v1/tool/"):]
+            if rest in ("show", "open", "lens"):
+                if not app.remote.enabled:  # before anything else is checked
+                    raise _HttpError(403, REMOTE_OFF)
+                if rest == "show":
+                    text = body.get("text")
+                    if not isinstance(text, str) or not text.strip() or len(text.strip()) > TEXT_MAX:
+                        raise _BadRequest(f"text is required, at most {TEXT_MAX} characters")
+                    args = {"text": text}
+                elif rest == "open":
+                    args = {"id": self._read_page_id(body.get("id"))}
+                    args["title"] = app.graph.get_node(args["id"]).title  # the window's note names it
+                else:
+                    if body.get("kind") not in LENS_KINDS:
+                        raise _BadRequest(f"kind must be one of {LENS_KINDS}")
+                    args = {"kind": body["kind"]}
+                    if body.get("id") is not None:  # without one, the hub uses the focused page and title
+                        args["id"] = self._read_page_id(body.get("id"))
+                        args["title"] = app.graph.get_node(args["id"]).title
+                try:
+                    cid = app.remote.submit(rest, args)
+                except RemoteError as e:
+                    raise _HttpError(e.status, str(e)) from None
+                except ValueError as e:
+                    raise _BadRequest(str(e)) from None
+                self._json({"command": app.remote.command(cid)}, 202)
+            elif rest == "focus":
+                listener, node_id, title = body.get("listener"), body.get("node_id"), body.get("title")
+                if not all(isinstance(v, str) and v for v in (listener, node_id, title)):
+                    raise _BadRequest("listener, node_id and title are required strings")
+                hidden = body.get("hidden", False)  # reported while the tab was in the background
+                if type(hidden) is not bool:
+                    raise _BadRequest("hidden must be true or false")
+                if app.graph.get_node(node_id) is None:
+                    raise _HttpError(404, "page not found")
+                try:
+                    app.remote.focus(listener, node_id, " ".join(title.split())[:TITLE_MAX], hidden)
+                except KeyError:
+                    raise _HttpError(404, "no such listener") from None
+                self._json({"ok": True})
+            elif rest.startswith("commands/") and rest.endswith("/done"):
+                cid = rest[len("commands/"):-len("/done")]
+                ok = body.get("ok")
+                if type(ok) is not bool:
+                    raise _BadRequest("ok must be true or false")
+                text = body.get("result" if ok else "error")
+                if ok:  # the window's {node_id?, title, what}: Kairos speaks a sentence from it
+                    what, title, nid = (text.get(k) if isinstance(text, dict) else None
+                                        for k in ("what", "title", "node_id"))
+                    if what not in WHATS:
+                        raise _BadRequest(f"result.what must be one of {WHATS}")
+                    if not isinstance(title, str) or not title.strip():
+                        raise _BadRequest("result.title is required")
+                    if nid is not None and not isinstance(nid, str):
+                        raise _BadRequest("result.node_id must be a string")
+                    text = {"title": " ".join(title.split())[:TITLE_MAX], "what": what,
+                            **({"node_id": nid[:TITLE_MAX]} if nid else {})}
+                elif text is not None and not isinstance(text, str):
+                    raise _BadRequest("error must be a string")
+                listener = body.get("listener")
+                if not isinstance(listener, str) or not listener:
+                    raise _BadRequest("listener is required")
+                if not COMMAND_ID.fullmatch(cid) or app.remote.command(cid) is None:
+                    raise _HttpError(404, "not found")
+                try:
+                    finished = app.remote.finish(cid, ok, text if isinstance(text, dict) else (text or "")[:1000], listener)
+                except RemoteError as e:  # sent to another tab
+                    raise _HttpError(e.status, str(e)) from None
+                if not finished:
+                    raise _HttpError(409, "that command is already finished")
+                self._json(app.remote.command(cid))
+            else:
+                raise _HttpError(404, "not found")
+
+        def _tool_stream(self) -> None:
+            """GET /v1/tool/stream: `hello {listener}` first, then a `command` event for each
+            command this tab is to carry out and a ping comment every 15 s; it ends when the tab
+            goes (failing the command it was carrying out), the switch goes off or the hub shuts
+            down. With the switch off it is refused (403): the tab waits for /v1/status to say on."""
+            if not app.remote.enabled:
+                raise _HttpError(403, REMOTE_OFF)
+            listener = app.remote.listen()
+            try:
+                emit = self._sse()
+                emit("hello", {"listener": listener.id})
+                ping = time.monotonic() + TOOL_PING_S
+                while emit.alive() and not listener.closed:
+                    cmd = listener.get(TOOL_WAIT_S)
+                    if cmd is not None:
+                        emit("command", cmd)
+                    elif time.monotonic() >= ping:
+                        emit.comment("ping")
+                        ping = time.monotonic() + TOOL_PING_S
+            finally:
+                listener.close()
 
         def _dwell(self, body: dict) -> None:
             """POST /v1/reader/dwell {node_id, seconds}: seconds a page was visible (0 < s <= 600)."""
@@ -1944,4 +2142,7 @@ class _Server(ThreadingHTTPServer):
 
 
 def make_server(app: App, host: str = "127.0.0.1", port: int = 8810) -> ThreadingHTTPServer:
-    return _Server((host, port), _make_handler(app))
+    server = _Server((host, port), _make_handler(app))
+    if app.remote is not None:  # "Open http://127.0.0.1:<this port> first"
+        app.remote.port = server.server_address[1]
+    return server

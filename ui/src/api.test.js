@@ -351,3 +351,42 @@ describe('timeline and diagram calls', () => {
     }
   })
 })
+
+describe('Kairos drives Primer', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+  const calls = () => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    return fetch
+  }
+
+  it('setRemoteEnabled posts {value} to /v1/remote-enabled (same-origin, so no extra header)', async () => {
+    const fetch = calls()
+    await api.setRemoteEnabled(true)
+    await api.setRemoteEnabled(0)
+    expect(fetch.mock.calls.map(([u, i]) => [u, i.method, JSON.parse(i.body)])).toEqual([
+      ['/v1/remote-enabled', 'POST', { value: true }],
+      ['/v1/remote-enabled', 'POST', { value: false }],
+    ])
+  })
+
+  it('toolFocus posts the listener and the page', async () => {
+    const fetch = calls()
+    await api.toolFocus('tab-1', 'n1', 'Bodiam Castle')
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('/v1/tool/focus')
+    expect(JSON.parse(init.body)).toEqual({ listener: 'tab-1', node_id: 'n1', title: 'Bodiam Castle' })
+    await api.toolFocus('tab-1', 'n2', 'Trebuchet', true)   // from a hidden tab: says so
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ listener: 'tab-1', node_id: 'n2', title: 'Trebuchet', hidden: true })
+  })
+
+  it('toolDone posts the outcome with the listener', async () => {
+    const fetch = calls()
+    await api.toolDone('c 1', 'tab-1', { ok: true, result: { node_id: 'n1', title: 'Bodiam Castle', what: 'opened' } })
+    await api.toolDone('c2', 'tab-1', { ok: false, error: 'Maps are not available right now.' })
+    expect(fetch.mock.calls.map(([u, i]) => [u, JSON.parse(i.body)])).toEqual([
+      ['/v1/tool/commands/c%201/done', { ok: true, result: { node_id: 'n1', title: 'Bodiam Castle', what: 'opened' }, listener: 'tab-1' }],
+      ['/v1/tool/commands/c2/done', { ok: false, error: 'Maps are not available right now.', listener: 'tab-1' }],
+    ])
+  })
+})

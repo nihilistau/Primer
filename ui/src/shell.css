@@ -136,3 +136,15 @@ body.resizing, body.resizing * { user-select: none !important; }
 /* a quiet mark (Tale: pages wait for the next chapter) */
 .dock-mark { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: var(--r-pill);
   pointer-events: none; background: var(--warm); box-shadow: 0 0 0 2px var(--surface-0); }
+
+/* "Kairos asked: …": a toast centred near the top, above every window (they stack inside
+ * .desktop, z-index 10) and below the dock (50), which it never reaches. 8 s; the Desktop
+ * removes it, this fades it in its last second. The live region stays when it is empty. */
+.kairos-live { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
+  max-width: min(560px, calc(100vw - 32px)); pointer-events: none; }
+.kairos-note { display: block; padding: var(--sp-1) var(--sp-3); border: 1px solid var(--hair);
+  border-radius: var(--r-pill); background: var(--surface-2); box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
+  font: 500 var(--fs-12)/1.4 var(--font-ui); color: var(--accent); text-align: center;
+  overflow-wrap: anywhere; animation: kairos-fade 8s linear forwards; }
+@keyframes kairos-fade { 0%, 87% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .kairos-note { animation: none; } }

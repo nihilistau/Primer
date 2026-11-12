@@ -14,6 +14,7 @@ LEAN_SHARE = 0.5  # a curiosity style is clear when one branch kind has this sha
 LEAN_BRANCHES = 6  # ...of at least this many branch opens, and more than any other kind
 LEVEL_MIN = 2  # Deeper or Simpler asked at least this often (and more than the other) to lean
 COUNTED_TTL_S = 5.0  # counted() is reused this long (any new signal or a reset drops it)
+KAIROS_OPENED = "kairos_opened_page"  # the activity event for an open Kairos asked for
 
 _STYLE_SENTENCE = {
     "context": "Follows phrases within the page's own context most",
@@ -39,11 +40,14 @@ class Signals:
     """Records what the reader does and counts it. Thread-safe (the graph serialises rows; the
     visit state has its own lock)."""
 
-    def __init__(self, graph, *, clock=time.time, activity=None):
+    def __init__(self, graph, *, clock=time.time, activity=None, kairos_claim=None):
         self.graph = graph
         self.clock = clock
         # a primer.activity.ActivitySink: each signal is also told to Kairos (None: not shared)
         self.activity = activity
+        # node_id -> bool, true once for a page a Kairos command opened (primer.remote's
+        # RemoteHub.claim_open; the App wires it): that open is told as kairos_opened_page
+        self.kairos_claim = kairos_claim
         self._visit_lock = threading.Lock()
         self._visit_node: str | None = None
         self._visit_seconds = 0.0
@@ -78,9 +82,18 @@ class Signals:
         try:
             node = self.graph.get_node(node_id)
             if node is not None:
+                if kind == "open" and self._kairos_opened(node_id, detail):
+                    kind = KAIROS_OPENED  # not something the reader chose: Kairos asked
                 self.activity.note(kind, node.title, node_id, detail)
         except Exception:  # noqa: BLE001
             pass
+
+    def _kairos_opened(self, node_id: str, detail: str) -> bool:
+        """A page Kairos made (it arrived with via "kairos") or a command opened (claimed)."""
+        if detail == "kairos":
+            return True
+        claim = self.kairos_claim
+        return bool(claim is not None and claim(node_id))
 
     def dwell(self, node_id: str, seconds: float) -> float:
         """Add visible seconds on a page; returns the seconds counted. A visit is the run of

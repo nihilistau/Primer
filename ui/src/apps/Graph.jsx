@@ -10,12 +10,13 @@ import { buildForest } from './graphTree.js'
 import './apps.css'
 
 /* how a page was reached: one existing kit glyph each; context wears the warm tone */
-const VIA = {
+export const VIA = {
   start: { icon: 'launch', label: 'started here' },
   typed: { icon: 'console', label: 'typed' },
   context: { icon: 'story', label: 'from the surrounding context' },
   general: { icon: 'search', label: 'from a phrase' },
   sideways: { icon: 'forward', label: 'sideways' },
+  kairos: { icon: 'chat', label: 'Kairos asked' },
 }
 
 const open = (id) => wm.open('reader', { props: { start: { node_id: id } } })

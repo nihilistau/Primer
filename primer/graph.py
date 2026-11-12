@@ -1088,6 +1088,17 @@ class Graph:
                 "GROUP BY e.to_id ORDER BY MAX(e.rowid) DESC LIMIT ?", (limit,)).fetchall()
         return [r[0] for r in rows]
 
+    def trail(self, limit: int) -> list[dict]:
+        """Pages with a version, newest first by their first arrival: [{id, title, phrase, via,
+        at}] from that first arrival's edge (the tool API's trail, primer.remote)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT n.id, n.title, e.phrase, e.via, e.at FROM edges e JOIN nodes n ON n.id = e.to_id "
+                "WHERE e.rowid = (SELECT MIN(f.rowid) FROM edges f WHERE f.to_id = e.to_id) "
+                "AND EXISTS(SELECT 1 FROM versions v WHERE v.node_id = n.id) "
+                "ORDER BY e.rowid DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(zip(("id", "title", "phrase", "via", "at"), r)) for r in rows]
+
     def trail_parent(self, node_id: str) -> str | None:
         """The page the reader came to this one from: its parent (a context page), else where
         its first arrival came from; None at the start of a trail."""

@@ -62,6 +62,14 @@ model.
 
 ![The Book window: the scope choices, the title and By line, the include switches, the preview line and the list of earlier books](docs/screenshots/book-window.webp)
 
+**Kairos as the front door.** If you use Kairos, the companion app on this computer, turn on
+**Let Kairos drive Primer** in Engines. Then Kairos can open pages and start a picture, map,
+timeline, diagram, story or reading in the tab you have open. "Tell me a story about that" means
+the page you are reading. A note "Kairos asked: ..." shows above your windows, and Kairos can't
+delete anything, change settings or make books.
+
+![The Map window with the note "Kairos asked: a map of Bodiam Castle" above it](docs/screenshots/kairos-drives.webp)
+
 **Navigate like a website.** Back and forward work the way they do in a browser. **Deeper** and
 **Simpler** rewrite the current page at a different level, and **Regenerate** gives you a fresh
 take while keeping the old version. Pages are cached, so going back is instant.
@@ -230,9 +238,9 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.13**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
+This is **v0.14**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
 web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
-model, Test me, Review, the Quest, the continuing Tale, timelines, diagrams and your book work.
+model, Test me, Review, the Quest, the continuing Tale, timelines, diagrams, your book and Kairos driving Primer work.
 The design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 

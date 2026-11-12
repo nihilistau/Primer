@@ -30,11 +30,12 @@ class Client:
     def __init__(self, port: int):
         self.port = port
 
-    def _request(self, method, path, body=None, expect=200):
+    def _request(self, method, path, body=None, expect=200, headers=None):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:
             data = None if body is None else json.dumps(body)
-            c.request(method, path, body=data, headers={"Content-Type": "application/json", "X-Primer": "1"})
+            c.request(method, path, body=data, headers={"Content-Type": "application/json", "X-Primer": "1",
+                                                        **(headers or {})})
             r = c.getresponse()
             raw = r.read()
             assert r.status == expect, f"{method} {path}: {r.status} {raw[:200]!r}"
@@ -45,8 +46,8 @@ class Client:
     def get(self, path, expect=200):
         return self._request("GET", path, expect=expect)
 
-    def post(self, path, body, expect=200):
-        return self._request("POST", path, body, expect)
+    def post(self, path, body, expect=200, headers=None):
+        return self._request("POST", path, body, expect, headers)
 
     def sse(self, path, body, expect=200):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)

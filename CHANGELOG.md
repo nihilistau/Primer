@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.14.0: Kairos as the front door (2026-11-13)
+
+Kairos can drive the Primer tab you have open.
+
+### Added
+
+- **Let Kairos drive Primer**: a switch in the Engines window, next to Thinking ahead. It is off
+  by default and saved in `settings.json` as `remote_enabled`. Only the browser can set it
+  (`POST /v1/remote-enabled` needs `Sec-Fetch-Site: same-origin`). That stops web pages and other
+  tools. It does not stop a determined program on this machine.
+- **New actions on the `primer` MCP tool**: `now`, `trail {limit}`, `find {q}`, `show {text}`,
+  `open {id}` and `lens {kind, id?}`. The lens kinds are picture, map, timeline, diagram, story
+  and listen. The tool's schema is unchanged, so Kairos needs no new cold restart.
+- `show` does what typing into the Reader's ask box does. "that", "it" or "this page" means the
+  open page: "tell me a story about that" becomes a story about the open page.
+- The open Primer tab carries the commands out. The tab used most recently takes them, and a tab
+  that just ran Kairos's command keeps reporting its page even when hidden. A note "Kairos asked:
+  ..." shows above every window for 8 seconds.
+- Each answer is one short sentence, such as "Opened *T*", "Primer is writing *T*; it's open in
+  the Reader" or "Started a map of *T*; it will appear in Primer". A refusal says why: the switch
+  is off, no tab is open, or Primer is still busy with the last command.
+- Limits: show text is at most 300 characters; one command runs at a time (409), at most 20 a
+  minute (429); a tab must pick a command up within 10 s; the tab or the MCP wait gives up after
+  90 s; at most 16 listening tabs.
+- Kairos can't delete anything, change settings or models, make books, or open websites.
+- A page Kairos opened is written to Kairos's activity record as `kairos_opened_page` instead of
+  `open_page`.
+- Tool API: `GET /v1/tool/now`, `/trail?limit=`, `/find?q=`; `POST /v1/tool/show`, `/open`,
+  `/lens` (202 `{command}`); `GET /v1/tool/commands/<id>`; and the tab's side, `GET
+  /v1/tool/stream`, `POST /v1/tool/focus` and `POST /v1/tool/commands/<id>/done`.
+  `/v1/status` has `remote: {enabled, listening}`.
+
+### Measured
+
+On the local-gpu tier, with the real trail, through the real bridge: show, open and lens each
+answered in about 0.5 s. Trail, find and now answered at once. "Tell me a story about that" with
+Bodiam Castle open started a story about Bodiam Castle. The switch-off and no-tab answers worked.
+
+### Known
+
+- Chrome on Windows can mark a fully covered browser window hidden. A tab that didn't run Kairos's
+  last command then won't take the focus until you click it.
+- A `show` that becomes a map, story, timeline or diagram says it started as soon as the page
+  starts. If that job is then refused, the Reader shows the error.
+- With the switch on, each open Primer tab keeps one connection to Primer; browsers allow six
+  per site, so keep to a few Primer tabs.
+- The browser lens (Phase 14) is next.
+
 ## v0.13.0: your book (2026-11-10)
 
 Your trail, bound as a book.

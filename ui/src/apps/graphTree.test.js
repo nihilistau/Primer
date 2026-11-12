@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { buildForest } from './graphTree.js'
+import { VIA } from './Graph.jsx'
 
 const snap = { nodes: [{ id: 't', title: 'Trebuchet' }, { id: 'c', title: 'Counterweight' }, { id: 'l', title: 'Lift' }],
   edges: [{ from_id: null, to_id: 't', via: 'start' }, { from_id: 't', to_id: 'c', via: 'general', phrase: 'counterweight' },
@@ -41,5 +42,11 @@ describe('buildForest', () => {
   test('empty or missing snapshot gives an empty forest', () => {
     expect(buildForest({ nodes: [], edges: [] })).toEqual([])
     expect(buildForest(null)).toEqual([])
+  })
+})
+
+describe('how a page was reached', () => {
+  test('a page Kairos asked for is labelled so in the trail map', () => {
+    expect(VIA.kairos).toEqual({ icon: 'chat', label: 'Kairos asked' })
   })
 })

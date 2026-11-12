@@ -1,6 +1,8 @@
 /* Reader — one window onto the book. It streams a model-written page, renders it from
  * Markdown with the model's highlighted phrases, keeps its own back/forward history, and
- * always shows the prompt box. Props: { windowId, start? (an open-page body), onPick? }. */
+ * always shows the prompt box. Props: { windowId, start? (an open-page body), onPick? }.
+ * It also carries out what Kairos asks for (ui/src/remote.js) through the same code as the
+ * reader's own typing and clicking. */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { mediaUrl, videoUrl } from '../api.js'
@@ -23,6 +25,7 @@ import { streamEndError } from './streamEnd.js'
 import { dwellTracker, testMeButton } from '../apps/readerModel.js'
 import TestMe from './TestMe.jsx'
 import { announceTale } from '../apps/tale.js'
+import { kairosRun, lensCall, registerReader, setReaderPage } from '../remote.js'
 import './reader.css'
 
 const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '', sources: [], grounding: '', note: '',
@@ -67,8 +70,17 @@ export default function Reader({ windowId, start, onPick }) {
 
   /* Stream a page into this window. mode: 'push' adds a history entry, 'replace' swaps the
    * current one (Deeper, Simpler, Regenerate, Retry). Opening a page aborts the one in
-   * flight; the server still finishes and saves it. */
-  const run = async (body, mode = 'push', after) => {
+   * flight; the server still finishes and saves it. `after(nodeId, title)` runs once the page
+   * is written; `hooks` ({started(nodeId, title, cached), failed(message)}, for Kairos) hears once
+   * whether the page started streaming (cached: a page already read, shown as it was). */
+  const run = async (body, mode = 'push', after, hooks) => {
+    let told = false
+    const tell = (ok, a, b, c) => {
+      if (told || !hooks) return
+      told = true
+      if (ok) hooks.started(a, b, c)
+      else hooks.failed(a)
+    }
     stop()
     const ac = new AbortController()
     abort.current = ac
@@ -78,12 +90,15 @@ export default function Reader({ windowId, start, onPick }) {
               streaming: true, request: body })
     const ended = { done: false, error: false }
     let nodeId = body.node_id || null  // nodeRef only catches up on render; a cached page ends first
+    let title = ''
     try {
       await api.openPage(body, ({ event, data }) => {
         if (!live()) return
         if (event === 'done' || event === 'error') ended[event] = true
         if (event === 'node') {
           nodeId = data.id
+          title = data.title || ''
+          tell(true, data.id, title, data.cached === true)
           const entry = { nodeId: data.id, title: data.title }
           if (mode === 'replace' || hist.current.current()?.nodeId === data.id) hist.current.replace(entry)
           else hist.current.push(entry)
@@ -103,19 +118,22 @@ export default function Reader({ windowId, start, onPick }) {
         } else if (event === 'highlights') {
           setView(v => ({ ...v, phrases: data.phrases || [] }))
         } else if (event === 'error') {
+          tell(false, data.message || 'The page could not be written.')
           setView(v => ({ ...v, error: data.message || 'The page could not be written.' }))
         }
       }, ac.signal)
       const cut = live() && streamEndError(ended)   // Primer stopped mid-page: offer Retry
       if (cut) setView(v => ({ ...v, error: cut }))
     } catch (e) {
+      tell(false, e.name === 'AbortError' || !live() ? 'Another page was opened first' : e.message || 'The page could not be written.')
       if (e.name === 'AbortError' || !live()) return
       setView(v => ({ ...v, error: e.message || 'The page could not be written.' }))
     }
+    tell(false, live() ? 'The page could not be written.' : 'Another page was opened first')
     if (live()) setView(v => ({ ...v, streaming: false, waiting: '', grounding: '' }))
     // the stream's sources carry no links; reload them from the saved page
     if (live() && ended.done) refreshSources(nodeId, ac)
-    if (live() && ended.done && !ended.error && nodeId && after) after(nodeId)   // e.g. a typed map request
+    if (live() && ended.done && !ended.error && nodeId && after) after(nodeId, title)   // e.g. a typed map request
   }
 
   const refreshSources = async (id, ac) => {
@@ -149,26 +167,29 @@ export default function Reader({ windowId, start, onPick }) {
   const back = () => go(hist.current.back())
   const forward = () => go(hist.current.forward())
 
-  /* Image and video requests make one and leave the reader where it is; the rest open a page. */
+  /* Image and video requests make one and leave the reader where it is; the rest open a page.
+   * An image or video answers its error message ('' once started); `hooks` go to run. */
+  const carryOut = (r, hooks) => {
+    if (r.kind === 'image' || r.kind === 'video') return makeImage(r.body)
+    // a typed map request: the place's page first, then its map once the page is written
+    if (r.kind === 'map') return run(r.body, 'push', (id) => makeMap(typedMapBody(id, r.body.concept)), hooks)
+    // a typed story request: the topic's page first, then its story once the page is written
+    if (r.kind === 'story') return run(r.body, 'push', (id) => makeStory(id, 'story', r.body.concept), hooks)
+    // a typed timeline or diagram request: the subject's page first, then its timeline or diagram
+    if (r.kind === 'timeline') return run(r.body, 'push', (id) => makeTimeline(id, r.body.concept), hooks)
+    if (r.kind === 'diagram') return run(r.body, 'push', (id) => makeDiagram({ node_id: id, subject: r.body.concept }), hooks)
+    return run(r.body, 'push', undefined, hooks)
+  }
   const sendPrompt = async (e) => {
     e.preventDefault()
     const typed = text.trim()
     if (!typed) return
     setText('')
-    const r = await routePrompt(typed, { nodeId: nodeRef.current })
-    if (r.kind === 'image' || r.kind === 'video') makeImage(r.body)
-    // a typed map request: the place's page first, then its map once the page is written
-    else if (r.kind === 'map') run(r.body, 'push', (id) => makeMap(typedMapBody(id, r.body.concept)))
-    // a typed story request: the topic's page first, then its story once the page is written
-    else if (r.kind === 'story') run(r.body, 'push', (id) => makeStory(id, 'story', r.body.concept))
-    // a typed timeline or diagram request: the subject's page first, then its timeline or diagram
-    else if (r.kind === 'timeline') run(r.body, 'push', (id) => makeTimeline(id, r.body.concept))
-    else if (r.kind === 'diagram') run(r.body, 'push', (id) => makeDiagram({ node_id: id, subject: r.body.concept }))
-    else run(r.body)
+    carryOut(await routePrompt(typed, { nodeId: nodeRef.current }))
   }
 
   /* Create an image or video job (body.kind video); its window opens only on success, a
-   * refusal shows in the reader. */
+   * refusal shows in the reader. Each make* answers '' once started, else why not (for Kairos). */
   const makeImage = async (body) => {
     const video = body.kind === 'video'
     setImgErr('')
@@ -176,54 +197,64 @@ export default function Reader({ windowId, start, onPick }) {
       const m = await api.createImage(body)
       if (video) openVideoWindow(m.id, body.subject)
       else openImageWindow(m.id, body.subject)
+      return ''
     } catch (e) {
+      const msg = e.message || (video ? 'The video could not be started.' : 'The image could not be started.')
       setErrTitle(video ? 'No video' : 'No image')
-      setImgErr(e.message || (video ? 'The video could not be started.' : 'The image could not be started.'))
+      setImgErr(msg)
+      return msg
     }
   }
 
   /* Create a map job (a page, or a phrase on it); the Map window opens only on success. */
   const makingMap = useRef(false)
   const makeMap = async (body) => {
-    if (makingMap.current) return              // a double click must not start two jobs
+    if (makingMap.current) return 'That is already starting'    // a double click must not start two jobs
     makingMap.current = true
     setImgErr('')
     try {
       const m = await api.createMap(body)
       openMapWindow(m.id, body.subject, body.node_id)
+      return ''
     } catch (e) {
       setErrTitle('No map')
       setImgErr(e.message || 'The map could not be started.')
+      return e.message || 'The map could not be started.'
     } finally { makingMap.current = false }
   }
 
   /* Create a story (or Listen) of a page; the Story window opens only on success. */
   const makingStory = useRef(false)
   const makeStory = async (nodeId, kind, subject) => {
-    if (makingStory.current) return             // a double click must not start two
+    if (makingStory.current) return 'That is already starting'   // a double click must not start two
     makingStory.current = true
     setImgErr('')
     try {
       const r = await api.createStory({ node_id: nodeId, kind })
       openStoryWindow(r.id, subject, nodeId, kind)
+      return ''
     } catch (e) {
+      const msg = e.message || (kind === 'listen' ? 'The narration could not be started.' : 'The story could not be started.')
       setErrTitle(kind === 'listen' ? 'No narration' : 'No story')
-      setImgErr(e.message || (kind === 'listen' ? 'The narration could not be started.' : 'The story could not be started.'))
+      setImgErr(msg)
+      return msg
     } finally { makingStory.current = false }
   }
 
   /* Create a timeline of a page; the Timeline window opens only on success. */
   const makingTimeline = useRef(false)
   const makeTimeline = async (nodeId, subject) => {
-    if (makingTimeline.current) return          // a double click must not start two
+    if (makingTimeline.current) return 'That is already starting'  // a double click must not start two
     makingTimeline.current = true
     setImgErr('')
     try {
       const r = await api.createTimeline(nodeId)
       openTimelineWindow(r.id, subject, nodeId)
+      return ''
     } catch (e) {
       setErrTitle('No timeline')
       setImgErr(e.message || 'The timeline could not be started.')
+      return e.message || 'The timeline could not be started.'
     } finally { makingTimeline.current = false }
   }
 
@@ -231,16 +262,26 @@ export default function Reader({ windowId, start, onPick }) {
    * window opens only on success. */
   const makingDiagram = useRef(false)
   const makeDiagram = async ({ subject, ...body }) => {
-    if (makingDiagram.current) return           // a double click must not start two
+    if (makingDiagram.current) return 'That is already starting'   // a double click must not start two
     makingDiagram.current = true
     setImgErr('')
     try {
       const r = await api.createDiagram(body)
       openDiagramWindow(r.id, subject, body.node_id)
+      return ''
     } catch (e) {
       setErrTitle('No diagram')
       setImgErr(e.message || 'The diagram could not be started.')
+      return e.message || 'The diagram could not be started.'
     } finally { makingDiagram.current = false }
+  }
+
+  /* A header lens button (picture, map, timeline, diagram, story, listen) on a page; Kairos's
+   * lens command presses the same one. */
+  const MAKE = { image: makeImage, map: makeMap, timeline: makeTimeline, diagram: makeDiagram, story: makeStory }
+  const lens = (kind, nodeId = view.nodeId, title = view.title) => {
+    const [make, ...args] = lensCall(kind, nodeId, title)
+    return MAKE[make](...args)
   }
 
   const loadMedia = useCallback(async (id) => {
@@ -400,6 +441,23 @@ export default function Reader({ windowId, start, onPick }) {
     pick({ phrase, rect: range.getBoundingClientRect(), newWindow: e.ctrlKey || e.metaKey })
   }
 
+  /* KAIROS. A command from Kairos (ui/src/remote.js) runs here as the reader's own typing or
+   * clicking would, and is posted done once the page starts streaming or the lens job starts.
+   * "Kairos asked: …" is the Desktop's (above every window, so a lens window can't hide it). */
+  const titleRef = useRef('')
+  titleRef.current = view.title
+  const kairos = (cmd, finish) => {
+    wm.focus(windowId)
+    return kairosRun(cmd, {
+      nodeId: nodeRef.current, title: titleRef.current, streaming: streamingRef.current,
+      routePrompt, carryOut, run, lens, status: api.status,
+    }, finish)
+  }
+  const kairosRef = useRef(kairos)
+  kairosRef.current = kairos
+  useEffect(() => registerReader(windowId, (cmd, finish) => kairosRef.current(cmd, finish)), [windowId])
+  useEffect(() => { setReaderPage(windowId, view.nodeId, view.title) }, [windowId, view.nodeId, view.title])
+
   useEffect(() => { if (start) run(start) }, [])             // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (view.title) wm.setTitle(windowId, view.title) }, [windowId, view.title])
 
@@ -476,7 +534,7 @@ export default function Reader({ windowId, start, onPick }) {
           <Button size="sm" disabled={!view.nodeId || view.streaming || !imgBtn.enabled}
                   title={imgBtn.enabled ? 'Draw a picture of this page' : imgBtn.reason}
                   aria-label={imgBtn.enabled ? 'Image' : `Image (unavailable: ${imgBtn.reason})`}
-                  onClick={() => makeImage({ node_id: view.nodeId, subject: view.title })}>Image</Button>
+                  onClick={() => lens('picture')}>Image</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !vidBtn.enabled}
                   title={vidBtn.enabled ? 'Make a short video of this page' : vidBtn.reason}
                   aria-label={vidBtn.enabled ? 'Video' : `Video (unavailable: ${vidBtn.reason})`}
@@ -484,23 +542,23 @@ export default function Reader({ windowId, start, onPick }) {
           <Button size="sm" disabled={!view.nodeId || view.streaming || !mapBtn.enabled}
                   title={mapBtn.enabled ? 'Show the places this page names on a map' : mapBtn.reason}
                   aria-label={mapBtn.enabled ? 'Map' : `Map (unavailable: ${mapBtn.reason})`}
-                  onClick={() => makeMap({ node_id: view.nodeId, subject: view.title })}>Map</Button>
+                  onClick={() => lens('map')}>Map</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !timelineBtn.enabled}
                   title={timelineBtn.enabled ? 'Put the dates this page names on a timeline' : timelineBtn.reason}
                   aria-label={timelineBtn.enabled ? 'Timeline' : `Timeline (unavailable: ${timelineBtn.reason})`}
-                  onClick={() => makeTimeline(view.nodeId, view.title)}>Timeline</Button>
+                  onClick={() => lens('timeline')}>Timeline</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !diagramBtn.enabled}
                   title={diagramBtn.enabled ? 'Draw a labelled diagram of how this works' : diagramBtn.reason}
                   aria-label={diagramBtn.enabled ? 'Diagram' : `Diagram (unavailable: ${diagramBtn.reason})`}
-                  onClick={() => makeDiagram({ node_id: view.nodeId, subject: view.title })}>Diagram</Button>
+                  onClick={() => lens('diagram')}>Diagram</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !storyBtn.enabled}
                   title={storyBtn.enabled ? 'Read this page aloud' : storyBtn.reason}
                   aria-label={storyBtn.enabled ? 'Listen' : `Listen (unavailable: ${storyBtn.reason})`}
-                  onClick={() => makeStory(view.nodeId, 'listen', view.title)}>Listen</Button>
+                  onClick={() => lens('listen')}>Listen</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming || !storyBtn.enabled}
                   title={storyBtn.enabled ? 'Retell this page as an illustrated, narrated story' : storyBtn.reason}
                   aria-label={storyBtn.enabled ? 'Story' : `Story (unavailable: ${storyBtn.reason})`}
-                  onClick={() => makeStory(view.nodeId, 'story', view.title)}>Story</Button>
+                  onClick={() => lens('story')}>Story</Button>
           <Button size="sm" disabled={!tmBtn.enabled} aria-pressed={testing === view.nodeId && !!view.nodeId}
                   title={tmBtn.enabled ? 'Three questions about this page' : tmBtn.reason}
                   aria-label={tmBtn.enabled ? 'Test me' : `Test me (unavailable: ${tmBtn.reason})`}

@@ -302,6 +302,21 @@ out of the way of your own jobs). You can still turn it on.
 
 When you open another page, drafts for the page you left are dropped rather than finished.
 
+## Kairos can drive Primer
+
+If you use Kairos, the companion app on this computer, Kairos can open pages in Primer for you.
+Say "show me Bodiam Castle" or "tell me a story about that" to Kairos, and Primer does it in the
+tab you have open, as if you had typed it. "That" means the page you are reading.
+
+It is off until you turn on **Let Kairos drive Primer** in **Engines**, next to Thinking ahead.
+Whenever Kairos asks for something, a note "Kairos asked: ..." shows above your windows for a few
+seconds, so you always see what was asked. Kairos can open pages and start a picture, map,
+timeline, diagram, story or reading. It can't delete anything, change settings or make books.
+
+![The Map window with the note "Kairos asked: a map of Bodiam Castle" above it](screenshots/kairos-drives.webp)
+
+To set Kairos up, see [RUNNING.md](RUNNING.md#letting-kairos-drive-primer).
+
 ## The map
 
 **Map of where I've been** lists every page you have opened, indented under the page you branched

@@ -1,11 +1,12 @@
 /* Engines — which tier is chosen, whether each model server is up (with Start/Stop), and
  * how the book is sourced. Polls every 2 s. */
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import * as api from '../api.js'
 import { rewriteOptions } from '../reader/sourceMode.js'
 import { Button, Chip, Select } from '../kit/parts.jsx'
 import { Body, usePoll } from './panel.jsx'
-import { THINKING_OPTIONS, gpuBackgroundNote, thinkingNow, thinkingSetting, thinkingStats } from './thinkingAhead.js'
+import { remoteSwitched } from '../remote.js'
+import { KAIROS_HINT, KAIROS_LABEL, THINKING_OPTIONS, gpuBackgroundNote, remoteEnabled, thinkingNow, thinkingSetting, thinkingStats } from './thinkingAhead.js'
 import './apps.css'
 
 const TONE = { ready: 'ok', unavailable: 'warn', busy: 'warn', starting: 'warn', failed: 'err', external: 'neutral', stopped: 'neutral' }
@@ -50,6 +51,24 @@ function ImageServer({ im, avail, gpu }) {
       {im.state !== 'ready' && reason ? <div className="en-reason">{reason}</div> : null}
       {gpu && gpu.mode === 'auto' && gpu.text_paused
         ? <div className="en-paused">Writing model paused for a picture or video</div> : null}
+    </div>
+  )
+}
+
+/* "Let Kairos drive Primer": off, Kairos may only read; on, it may open pages and lenses here.
+ * The switch is named by its label (aria-labelledby as well as the wrapping label, which some
+ * accessibility trees miss for role="switch", leaving it as "on"); the hint describes it. */
+export function KairosSwitch({ st, busy, onChange }) {
+  const id = useId()
+  return (
+    <div className="en-tier">
+      <label className="rm-switch">
+        <input type="checkbox" role="switch" checked={remoteEnabled(st)} disabled={busy}
+               aria-labelledby={`${id}-label`} aria-describedby={`${id}-hint`}
+               onChange={(e) => onChange(e.target.checked)} />
+        <span id={`${id}-label`}>{KAIROS_LABEL}</span>
+      </label>
+      <span className="en-note" id={`${id}-hint`}>{KAIROS_HINT}</span>
     </div>
   )
 }
@@ -114,6 +133,7 @@ export default function Engines() {
                 </Select>
                 {thinkingStats(st.thinking_ahead) ? <span className="en-note">{thinkingStats(st.thinking_ahead)}</span> : null}
                 {thinkingNow(st.thinking_ahead) ? <span className="en-note">{thinkingNow(st.thinking_ahead)}</span> : null}</div>
+              <KairosSwitch st={st} busy={busy} onChange={(on) => act(async () => remoteSwitched(remoteEnabled(await api.setRemoteEnabled(on))))} />
               </div>
             </section>
           </>

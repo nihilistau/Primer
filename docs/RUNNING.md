@@ -635,8 +635,9 @@ without a draft).
 
 ## Kairos
 
-Primer can tell Kairos (the companion) what you read, and Kairos can look at Primer. Both are off
-until you set them up, and neither starts a model or touches the GPU.
+Primer can tell Kairos (the companion) what you read, and Kairos can look at Primer and, with a
+switch you turn on, drive it. Each is off until you set it up. Looking never starts a model or
+touches the GPU.
 
 ### Telling Kairos what you read
 
@@ -655,7 +656,8 @@ history, and Kairos never reads one. Use it as an off-the-record switch.
 `python -m primer.mcp_server` is an MCP server (stdio) with one tool, `primer(action, args)`.
 It reads a running Primer through its localhost API (`PRIMER_URL`, default
 `http://127.0.0.1:8810`). Actions: `help`, `status`, `page {"id"}` (the `ref` of an activity
-row), `reader`, `quiz_due` and `quest`. All are read-only. It keeps one tool with a fixed schema
+row), `reader`, `quiz_due` and `quest`. These are read-only. `now`, `trail`, `find`, `show`,
+`open` and `lens` are covered in "Letting Kairos drive Primer" below. It keeps one tool with a fixed schema
 on purpose: Kairos caches tool schemas in her prompt and refuses a bridged tool whose schema
 changes, so new actions arrive through `help` without moving anything she has cached.
 
@@ -673,7 +675,99 @@ so it costs her one cold restart):
 }
 ```
 
-`risk` is `private` because it looks at what you are doing (Kairos's `harness/tools/manifest.py`: "looks at his room, his screen, or his camera"); it changes nothing in Primer. `bridged` is her group for an MCP server without one of its own.
+`risk` is `private` because it looks at what you are doing (Kairos's `harness/tools/manifest.py`: "looks at his room, his screen, or his camera"); the read actions change nothing in Primer, and driving sits behind the switch described below. `bridged` is her group for an MCP server without one of its own.
+
+### Letting Kairos drive Primer
+
+Kairos can also open pages and lenses in the Primer tab you have open. Primer must be open in a
+browser: the work is done in your view, as if you had typed or clicked it, so the page lands on
+your trail.
+
+**The switch.** Turn on **Let Kairos drive Primer** in the Engines window, next to Thinking ahead.
+It is off by default and saved in `settings.json` as `remote_enabled`. Only the browser can set
+it: `POST /v1/remote-enabled {"value": true}` needs `Sec-Fetch-Site: same-origin`, so a web page
+or another tool can't. A determined program on this machine could still forge that header, so
+treat the switch as a guard against accidents, not a lock. While it is off, every driving action
+answers "Kairos can't drive Primer: turn it on in Settings". The read actions keep working.
+
+**Actions.** The MCP tool keeps its one schema, so Kairos needs no new cold restart.
+
+| Action | What it does |
+| --- | --- |
+| `now` | Says which page is open, or that none is, and whether Primer is open in a browser. |
+| `trail {"limit": n}` | Lists the pages read, newest first. 20 by default, at most 100. |
+| `find {"q": ...}` | Lists read pages whose title contains `q`, at most 20. |
+| `show {"text": ...}` | Does what typing the text into the Reader's ask box does. "that", "it" or "this page" means the open page, so "tell me a story about that" becomes a story about the open page. |
+| `open {"id": ...}` | Opens a page already read. |
+| `lens {"kind": ..., "id"?}` | Starts a lens on a page, the open one by default. `kind` is picture, map, timeline, diagram, story or listen. |
+
+Kairos can't delete anything, change settings or models, make books, or open websites.
+
+**The tab.** Every open Primer tab listens for commands. The tab used most recently takes them,
+and a tab that just ran Kairos's command keeps reporting its page even when hidden. A note
+"Kairos asked: ..." shows above every window for 8 seconds. If Chrome on Windows marks a fully
+covered window hidden, a tab that didn't run the last command won't take the focus until you
+click it.
+
+With the switch on, each open Primer tab keeps one connection to Primer; browsers allow six
+per site, so keep to a few Primer tabs. With it off, no tab holds one: turning it off ends them,
+and a tab connects again within a few seconds of it going back on.
+
+**Answers.** Each driving action answers with one sentence once the tab has done it. Long work
+(a picture, a clip, a story) answers as soon as it starts. *T* is the page title.
+
+- "Opened *T* (page ...)"
+- "Primer is writing *T*; it's open in the Reader"
+- "Started a picture of *T*; it will appear in Primer"
+- "Started a clip of *T*; it will appear in Primer"
+- "Started a map of *T*; it will appear in Primer"
+- "Started a timeline of *T*; it will appear in Primer"
+- "Started a diagram of *T*; it will appear in Primer"
+- "Started a story about *T*; it will appear in Primer"
+- "Reading *T* aloud in Primer"
+
+Refusals:
+
+- "Kairos can't drive Primer: turn it on in Settings"
+- "Primer isn't open in a browser. Open http://127.0.0.1:<port> first." Commands are not queued.
+- "Primer is still doing the last thing Kairos asked"
+- "Kairos asked Primer for too much at once: wait a minute"
+- "Open a page in Primer first", when "that" or a lens has no open page to mean.
+- "Primer hasn't finished yet; it's still working on it", when the MCP wait ends.
+
+**Limits.** Show text is at most 300 characters. One command runs at a time (409), at most 20 a
+minute (429). A tab must pick a command up within 10 s, and the tab or the MCP wait gives up
+after 90 s. At most 16 tabs listen; a 17th closes the oldest unfocused one. Commands live in
+memory only and don't survive a restart.
+
+**Activity.** A page Kairos opened is written to Kairos's activity record as
+`kairos_opened_page` instead of `open_page`, so Kairos never reads its own command back as
+something the reader chose. Later actions on that page are written as usual.
+
+**The tool API.** The MCP tool is a thin client of these localhost routes. The usual guard
+applies: a foreign Host, Origin or `Sec-Fetch-Site` is refused, and a POST needs a JSON
+Content-Type.
+
+Kairos's side:
+
+- `GET /v1/tool/now` answers `{enabled, listening, focus: {node_id, title} | null}`.
+- `GET /v1/tool/trail?limit=` answers `{pages: [...]}` in trail order.
+- `GET /v1/tool/find?q=` answers `{pages: [{id, title}]}`.
+- `POST /v1/tool/show {text}`, `POST /v1/tool/open {id}` and `POST /v1/tool/lens {kind, id?}`
+  answer 202 `{command}`. Errors are 400 (bad input), 403 (switch off), 404 (no such page), 409
+  (busy, or no tab open) and 429 (rate limit).
+- `GET /v1/tool/commands/<id>` answers the command: `{id, kind, args, status, result, error,
+  created_at}`. `status` is `queued`, `delivered`, `done` or `failed`.
+
+The tab's side:
+
+- `GET /v1/tool/stream` is a server-sent event stream. The first event is `hello {listener}`.
+  Then come `command` events, and a `: ping` comment every 15 s.
+- `POST /v1/tool/focus {listener, node_id, title}` reports the tab's open page.
+- `POST /v1/tool/commands/<id>/done {listener, ok, result | error}` finishes a command. A
+  `result` is `{node_id?, title, what}`; an `error` is a string.
+
+`GET /v1/status` has `remote: {enabled, listening}`.
 
 ## Tests
 

@@ -25,6 +25,8 @@ export const setTier = (name) => j('POST', '/v1/tier', { name })
 export const serverAction = (role, action) => j('POST', `/v1/servers/${encodeURIComponent(role)}/${action}`)
 export const setSourceMode = (mode) => j('POST', '/v1/source-mode', { mode })
 export const setThinkingAhead = (setting) => j('POST', '/v1/thinking-ahead', { setting })
+// the "Let Kairos drive Primer" switch (the server takes it only from Primer's own page: same-origin)
+export const setRemoteEnabled = (value) => j('POST', '/v1/remote-enabled', { value: !!value })
 export const page = (id) => j('GET', `/v1/pages/${encodeURIComponent(id)}`)
 export const branches = (node, phrase) =>
   j('GET', `/v1/branches?node=${encodeURIComponent(node)}&phrase=${encodeURIComponent(phrase)}`)
@@ -178,3 +180,12 @@ export const taleOpen = (taleId) => j('POST', '/v1/tales/open', { tale_id: taleI
 export const taleNext = (pages) => j('POST', '/v1/tales/next', pages ? { pages } : {})
 export const taleEdit = (taleId, fields) => j('POST', '/v1/tales/edit', { ...fields, tale_id: taleId })
 export const taleRetry = (taleId, n) => j('POST', '/v1/tales/retry-update', { tale_id: taleId, n })
+
+/* Kairos drives Primer (Phase 15): the window's side. The stream itself is ui/src/remote.js;
+ * these report the focused page ({listener, node_id, title}) and a command done
+ * ({listener, ok: true, result: {node_id, title, what}} or {listener, ok: false, error}). */
+// hidden: reported while the tab is in the background (the server keeps the page, not the focus)
+export const toolFocus = (listener, nodeId, title, hidden = false) =>
+  j('POST', '/v1/tool/focus', { listener, node_id: nodeId, title, ...(hidden ? { hidden: true } : {}) })
+export const toolDone = (id, listener, outcome) =>
+  j('POST', `/v1/tool/commands/${encodeURIComponent(id)}/done`, { ...outcome, listener })

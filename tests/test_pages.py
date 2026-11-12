@@ -40,10 +40,12 @@ def test_open_new_page_streams_saves_and_highlights(svc):
 
 
 def test_reopen_is_cached_and_not_regenerated(svc, text_engine):
-    list(svc.open(OpenRequest("Trebuchet", "start")))
+    first = list(svc.open(OpenRequest("Trebuchet", "start")))
+    assert dict(first)["node"]["cached"] is False  # a new page: being written
     n = len(text_engine.calls)
     ev = list(svc.open(OpenRequest("trebuchet", "typed")))
     assert dict(ev)["done"]["cached"] is True and len(text_engine.calls) == n
+    assert dict(ev)["node"]["cached"] is True  # known before any text: Kairos says "Opened"
     assert dict(ev)["highlights"]["phrases"] == ["counterweight"]
 
 

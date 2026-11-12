@@ -1,4 +1,5 @@
-/* thinkingAhead — pure labels for the Engines "Thinking ahead" row. */
+/* thinkingAhead — pure labels for the Engines "Thinking ahead" row, and the "Let Kairos drive
+ * Primer" switch beside it. */
 
 export const THINKING_OPTIONS = [
   { value: 0, label: 'Off' },
@@ -27,4 +28,11 @@ export function thinkingNow(ta) {
 /** The GPU row's extra words: the idle GPU is busy writing ahead. */
 export function gpuBackgroundNote(gpu) {
   return gpu && gpu.background ? 'thinking ahead' : ''
+}
+
+/* the "Let Kairos drive Primer" switch (Phase 15): its words and its state in a status payload */
+export const KAIROS_LABEL = 'Let Kairos drive Primer'
+export const KAIROS_HINT = 'Kairos can open pages and lenses here when you ask it to.'
+export function remoteEnabled(st) {
+  return !!(st && st.remote && st.remote.enabled === true)
 }

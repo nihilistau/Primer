@@ -32,7 +32,7 @@ def _sources_event(sources) -> dict:
 @dataclass
 class OpenRequest:
     concept: str
-    via: Literal["start", "typed", "context", "general", "sideways"]
+    via: Literal["start", "typed", "context", "general", "sideways", "kairos"]
     from_id: str | None = None
     phrase: str = ""
     depth: Literal["normal", "deeper", "simpler"] = "normal"
@@ -92,7 +92,7 @@ class PageService:
         # Advisory: the badge can show this early; the `done` event carries the authoritative mode.
         mode = latest.source_mode if serve_cached else self._mode(req)
         yield ("node", {"id": node.id, "title": node.title, "kind": node.kind, "parent_id": node.parent_id,
-                      "source_mode": mode})
+                      "source_mode": mode, "cached": serve_cached})
         with self._lock_for(node.id):
             latest = self.graph.latest_version(node.id)
             regenerate = req.regenerate or self._not_from_url(node, latest, req)
@@ -236,7 +236,8 @@ class PageService:
         """The node to open (adding its edge), or an error message."""
         if req.node_id:
             return self.graph.get_node(req.node_id) or "not found"
-        concept = clean_typed(req.concept) if req.via == "typed" else req.concept
+        # what Kairos asked for is typed text too ("show me Bodiam Castle")
+        concept = clean_typed(req.concept) if req.via in ("typed", "kairos") else req.concept
         if not concept:
             return "empty"
         try:
