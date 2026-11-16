@@ -17,6 +17,7 @@ import ReviewWindow from './apps/ReviewWindow.jsx'
 import QuestWindow from './apps/QuestWindow.jsx'
 import TaleWindow from './apps/TaleWindow.jsx'
 import BookWindow from './apps/BookWindow.jsx'
+import BoundBook from './bound/BoundBook.jsx'
 
 export const APPS = {
   reader: { title: 'New page', icon: 'story', size: [720, 640], component: Reader },
@@ -48,6 +49,9 @@ export const APPS = {
   tale: { title: 'Tale', icon: 'journal', size: [640, 760], component: TaleWindow, single: true },
   // your book: the trail as an EPUB and an HTML file, and the books made before (Phase 13)
   book: { title: 'Book', icon: 'book', size: [620, 760], component: BookWindow, single: true },
+  // multi-instance, not in the dock: a book read by turning its pages (Phase 16), props
+  // { bookId } or { scope, include, title?, by? } (the live trail), and chapter? to open at
+  bound: { title: 'Bound book', icon: 'book', size: [1040, 760], component: BoundBook },
 }
 
 /* the dock's buttons, in order */

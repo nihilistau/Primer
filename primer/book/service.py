@@ -4,11 +4,12 @@
 A request is checked before anything is recorded: the scope and switches, a page to branch
 from, something to put in the book, and the size estimate against MAX_BYTES. The plan the
 request collected is the one the job writes. Files are written as `<id>.epub.part` and
-`<id>.html.part` and renamed once whole; a job that fails, is deleted or is stopped by a
-shutdown leaves no files behind.
+`<id>.html.part` (and the bound book's blocks as `<id>.blocks.json.part`) and renamed once
+whole; a job that fails, is deleted or is stopped by a shutdown leaves no files behind.
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import re
@@ -16,6 +17,9 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from primer.book.blocks import KINDS as BLOCK_KINDS
+from primer.book.blocks import blocks as book_blocks
+from primer.book.blocks import guard as block_guard
 from primer.book.epub import write_epub
 from primer.book.html import write_html
 from primer.book.model import _include, _scope, collect, estimate
@@ -31,6 +35,10 @@ FAILED_WRITE = "The book couldn't be made: a file couldn't be written"
 EMPTY = "Nothing to put in the book: no pages read in that part of the trail"
 BOOK_ID = re.compile(r"[0-9a-f]{16}")
 FORMATS = ("epub", "html")
+BLOCKS = "blocks.json"  # the bound book's blocks, saved with the book (`<id>.blocks.json`)
+UNKNOWN_PAGE = ("unknown page", "that page was never read")
+MAX_BLOCKS_FILE = 64 * 1024 * 1024  # a saved blocks file bigger than this is rebuilt, not read
+LAYING_OUT = "Primer is already laying out a book"
 
 
 class BookBusy(Exception):
@@ -51,6 +59,25 @@ def slug(title: str) -> str:
     return s or "book"
 
 
+class BookNotReady(Exception):
+    pass
+
+
+class BookLayingOut(Exception):
+    """Another bound book is being built in memory (one at a time)."""
+
+
+def _valid_block(b) -> bool:
+    """A saved block as `blocks` writes it: a known kind, a chapter number, and HTML that the
+    guard writes back unchanged."""
+    if not isinstance(b, dict):
+        return False
+    chapter, html = b.get("chapter"), b.get("html")
+    return (b.get("kind") in BLOCK_KINDS and isinstance(chapter, int) and not isinstance(chapter, bool)
+            and chapter >= 0 and isinstance(html, str) and block_guard(html)
+            and isinstance(b.get("node_id", ""), str))
+
+
 class BookService:
     """`archive_getter()` is the tier's open map file, or None for plain map plates; it is read
     when a job starts (a tier switch may change it)."""
@@ -62,6 +89,7 @@ class BookService:
         self.archive_getter = archive_getter
         self._queue: queue.Queue = queue.Queue()
         self._lock = threading.Lock()
+        self._layout = threading.Lock()  # one in-memory bound book at a time (live or rebuilt)
         self._closed = False
         self._busy: str | None = None  # "" while a request is being checked, else the job's id
         self._plans: dict[str, object] = {}
@@ -79,14 +107,64 @@ class BookService:
         return {"chapters": est["chapters"], "pictures": est["pictures"], "bytes": est["bytes"],
                 "title": plan.title}
 
+    def live_blocks(self, scope, include, title=None, by=None) -> dict:
+        """{blocks, title}: the trail as the bound book's blocks, built in memory with no job and
+        no files. ValueError for a bad request (as `create`), BookTooBig over the size limit."""
+        _check_names(title, by)
+        plan, made = self._lay_out(scope, include, title or "", by or "")
+        return {"blocks": made, "title": plan.title}
+
+    def _lay_out(self, scope, include, title: str, by: str):
+        """(plan, blocks) built in memory, one at a time: BookLayingOut while another is being
+        built, BookTooBig over the size limit, ValueError for a bad scope or include."""
+        if not self._layout.acquire(blocking=False):
+            raise BookLayingOut(LAYING_OUT)
+        try:
+            plan = collect(self.graph, scope, include, title=title, by=by, media_dir=self.media_dir)
+            if estimate(plan, self.media_dir)["bytes"] > MAX_BYTES:
+                raise BookTooBig(TOO_BIG)
+            return plan, book_blocks(plan, self.media_dir, archive=self._archive())
+        finally:
+            self._layout.release()
+
+    def saved_blocks(self, book_id: str) -> dict | None:
+        """{blocks, title, rebuilt} for a made book: its saved blocks, or, for a book saved
+        without them (made before v0.15.0) or whose file can't be read, the book rebuilt from
+        its scope and switches with `rebuilt` true. The saved file is checked, not trusted: one
+        over MAX_BLOCKS_FILE, or with any block `_valid_block` refuses, is rebuilt. None for no
+        such book, BookNotReady while it isn't done; rebuilding raises as `live_blocks` does
+        (ValueError when its page is gone)."""
+        book = self.get(book_id)
+        if book is None:
+            return None
+        if book["status"] != "done":
+            raise BookNotReady("The book isn't finished")
+        path = self.dir / f"{book_id}.{BLOCKS}"
+        try:
+            if path.stat().st_size > MAX_BLOCKS_FILE:
+                log.warning("book %s: saved blocks are too big; rebuilding", book_id)
+            else:
+                with path.open(encoding="utf-8") as f:
+                    saved = json.load(f)
+                found = saved.get("blocks") if isinstance(saved, dict) else None
+                if isinstance(found, list) and all(_valid_block(b) for b in found):
+                    return {"blocks": found, "title": book["title"], "rebuilt": False}
+                log.warning("book %s: saved blocks don't check out; rebuilding", book_id)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, RecursionError):
+            log.warning("book %s: saved blocks can't be read; rebuilding", book_id, exc_info=True)
+        params = book.get("params") or {}
+        _plan, made = self._lay_out(params.get("scope"), params.get("include"),
+                                    str(params.get("title") or book["title"] or ""),
+                                    str(params.get("by") or ""))
+        return {"blocks": made, "title": book["title"], "rebuilt": True}
+
     def create(self, scope, include, title=None, by=None) -> str:
         """Queue a book and return its id. BookBusy while one is queued or being made,
         BookTooBig(reason) over the size limit, ValueError for a bad request (a branch page that
         is unknown or never read says "unknown page" or "that page was never read")."""
-        if title is not None and not isinstance(title, str):
-            raise ValueError("title must be a string")
-        if by is not None and not isinstance(by, str):
-            raise ValueError("by must be a string")
+        _check_names(title, by)
         with self._lock:
             if self._closed:
                 raise ValueError(SHUT_DOWN)
@@ -167,8 +245,36 @@ class BookService:
         except OSError:
             log.warning("could not remove %s", path.name, exc_info=True)
 
+    def _save_blocks(self, book_id: str, plan, archive, plates: dict) -> None:
+        """The bound book's blocks, so "Open as a book" shows exactly what was downloaded. A
+        failure here doesn't fail the book: it is logged, no file is kept, and the book is
+        rebuilt when it is opened. A stop still stops the job."""
+        part = self.dir / f"{book_id}.{BLOCKS}.part"
+        try:
+            made = book_blocks(plan, self.media_dir, archive=archive, plates=plates)
+            if self._stopped(book_id):
+                raise _Stopped()
+            with part.open("w", encoding="utf-8", newline="\n") as f:
+                json.dump({"blocks": made}, f, ensure_ascii=False, separators=(",", ":"))
+            if self._stopped(book_id):
+                raise _Stopped()
+            part.replace(self.dir / f"{book_id}.{BLOCKS}")
+        except _Stopped:
+            raise
+        except Exception:
+            log.exception("book %s: its blocks couldn't be saved; it will be rebuilt when opened",
+                          book_id)
+            self._unlink(part)
+
+    def _archive(self):
+        try:
+            return self.archive_getter()
+        except Exception:
+            log.warning("no map file for the book's plates", exc_info=True)
+            return None
+
     def _remove_files(self, book_id: str) -> None:
-        for fmt in FORMATS:
+        for fmt in FORMATS + (BLOCKS,):
             for name in (f"{book_id}.{fmt}", f"{book_id}.{fmt}.part"):
                 self._unlink(self.dir / name)
 
@@ -186,7 +292,7 @@ class BookService:
                 self._unlink(path)
                 continue
             stem, _, fmt = path.name.partition(".")
-            if fmt in FORMATS and BOOK_ID.fullmatch(stem):
+            if (fmt in FORMATS or fmt == BLOCKS) and BOOK_ID.fullmatch(stem):
                 book = self.graph.get_book(stem)
                 if book is None or book["status"] != "done":
                     self._unlink(path)
@@ -238,11 +344,7 @@ class BookService:
             raise RuntimeError("the book's plan is gone")
         self.graph.update_book(book_id, status="making",
                                progress={"done": 0, "total": len(plan.chapters), "stage": "epub"})
-        try:
-            archive = self.archive_getter()
-        except Exception:
-            log.warning("no map file for the book's plates", exc_info=True)
-            archive = None
+        archive = self._archive()
         self.dir.mkdir(parents=True, exist_ok=True)
         sizes = {}
         last: dict = {}
@@ -263,4 +365,12 @@ class BookService:
             if self._stopped(book_id):
                 raise _Stopped()
             part.replace(self.dir / f"{book_id}.{fmt}")
+        self._save_blocks(book_id, plan, archive, plates)
         self.graph.update_book(book_id, status="done", epub_size=sizes["epub"], html_size=sizes["html"])
+
+
+def _check_names(title, by) -> None:
+    if title is not None and not isinstance(title, str):
+        raise ValueError("title must be a string")
+    if by is not None and not isinstance(by, str):
+        raise ValueError("by must be a string")

@@ -612,6 +612,41 @@ Measured on the local-gpu tier with a real trail: 42 chapters and 12 pictures ma
 MB and an HTML file of 62 MB in about 2 seconds; a branch of 9 chapters took about 1 second;
 each map plate was drawn in well under a second.
 
+### The bound book
+
+The bound book (Phase 16) reads the same book in the browser as pages that turn. It needs no
+model either.
+
+- **When a book is made**, the job also saves its **blocks** as `var/books/<id>.blocks.json`.
+  These are the book's HTML split into pieces such as a paragraph, a picture or a plate.
+- **Routes:**
+  - `GET /v1/books/<id>/blocks` returns `{blocks, title, rebuilt}`. It answers:
+    - 404 for an unknown book, or when a book that has to be rebuilt can't be, for example
+      because its branch page is gone;
+    - 409 while the book is still being made, or while another layout runs;
+    - 413 when a rebuild is too big.
+  - `POST /v1/books/blocks {scope, include, title?, by?}` returns `{blocks, title}` for the live
+    trail. It makes no files, and it answers 400, 404 and 413 like the preview route.
+  - Only one layout runs at a time, whether rebuilding a book or reading the live trail; a
+    second gets 409.
+- **Books made before 0.15.0** have no blocks file. They are rebuilt from their saved choices,
+  with `rebuilt: true`.
+- **Checks:**
+  - Every block passes a server-side allowlist (known tags and attribute names, no deeper than 64
+    levels).
+  - The browser checks every block again before it shows it.
+  - Pictures are `/v1/media/<64 hex>.png` URLs.
+  - Links never open a new tab.
+- **In the browser**, pages are laid out in chunks while the page is idle, and only the open
+  spread is drawn. The page size is A5 (1 : 1.414); a turn takes 600 ms. Your place in each book,
+  the paper and the sound setting are kept in the browser's `localStorage`.
+
+**Measured** on the local-gpu tier with the real trail:
+- The 42-chapter book (443 blocks) came from the server in 0.5 s and laid out as 125 pages at
+  1280 × 860.
+- The live trail opened as a book in about 1 s.
+- Turns, including over a map plate, kept the browser's steady frame rate with no long frames.
+
 ## Thinking ahead
 
 Phase 8 drafts the likely next page on the idle GPU (spec:

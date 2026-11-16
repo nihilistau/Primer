@@ -26,6 +26,8 @@ import { dwellTracker, testMeButton } from '../apps/readerModel.js'
 import TestMe from './TestMe.jsx'
 import { announceTale } from '../apps/tale.js'
 import { kairosRun, lensCall, registerReader, setReaderPage } from '../remote.js'
+import { openBound } from '../bound/view.js'
+import { allIncluded } from '../apps/book.js'
 import './reader.css'
 
 const EMPTY = { nodeId: null, title: '', markdown: '', n: 0, depth: 'normal', sourceMode: '', sources: [], grounding: '', note: '',
@@ -339,6 +341,22 @@ export default function Reader({ windowId, start, onPick }) {
     }
   }, [windowId])
   useEffect(() => { if (dwell.current) dwell.current.show(view.nodeId) }, [view.nodeId])
+  /* Book view: this page and what branched from it, as a bound book opened at its chapter (the
+   * branch book's first). The toggle is on while the window it opened for this page is open. */
+  const [bookView, setBookView] = useState(null)   // {id, nodeId}
+  useEffect(() => {
+    if (!bookView) return
+    const gone = () => { if (!wm.getWindows().some(w => w.id === bookView.id)) setBookView(null) }
+    gone()
+    return wm.subscribe(gone)
+  }, [bookView])
+  const toggleBookView = () => {
+    if (bookView) wm.close(bookView.id)
+    if (bookView && bookView.nodeId === view.nodeId) { setBookView(null); return }
+    if (!view.nodeId) return
+    const id = openBound({ scope: { kind: 'branch', node_id: view.nodeId }, include: allIncluded(), chapter: 1 })
+    setBookView({ id, nodeId: view.nodeId })
+  }
   useEffect(() => { setTesting(null) }, [view.nodeId])
   // Deeper, Simpler, Regenerate or a rewrite: close Test me, so the new version doesn't make
   // new questions by itself (a GPU call nobody asked for)
@@ -566,6 +584,9 @@ export default function Reader({ windowId, start, onPick }) {
           <Button size="sm" disabled={!view.nodeId || view.streaming}
                   title="A quest through the pages that led here"
                   onClick={() => wm.open('quest', { props: { fromNodeId: view.nodeId }, single: true, w: 600, h: 720 })}>Quest</Button>
+          <Button size="sm" disabled={!view.nodeId || view.streaming} aria-pressed={!!bookView && bookView.nodeId === view.nodeId}
+                  title="This page and what branched from it, as a book to leaf through"
+                  onClick={toggleBookView}>Book view</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'deeper' })}>Deeper</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ depth: 'simpler' })}>Simpler</Button>
           <Button size="sm" disabled={!view.nodeId || view.streaming} onClick={() => reload({ regenerate: true })}>Regenerate</Button>

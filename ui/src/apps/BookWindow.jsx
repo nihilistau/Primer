@@ -6,7 +6,10 @@
  *
  * One book is made at a time (the server answers 409 otherwise). A book still being made when
  * the window opens is picked up and followed. Polling stops when the window closes. The timed
- * parts (the debounced preview, following a book) live in bookJobs.js. */
+ * parts (the debounced preview, following a book) live in bookJobs.js.
+ *
+ * Phase 16: any finished book can be opened as a bound book (Open as a book), and Read my trail
+ * as a book opens the same choice of scope and switches as one, built in memory: no files, no job. */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api.js'
 import { Button, Input } from '../kit/parts.jsx'
@@ -15,6 +18,7 @@ import {
   isActive, pickablePages, previewText, progressText, scopeBody, sinceSeconds, sizesText,
 } from './book.js'
 import { createFollower, createPreviewer } from './bookJobs.js'
+import { openBound } from '../bound/view.js'
 import './apps.css'
 
 const PAGE_LIST_MAX = 200
@@ -24,7 +28,7 @@ const SCOPES = [
   ['since', 'Since a date'],
 ]
 
-/* the two downloads of a finished book; `named` puts the book's title in their labels */
+/* the two downloads of a finished book and Open as a book; `named` puts the book's title in their labels */
 export function Downloads({ book, named = false }) {
   if (!book || book.status !== 'done') return null
   const of = named ? ` of “${book.title || 'Untitled'}”` : ''
@@ -32,6 +36,7 @@ export function Downloads({ book, named = false }) {
     <span className="bkw-dl">
       <a className="bkw-link" href={api.bookFileUrl(book.id, 'epub')} download aria-label={`Download the EPUB${of}`}>Download EPUB</a>
       <a className="bkw-link" href={api.bookFileUrl(book.id, 'html')} download aria-label={`Download the HTML${of}`}>Download HTML</a>
+      <Button size="sm" variant="ghost" aria-label={named ? `Open “${book.title || 'Untitled'}” as a book` : 'Open as a book'} onClick={() => openBound({ bookId: book.id })}>Open as a book</Button>
     </span>
   )
 }
@@ -236,6 +241,10 @@ export default function BookWindow() {
         <div className={'bkw-preview' + (previewErr ? ' bkw-err' : '')} role="status">{previewLine}</div>
         <div className="bkw-make">
           <Button variant="primary" disabled={!canMake} onClick={make}>Make the book</Button>
+          <Button disabled={!body || (preview && !preview.chapters)} title="Read it here, turning its pages, with no files made"
+                  onClick={() => body && openBound({ scope: body.scope, include: body.include, title: body.title, by: body.by })}>
+            Read my trail as a book
+          </Button>
           {job ? (
             <span className={'bkw-progress' + (job.status === 'failed' ? ' bkw-err' : '')} role="status">
               {isActive(job) ? <span className="ui-spin" aria-hidden="true" /> : null} {progressText(job)}

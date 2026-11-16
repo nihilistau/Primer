@@ -115,6 +115,16 @@ export const books = () => j('GET', '/v1/books')
 // the read pages a branch book can start from: {pages: [{id, title, concept}]}, by title
 export const bookPages = () => j('GET', '/v1/books/pages')
 export const bookDelete = (id) => j('POST', `/v1/books/${encodeURIComponent(id)}/delete`)
+/* the bound book (Phase 16): a made book's blocks ({blocks, title, rebuilt}; 409 while it is still
+ * being made or another layout runs), and the live trail's, built in memory ({blocks, title}) */
+export const bookBlocks = (id, signal) => j('GET', `/v1/books/${encodeURIComponent(id)}/blocks`, undefined, signal)
+export const liveBlocks = (body, signal) => {
+  const b = body || {}
+  const out = { scope: b.scope, include: b.include || {} }
+  if (b.title) out.title = String(b.title)
+  if (b.by) out.by = String(b.by)
+  return j('POST', '/v1/books/blocks', out, signal)
+}
 export const bookFileUrl = (id, fmt) =>
   (fmt === 'epub' || fmt === 'html') && typeof id === 'string' && id ? `/v1/books/${encodeURIComponent(id)}/${fmt}` : ''
 

@@ -310,6 +310,46 @@ describe('book calls', () => {
   })
 })
 
+describe('bound book calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+
+  it("a made book's blocks: a GET with X-Primer, its id encoded, and the signal passed on", async () => {
+    const ac = new AbortController()
+    const [u, init] = await run(() => api.bookBlocks('a/b?c', ac.signal))
+    expect(u).toBe('/v1/books/a%2Fb%3Fc/blocks')
+    expect(init.method).toBe('GET')
+    expect(init.headers['X-Primer']).toBe('1')
+    expect(init.signal).toBe(ac.signal)
+  })
+
+  it("the live trail's blocks: a POST of scope and include, with title and By only when given", async () => {
+    const scope = { kind: 'branch', node_id: 'n1' }
+    const include = { pictures: true, maps: false, timelines: true, diagrams: true, stories: true }
+    let [u, init] = await run(() => api.liveBlocks({ scope, include }))
+    expect(u).toBe('/v1/books/blocks')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+    expect(JSON.parse(init.body)).toEqual({ scope, include })
+    ;[, init] = await run(() => api.liveBlocks({ scope, include, title: 'Castles', by: 'Nell', extra: 1 }))
+    expect(JSON.parse(init.body)).toEqual({ scope, include, title: 'Castles', by: 'Nell' })
+    ;[, init] = await run(() => api.liveBlocks({ scope }))
+    expect(JSON.parse(init.body)).toEqual({ scope, include: {} })
+  })
+
+  it('a 409 while the book is being made carries its reason and status', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 409, json: async () => ({ error: 'That book is still being made' }) })))
+    await expect(api.bookBlocks('x')).rejects.toMatchObject({ message: 'That book is still being made', status: 409 })
+    await expect(api.liveBlocks({ scope: { kind: 'all' } })).rejects.toMatchObject({ status: 409 })
+  })
+})
+
 describe('timeline and diagram calls', () => {
   afterEach(() => { vi.unstubAllGlobals() })
 

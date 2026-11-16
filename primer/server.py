@@ -42,8 +42,8 @@ from primer.images.prompting import match_image_request, match_video_request
 from primer.images.scan import scan_folder_capped
 from primer.images.service import (KINDS, NO_ANIMATE_MODEL, NOT_CONFIGURED, SHUT_DOWN_REASON,
                                    ImageService)
-from primer.book.service import (SHUT_DOWN as BOOKS_SHUT_DOWN, BookBusy, BookService,
-                                 BookTooBig)
+from primer.book.service import (SHUT_DOWN as BOOKS_SHUT_DOWN, UNKNOWN_PAGE, BookBusy, BookLayingOut,
+                                 BookNotReady, BookService, BookTooBig)
 from primer.diagrams.intent import match_diagram_request
 from primer.diagrams.service import SHUT_DOWN as DIAGRAMS_SHUT_DOWN
 from primer.diagrams.service import DiagramService
@@ -1171,6 +1171,8 @@ def _make_handler(app: App):
                     self._tool_post(path, body)
                 elif path == "/v1/books/preview":
                     self._preview_book(body)
+                elif path == "/v1/books/blocks":
+                    self._live_blocks(body)
                 elif path == "/v1/books":
                     self._create_book(body)
                 elif path.startswith("/v1/books/") and path.endswith("/delete"):
@@ -1935,8 +1937,23 @@ def _make_handler(app: App):
 
         # books
         def _book_get(self, rest: str) -> None:
-            """GET /v1/books/<id> (the row) or /v1/books/<id>/epub|html (the file to download)."""
+            """GET /v1/books/<id> (the row), /v1/books/<id>/epub|html (the file to download) or
+            /v1/books/<id>/blocks (the bound book: {blocks, title, rebuilt}; 409 until done or while
+            another is being laid out, 413 a rebuild that is too big)."""
             book_id, _, fmt = unquote(rest).partition("/")
+            if fmt == "blocks":
+                try:
+                    found = app.books.saved_blocks(book_id)
+                except (BookNotReady, BookLayingOut) as e:
+                    raise _HttpError(409, str(e)) from None
+                except BookTooBig as e:
+                    raise _HttpError(413, str(e)) from None
+                except ValueError as e:  # its page is gone, so it can't be rebuilt
+                    raise _HttpError(404, str(e)) from None
+                if found is None:
+                    raise _HttpError(404, "not found")
+                self._json(found)
+                return
             if not fmt:
                 book = app.books.get(book_id)
                 if book is None:
@@ -1983,6 +2000,22 @@ def _make_handler(app: App):
             except ValueError as e:
                 raise _BadRequest(str(e)) from None
 
+        def _live_blocks(self, body: dict) -> None:
+            """POST /v1/books/blocks {scope, include, title?, by?}: {blocks, title}, the trail as
+            the bound book, with no job and no files; 400 a bad request, 404 an unknown or unread
+            branch page, 409 another is being laid out, 413 too big."""
+            scope, include = self._book_request(body)
+            try:
+                self._json(app.books.live_blocks(scope, include, body.get("title"), body.get("by")))
+            except BookLayingOut as e:
+                raise _HttpError(409, str(e)) from None
+            except BookTooBig as e:
+                raise _HttpError(413, str(e)) from None
+            except ValueError as e:
+                if str(e) in UNKNOWN_PAGE:
+                    raise _HttpError(404, str(e)) from None
+                raise _BadRequest(str(e)) from None
+
         def _create_book(self, body: dict) -> None:
             """POST /v1/books {scope, include, title?, by?}: 202 {id}; 400 a bad request, 404 an
             unknown or unread branch page, 409 a book is being made, 413 too big."""
@@ -1994,7 +2027,7 @@ def _make_handler(app: App):
             except BookTooBig as e:
                 raise _HttpError(413, str(e)) from None
             except ValueError as e:
-                if str(e) in ("unknown page", "that page was never read"):
+                if str(e) in UNKNOWN_PAGE:
                     raise _HttpError(404, str(e)) from None
                 if str(e) == BOOKS_SHUT_DOWN:
                     raise _HttpError(409, str(e)) from None

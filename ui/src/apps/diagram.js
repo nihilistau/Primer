@@ -60,12 +60,13 @@ export function allowedAttribute(element, name, value) {
 
 /* Rebuild the parsed `root` in `doc` (createElementNS, createTextNode); null unless the root is
  * an SVG-namespace <svg>. Text and CDATA become text nodes; comments, processing instructions and
- * anything not allowlisted (with its subtree) are dropped; depth and element count are capped. */
-export function cleanSvgTree(root, doc) {
+ * anything not allowlisted (with its subtree) are dropped; depth and element count are capped.
+ * `maxElements` raises or lowers the element cap (a book's map plate has up to 300 pins). */
+export function cleanSvgTree(root, doc, { maxElements = MAX_ELEMENTS } = {}) {
   if (!root || root.nodeType !== 1 || root.localName !== 'svg' || root.namespaceURI !== SVG_NS) return null
   let count = 0
   const walk = (node, depth) => {
-    if (count >= MAX_ELEMENTS || depth > MAX_DEPTH) return null
+    if (count >= maxElements || depth > MAX_DEPTH) return null
     if (node.namespaceURI !== SVG_NS || !allowedElement(node.localName)) return null
     count++
     const out = doc.createElementNS(SVG_NS, node.localName)

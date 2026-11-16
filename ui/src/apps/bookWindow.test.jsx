@@ -21,6 +21,12 @@ describe('Book window', () => {
     expect(html).toContain('maxLength="80"')
     expect(html).toMatch(/<fieldset[^>]*><legend[^>]*>What goes in<\/legend>/)
   })
+  test('a finished book opens as a book; the trail can be read as one', () => {
+    const html = renderToString(<Downloads book={done} />)
+    expect(html).toContain('Open as a book')
+    expect(renderToString(<Downloads book={done} named />)).toContain('aria-label="Open “Castles” as a book"')
+    expect(flat(<BookWindow />)).toContain('Read my trail as a book')
+  })
   test('a finished book downloads as EPUB and HTML', () => {
     const html = renderToString(<Downloads book={done} />)
     expect(html).toContain('href="/v1/books/0123456789abcdef/epub" download=""')

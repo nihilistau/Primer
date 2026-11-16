@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.15.0: The bound book (2026-11-16)
+
+Any book Primer makes, and the live trail, can be read inside Primer as a book with pages that
+turn.
+
+### Added
+
+- **Ways in:**
+  - **Open as a book**, beside each book's downloads in the Book window;
+  - **Read my trail as a book**, built in memory from the Book window's choices, with no files
+    made;
+  - **Book view** in the Reader's header, which opens the current page and its branch at that
+    page's chapter.
+- **The book:**
+  - it lies closed on the desk at an angle, and opens with a click or Enter;
+  - pages curl when dragged, and a release past the spine completes the turn;
+  - a click on a page's outer third, or ‹ and ›, turns one leaf in 600 ms;
+  - ←/→ turn a leaf, Home/End go to the covers, and PgUp/PgDn go to the previous or next
+    chapter.
+- **Layout:**
+  - two-page spreads from 900 px wide, otherwise one page;
+  - A5 pages (1 : 1.414) in a serif type, with running heads and folios;
+  - the covers stand alone, and an odd inside page faces a blank;
+  - pictures, plates, timelines and diagrams are never split across a turn.
+- **The bar:**
+  - "Pages 10–11 of 48", with "of about 40" while a long book is still laid out;
+  - a chapter list and thumbnails;
+  - **Night paper** (the default) and **Day paper**;
+  - **Sound**, off by default, made in the browser with no file.
+- **Links:**
+  - contents entries and citations turn to their pages;
+  - web links ask "Open in the Browser?" and open Primer's Browser window, never a new tab;
+  - **Open this page in Primer** opens a chapter's page in a Reader.
+- **Remembered:** your place in each book, and the paper and sound settings.
+- **Reduced motion:** pages cross-fade instead of curling.
+- **Accessibility:** pages are labelled regions, the bar is a toolbar, and a turn is announced as
+  "Pages 10–11 of 48, Chapter: …".
+- **Server:**
+  - a made book now also saves its blocks (`var/books/<id>.blocks.json`);
+  - `GET /v1/books/<id>/blocks` and `POST /v1/books/blocks` serve them;
+  - books made before 0.15.0 are rebuilt from their saved choices, with the note "Rebuilt from
+    your trail as it is now".
+- **Safety:** every block is checked twice, once by a server allowlist and once more in the
+  browser before it is shown. Pictures come only from `/v1/media/`.
+
+### Measured
+
+On the local-gpu tier with the real trail:
+- the 42-chapter book's blocks came in 0.5 s and laid out as 125 pages;
+- the live trail opened as a book in about 1 s;
+- turns over map plates kept a steady frame rate.
+
 ## v0.14.0: Kairos as the front door (2026-11-13)
 
 Kairos can drive the Primer tab you have open.

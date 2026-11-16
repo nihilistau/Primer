@@ -516,6 +516,52 @@ questions, quests and the Tale's bible are never put in a book.
 
 ![A chapter of the HTML book: the text of the Bodiam Castle page with a map plate, numbered pins and a list of places](screenshots/book-chapter.webp)
 
+## Reading it as a book
+
+Primer can show any book as a book you hold: a cover on the desk, pages that turn, and a back
+cover. Nothing is downloaded and no file is made.
+
+- **Open as a book**, beside Download EPUB and Download HTML, opens any book in the list.
+- **Read my trail as a book** builds the book from the choices above, in memory, and opens it.
+- **Book view**, in the Reader's header, opens the page you're reading and what branched from
+  it as a book, at that page's chapter. Press it again to close the book.
+
+The book first lies closed on the desk. Click it, or press Enter, to open it.
+
+![The bound book lying closed on the desk, with the title, the dates and the first picture on the cover](screenshots/bound-closed.webp)
+
+To turn a page:
+
+- **Drag** a page's corner or edge. The page curls after the pointer. Let go past the spine and
+  it turns; let go before and it falls back.
+- **Click** the outer third of a page, or **‹** and **›** in the bar under the book.
+- Use the **keys**: ← and → turn a page, Home and End go to the covers, and Page Up and Page
+  Down go to the previous or next chapter.
+
+![A page caught mid-turn, curling over the spine with its back showing](screenshots/bound-turn.webp)
+
+The bar says where you are, for example "Pages 10–11 of 48". While a long book is still being
+laid out it says "of about 40", then the exact number. Click the number for a list of chapters
+to go to, or the eye for thumbnails of the spreads. A wide window shows two pages side by side;
+a narrow one shows one page at a time.
+
+**Night paper** (dark pages with light ink) is the default. **Day paper** gives light pages.
+**Sound** adds a soft paper sound to each turn; it is off until you switch it on. Primer
+remembers the paper, the sound, and the page you were on in each book.
+
+![A spread of the bound book on night paper: text on the left page, two pictures on the right](screenshots/bound-spread.webp)
+
+![The same book on day paper, with a diagram on the left and a chapter opening on the right](screenshots/bound-day.webp)
+
+Inside, the book is the same as the download. A contents entry turns to its chapter, and a
+citation turns to its sources. A web link asks "Open in the Browser?" and opens Primer's own
+Browser window, never a new tab. Each chapter has **Open this page in Primer**, which opens that
+page in a Reader.
+
+A book made before Primer 0.15 is rebuilt from your trail as it is now. A note above it says
+"Rebuilt from your trail as it is now". With reduced motion switched on in your system, pages
+fade from one to the next instead of curling.
+
 ## Stories and listening
 
 Primer can read to you.

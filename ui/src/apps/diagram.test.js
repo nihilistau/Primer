@@ -103,6 +103,13 @@ describe('cleanSvgTree', () => {
     const wide = cleanSvgTree(el('svg', {}, Array.from({ length: 1000 }, () => el('rect'))), fakeDoc())
     expect(names(wide).length).toBeLessThanOrEqual(200)
   })
+  it('takes a higher element cap when asked, and keeps the old one by default', () => {
+    const rects = () => el('svg', {}, Array.from({ length: 1000 }, () => el('rect')))
+    expect(names(cleanSvgTree(rects(), fakeDoc())).length).toBe(200)
+    expect(names(cleanSvgTree(rects(), fakeDoc(), {})).length).toBe(200)
+    expect(names(cleanSvgTree(rects(), fakeDoc(), { maxElements: 1500 })).length).toBe(1001)
+    expect(names(cleanSvgTree(rects(), fakeDoc(), { maxElements: 10 })).length).toBe(10)
+  })
 })
 
 describe('svgRoot', () => {

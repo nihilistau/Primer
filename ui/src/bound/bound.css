@@ -1,0 +1,260 @@
+/* bound.css — the bound book: a dark desk, A5 pages in night paper (dark pages, light ink) or day
+ * paper, a cloth cover, a slim bar under the book. The pages and the hidden measuring frame share
+ * every rule that sets the size of what is on a page, so layout's sums match what is drawn.
+ * Content is styled through the block HTML's own classes (never a per-kind wrapper class), since
+ * the measurer sees only the block's HTML. */
+
+.bb {
+  --desk: #141110;
+  --desk-2: #262019;
+  --cloth: #3a2620;
+  --cloth-2: #2a1a16;
+  --gilt: #e6d3a6;
+  --bar: rgba(22, 19, 17, .92);
+  --bar-ink: #e9e2d4;
+  --bar-ink-2: #a39a8b;
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 38%, var(--desk-2), var(--desk) 72%);
+  color: var(--bar-ink);
+  outline: none;
+}
+.bb-night { --paper: #1f1c19; --paper-2: #24211d; --ink: #e9e3d6; --ink-2: #b4ab9b; --rule: rgba(233, 227, 214, .16); --link: #d9b77a; --edge: rgba(0, 0, 0, .55); }
+.bb-day { --paper: #f6f0e3; --paper-2: #efe7d6; --ink: #2b2723; --ink-2: #6e655a; --rule: rgba(43, 39, 35, .16); --link: #8a5a1c; --edge: rgba(60, 40, 20, .28); }
+.bb:focus-visible { box-shadow: inset 0 0 0 2px var(--gilt); }
+
+.bb-note { flex: none; text-align: center; font: 500 12px/1.4 var(--font-ui); color: var(--bar-ink-2); padding: 6px 12px 0; }
+
+.bb-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  perspective: 2200px;
+  perspective-origin: 50% 40%;
+  touch-action: pan-y;
+}
+.bb-msg { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center; font: 14px/1.5 var(--font-ui); color: var(--bar-ink-2); text-align: center; padding: 24px; }
+
+/* ---------------------------------------------------------------- the book */
+
+.bb-book { position: relative; transform-style: preserve-3d; transform-origin: 50% 55%; flex: none; }
+.bb-closed { cursor: pointer; }
+.bb-desk-shadow {
+  position: absolute; left: 4%; right: 4%; bottom: -3%; height: 12%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, .55), rgba(0, 0, 0, 0) 70%);
+  filter: blur(6px); transform: translateZ(-2px); pointer-events: none;
+}
+.bb-static { position: absolute; inset: 0; transform-style: preserve-3d; }
+.bb-fade { animation: bb-fade .32s ease-out; }
+@keyframes bb-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.bb-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--pw);
+  height: var(--ph);
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-voice);
+  font-size: var(--fs);
+  line-height: 1.5;
+  font-kerning: normal;
+  hyphens: manual;
+  overflow-wrap: break-word;
+}
+.bb-static > .bb-page { box-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.bb-wide .bb-static > .bb-right { left: var(--pw); }
+.bb-static > .bb-none { background: transparent; box-shadow: none; }
+.bb-blank, .bb-reverse { background: var(--paper-2); }
+/* the gutter: a soft shade at the spine */
+.bb-wide .bb-static > .bb-left::after, .bb-wide .bb-static > .bb-right::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 9%; pointer-events: none;
+}
+.bb-wide .bb-static > .bb-left::after { right: 0; background: linear-gradient(to left, var(--edge), rgba(0, 0, 0, 0)); }
+.bb-wide .bb-static > .bb-right::after { left: 0; background: linear-gradient(to right, var(--edge), rgba(0, 0, 0, 0)); }
+.bb-static > .bb-none::after { display: none; }
+
+.bb-head, .bb-folio {
+  position: absolute; left: var(--pad-x); right: var(--pad-x);
+  font: 500 calc(var(--fs) * .72)/1.2 var(--font-ui); letter-spacing: .06em; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bb-head { top: calc(var(--pad-t) * .38); text-transform: uppercase; }
+.bb-left .bb-head { text-align: left; }
+.bb-right .bb-head { text-align: right; }
+.bb-folio { bottom: calc(var(--pad-b) * .36); text-align: center; }
+.bb-open {
+  position: absolute; top: calc(var(--pad-t) * .3); right: var(--pad-x);
+  font: 500 calc(var(--fs) * .72)/1.2 var(--font-ui); color: var(--link); background: none; border: 0; padding: 2px 0; cursor: pointer;
+}
+.bb-open:hover { text-decoration: underline; }
+.bb-open:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+/* the content box: what layout fills */
+.bb-content { position: absolute; left: var(--pad-x); top: var(--pad-t); width: var(--content-w); height: var(--content-h); overflow: hidden; }
+.bb-item { display: flow-root; } /* each block keeps its own margins, so heights sum */
+/* a block taller than the page: laid out at the page's width exactly as it was measured, then
+ * shrunk by layout's fitScale so all of it shows (transform keeps its layout, so the text does
+ * not reflow) */
+.bb-fit { height: var(--content-h); overflow: hidden; }
+.bb-scaled { width: var(--content-w); transform-origin: top center; }
+
+/* ---------------------------------------------------------------- what is on a page */
+
+.bb-page p { margin: 0 0 .6em; text-align: justify; }
+.bb-page h1, .bb-page h2, .bb-page h3, .bb-page h4 { font-family: var(--font-voice); font-weight: 600; line-height: 1.2; margin: .5em 0 .4em; }
+.bb-page h1 { font-size: 1.7em; }
+.bb-page h2 { font-size: 1.3em; }
+.bb-page h3 { font-size: 1.12em; }
+.bb-page h4 { font-size: 1em; }
+.bb-page ul, .bb-page ol { margin: 0 0 .6em; padding-left: 1.4em; }
+.bb-page li { margin: 0 0 .2em; }
+.bb-page a { color: var(--link); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--link) 40%, transparent); }
+.bb-page a:hover { border-bottom-color: var(--link); }
+.bb-page a[data-external]::after { content: '\2197'; font-size: .8em; margin-left: .1em; }
+.bb-page sup { font-size: .68em; line-height: 0; }
+.bb-page sup a { border: 0; }
+.bb-page em { font-style: italic; }
+.bb-page cite { font-style: italic; }
+
+.bb-page figure { margin: .3em 0 .8em; }
+.bb-page figure img {
+  display: block; width: 100%; height: calc(var(--content-h) * .42); object-fit: contain;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.bb-page figure svg { display: block; width: 100%; height: auto; max-height: calc(var(--content-h) * .78); }
+/* a diagram is drawn in black ink; on night paper it sits on a small light card, like a pasted-in print */
+.bb-night figure.diagram svg { background: #f3ecdd; border-radius: 3px; }
+.bb-page figcaption { font-size: .82em; line-height: 1.35; color: var(--ink-2); margin-top: .35em; font-style: italic; }
+.bb-page .places { font-size: .8em; color: var(--ink-2); columns: 2; }
+
+.bb-page .chapter-head { padding-top: 1.2em; margin-bottom: .6em; }
+.bb-page .chapter-head h1 { font-size: 2em; margin: 0 0 .3em; }
+.bb-page .chapter-head .subtitle { font-style: italic; color: var(--ink-2); margin: 0 0 .2em; text-align: left; }
+.bb-page .chapter-head .via { font-size: .86em; color: var(--ink-2); text-align: left; }
+
+.bb-page h1.contents { font-size: 1.6em; margin: .4em 0 .8em; }
+.bb-page ol.contents { list-style: none; padding: 0; margin: 0; }
+.bb-page ol.contents li { margin: 0 0 .3em; }
+.bb-page ol.contents a { border: 0; color: var(--ink); }
+.bb-page ol.contents a:hover { color: var(--link); }
+.bb-page ol.contents.d2 { padding-left: 1.2em; }
+.bb-page ol.contents.d3 { padding-left: 2.4em; }
+.bb-page ol.contents.d4 { padding-left: 3.4em; }
+.bb-page ol.contents.d5 { padding-left: 4.2em; }
+.bb-page ol.contents.d6 { padding-left: 5em; }
+.bb-page ol.contents.d2, .bb-page ol.contents.d3, .bb-page ol.contents.d4, .bb-page ol.contents.d5, .bb-page ol.contents.d6 { font-size: .92em; }
+
+.bb-page .timeline h2 { font-size: 1.15em; }
+.bb-page ol.timeline { list-style: none; padding: 0 0 0 .9em; margin: 0 0 .6em; border-left: 2px solid var(--rule); font-size: .9em; }
+.bb-page ol.timeline li { margin: 0 0 .35em; }
+.bb-page ol.timeline .date { font-weight: 600; color: var(--link); margin-right: .3em; }
+
+.bb-page ol.sources { font-size: .78em; line-height: 1.4; padding-left: 1.6em; margin: 0 0 .3em; color: var(--ink-2); overflow-wrap: anywhere; }
+.bb-page ol.sources li { margin: 0 0 .3em; }
+.bb-page .video { font-size: .85em; color: var(--ink-2); font-style: italic; }
+.bb-page .end h1, .bb-page .stories h1 { margin-top: .2em; }
+
+/* the covers: cloth, gilt, in either paper */
+.bb-page.bb-cover, .bb-page.bb-back { background: linear-gradient(135deg, var(--cloth), var(--cloth-2)); color: var(--gilt); }
+.bb-page.bb-cover::before, .bb-page.bb-back::before {
+  content: ''; position: absolute; inset: 4%; border: 1px solid rgba(230, 211, 166, .35); pointer-events: none;
+}
+.bb-page section.cover { text-align: center; padding-top: 6%; }
+.bb-page section.cover h1.title { font-size: 2.3em; line-height: 1.15; margin: 0 0 .4em; letter-spacing: .01em; }
+.bb-page section.cover .by, .bb-page section.cover .dates { text-align: center; color: inherit; opacity: .85; margin: 0 0 .3em; }
+.bb-page section.cover .cover-picture { margin: 1.2em 0 0; }
+.bb-page section.cover .cover-picture img { height: calc(var(--content-h) * .5); background: transparent; }
+.bb-page section.back { position: absolute; inset: auto 0 12% 0; text-align: center; font-size: .9em; }
+.bb-page section.back p { text-align: center; margin: 0 0 .4em; opacity: .85; }
+.bb-page section.back .title { font-size: 1.1em; opacity: 1; }
+.bb-closed .bb-static > .bb-cover, .bb-closed .bb-static > .bb-back {
+  box-shadow: 0 2px 3px rgba(0, 0, 0, .45), 0 18px 40px rgba(0, 0, 0, .45), inset 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+/* ---------------------------------------------------------------- the turning leaf */
+
+.bb-leaf { position: absolute; top: 0; width: var(--pw); height: var(--ph); transform-style: preserve-3d; pointer-events: none; }
+.bb-strip { position: absolute; top: 0; height: 100%; transform-origin: 0 50%; transform-style: preserve-3d; }
+.bb-face { position: absolute; top: 0; left: 0; width: calc(100% + .6px); height: 100%; overflow: hidden; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.bb-face-back { transform: rotateY(180deg); }
+.bb-slice { position: absolute; top: 0; width: var(--pw); height: var(--ph); }
+.bb-slice > .bb-page { left: 0; }
+.bb-shade { position: absolute; inset: 0; pointer-events: none; }
+.bb-cast { position: absolute; top: 0; height: var(--ph); pointer-events: none; }
+
+/* ---------------------------------------------------------------- the bar */
+
+.bb-bar {
+  flex: none; height: var(--bar-h, 52px); box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: nowrap;
+  padding: 0 10px; margin: 0 auto 10px; border-radius: 10px; background: var(--bar);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .35); font: 13px/1 var(--font-ui); color: var(--bar-ink);
+  max-width: calc(100% - 20px); overflow-x: auto;
+}
+.bb-bar .ui-btn { color: var(--bar-ink); }
+.bb-bar .ui-btn[aria-pressed='true'] { background: rgba(230, 211, 166, .16); color: var(--gilt); }
+.bb-arrow { font-size: 20px; line-height: 1; min-width: 32px; }
+.bb-label {
+  background: none; border: 0; color: var(--bar-ink); font: 500 13px/1 var(--font-ui); padding: 8px 10px; border-radius: 6px;
+  cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.bb-label:hover, .bb-label[aria-expanded='true'] { background: rgba(255, 255, 255, .08); }
+.bb-label:focus-visible { outline: 2px solid var(--gilt); }
+.bb-sep { width: 1px; height: 20px; background: rgba(255, 255, 255, .14); margin: 0 6px; flex: none; }
+.bb-paper { display: inline-flex; gap: 0; }
+
+.bb-pop {
+  position: absolute; left: 50%; bottom: calc(var(--bar-h, 52px) + 18px); transform: translateX(-50%); z-index: 5;
+  background: var(--bar); color: var(--bar-ink); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  font: 13px/1.4 var(--font-ui);
+}
+.bb-goto { width: min(360px, calc(100% - 24px)); max-height: 60%; display: flex; flex-direction: column; padding: 10px; gap: 8px; }
+.bb-goto-page { display: flex; align-items: center; gap: 8px; }
+.bb-goto-page input { width: 6em; margin-left: 6px; background: rgba(255, 255, 255, .08); color: inherit; border: 1px solid rgba(255, 255, 255, .18); border-radius: 6px; padding: 4px 6px; font: inherit; }
+.bb-goto-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; }
+.bb-goto-list button { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.bb-goto-list button:hover, .bb-goto-list button:focus-visible { background: rgba(255, 255, 255, .08); outline: none; }
+.bb-goto-list button[aria-current] { color: var(--gilt); }
+.bb-goto-n { display: inline-block; min-width: 2em; color: var(--bar-ink-2); font-variant-numeric: tabular-nums; }
+
+.bb-thumbs { width: calc(100% - 24px); display: flex; gap: 10px; overflow-x: auto; padding: 10px; box-sizing: border-box; }
+.bb-thumb { flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; background: none; border: 0; color: var(--bar-ink-2); font: 11px/1 var(--font-ui); cursor: pointer; padding: 4px; border-radius: 6px; }
+.bb-thumb:hover, .bb-thumb:focus-visible { background: rgba(255, 255, 255, .08); outline: none; }
+.bb-thumb-on { color: var(--gilt); box-shadow: inset 0 0 0 1px var(--gilt); }
+.bb-thumb-pages { display: flex; }
+.bb-thumb-page { width: 40px; height: 57px; background: var(--paper); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.bb-thumb-page img { width: 90%; height: 60%; object-fit: cover; }
+.bb-thumb-cover, .bb-thumb-back { background: linear-gradient(135deg, var(--cloth), var(--cloth-2)); }
+.bb-thumb-lines { width: 70%; height: 70%; background: repeating-linear-gradient(to bottom, var(--rule) 0 2px, transparent 2px 6px); }
+
+.bb-ask {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 6; max-width: calc(100% - 32px);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; border-radius: 10px;
+  background: var(--bar); box-shadow: 0 10px 30px rgba(0, 0, 0, .5); font: 13px/1.4 var(--font-ui); color: var(--bar-ink);
+}
+.bb-ask-q { font-weight: 600; }
+.bb-ask-url { color: var(--bar-ink-2); overflow-wrap: anywhere; max-width: 40ch; }
+.bb-ask-btns { display: inline-flex; gap: 6px; }
+
+.bb-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+
+/* the hidden measuring frame: a page, off the desk */
+.bb-measure { position: absolute; left: -30000px; top: 0; visibility: hidden; pointer-events: none; contain: layout style; }
+.bb-measure .bb-page { box-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bb-fade { animation-duration: .2s; }
+  .bb-desk-shadow { transition: none; animation: none; }
+}

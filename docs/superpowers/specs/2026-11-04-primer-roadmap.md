@@ -99,3 +99,12 @@ The companion talks to you and drives Primer ("show me Bodiam Castle", "tell me 
 that"), with Primer as one of its tools. Primer's side only: a small, documented tool API (pages,
 lenses, the trail) that Kairos can call on `127.0.0.1`. Kairos itself is never modified from this
 repo.
+
+## Phase 16: the bound book
+
+Hold the book inside Primer: a book drawn in 3D on the desk, with a cover, pages that curl and
+turn when you drag them, two-page spreads and a back cover, like leafing through a printed
+magazine. Open any book Primer has made, or read the live trail as a book, as another way to read.
+Citations and contents still turn to their pages. CSS 3D, with no new dependencies; pages are
+real text, flowed into fixed page sizes in the browser from Phase 13's safe book blocks. Design:
+[2026-11-15-primer-phase16-bound-book-design.md](2026-11-15-primer-phase16-bound-book-design.md).
