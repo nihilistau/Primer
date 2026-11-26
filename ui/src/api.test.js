@@ -430,3 +430,85 @@ describe('Kairos drives Primer', () => {
     ])
   })
 })
+
+describe('live calls', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const run = async (fn) => {
+    const fetch = vi.fn(async () => ok())
+    vi.stubGlobal('fetch', fetch)
+    await fn()
+    return fetch.mock.calls[0]
+  }
+
+  it('POSTs send X-Primer and the JSON bodies the routes take', async () => {
+    const cases = [
+      [() => api.liveOpen('live-a1', 'https://a.test/', 800, 600), '/v1/live/open', { window: 'live-a1', url: 'https://a.test/', width: 800, height: 600 }],
+      [() => api.liveInput('live-a1', { kind: 'text', text: 'hi' }), '/v1/live/live-a1/input', { kind: 'text', text: 'hi' }],
+      [() => api.liveNav('live-a1', 'back'), '/v1/live/live-a1/nav', { action: 'back' }],
+      [() => api.liveNav('live-a1', 'url', 'https://b.test/'), '/v1/live/live-a1/nav', { action: 'url', url: 'https://b.test/' }],
+      [() => api.liveClose('live-a1'), '/v1/live/live-a1/close', {}],
+      [() => api.liveResize('live-a1', 900, 700), '/v1/live/live-a1/resize', { width: 900, height: 700 }],
+      [() => api.liveForget(), '/v1/live/forget', {}],
+      [() => api.liveAnswer('live-a1', 'q1', true), '/v1/live/live-a1/agent/answer', { id: 'q1', allow: true }],
+      [() => api.liveAnswer('live-a1', 'q1', 0), '/v1/live/live-a1/agent/answer', { id: 'q1', allow: false }],
+    ]
+    for (const [fn, url, body] of cases) {
+      const [u, init] = await run(fn)
+      expect(u).toBe(url)
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Primer': '1', 'Content-Type': 'application/json' })
+      expect(JSON.parse(init.body)).toEqual(body)
+    }
+  })
+
+  it('Ask names the live window when it asks about a live page, and not otherwise', async () => {
+    const body = () => new ReadableStream({ start(c) { c.close() } })
+    const fetch = vi.fn(async () => new Response(body(), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    await api.browseAsk('https://a.test/', 'When?', () => {}, undefined, 'live-a1')
+    await api.browseAsk('https://a.test/', 'When?', () => {})
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ u: 'https://a.test/', question: 'When?', live: 'live-a1' })
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ u: 'https://a.test/', question: 'When?' })
+  })
+
+  it('close is sent with keepalive, so it arrives as the tab goes', async () => {
+    const [, init] = await run(() => api.liveClose('live-a1'))
+    expect(init.keepalive).toBe(true)
+  })
+
+  it('status is a GET with X-Primer', async () => {
+    const [u, init] = await run(() => api.liveStatus())
+    expect(u).toBe('/v1/live/status')
+    expect(init.method).toBe('GET')
+    expect(init.headers['X-Primer']).toBe('1')
+  })
+
+  it('frames are a GET stream read with fetch (X-Primer, which EventSource cannot send)', async () => {
+    const enc = new TextEncoder()
+    const body = new ReadableStream({ start(c) {
+      c.enqueue(enc.encode('event: frame\ndata: {"data":"/9j/","w":800,"h":600}\n\n: ping\n\n'))
+      c.enqueue(enc.encode('event: note\ndata: {"text":"n"}\n\nevent: gone\ndata: {"reason":"closed"}\n\n'))
+      c.close()
+    } })
+    const fetch = vi.fn(async () => new Response(body, { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const seen = []
+    await api.liveFrames('live-a1', (e) => seen.push(e))
+    const [u, init] = fetch.mock.calls[0]
+    expect(u).toBe('/v1/live/live-a1/frames')
+    expect(init.method).toBe('GET')
+    expect(init.headers['X-Primer']).toBe('1')
+    expect(seen.map(e => e.event)).toEqual(['frame', 'note', 'gone'])
+    expect(seen[0].data).toEqual({ data: '/9j/', w: 800, h: 600 })
+  })
+
+  it('the agent is a POST stream with the goal; a refusal carries its status', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ error: 'The model is already working in this page' }), { status: 409 }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(api.liveAgent('live-a1', 'find hours', () => {})).rejects.toMatchObject({ status: 409, message: 'The model is already working in this page' })
+    const [u, init] = fetch.mock.calls[0]
+    expect(u).toBe('/v1/live/live-a1/agent')
+    expect(JSON.parse(init.body)).toEqual({ goal: 'find hours' })
+  })
+})

@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.16.0: Live pages (2026-11-27)
+
+Pages that need scripts or a sign-in can be opened live, in a real browser Primer drives.
+
+### Added
+
+- **Live** in the Browser window opens the page in a headless Chrome or Edge that Primer starts
+  and controls.
+  - The page shows as a live picture you can click, scroll, type and paste into.
+  - Back, Forward, Reload and the address bar follow it, and **Reader** goes back.
+  - **Open it live** is offered when the reader can't use a page (nearly empty, needs
+    JavaScript, or the site refused it).
+- **Sign-ins** are remembered in Primer's own browser profile (`var/browser/`), never your
+  everyday browser. **Forget everything (sign-ins, cookies, history)** wipes it.
+- **Click through, live.**
+  - The model scrolls, reads and follows links on its own, for up to 8 steps in 180 s.
+  - Pressing, typing or choosing **asks first, every time**: "The model wants to type
+    **'T'** into **X**", with **Allow once** and **Stop**.
+  - It never types into a password field and never types an address.
+  - Fields tell the model whether they hold text, never what.
+- **Ask and Make a page** use the live page's own text.
+- **Safety:**
+  - Every request a live page makes is checked, and requests to this computer, your local network
+    or local names are refused.
+  - WebSockets, WebTransport and WebRTC are off; downloads and permission prompts are refused;
+    pop-ups open in the same tab.
+  - The browser is stopped only through its own verified process, never by process tree.
+  - An allowed press is refused, and nothing clicked, when something covers the control (say a
+    transparent frame from another site); asks show labels and typed text without hidden
+    characters.
+- **The browser and the Setup centre:** a `[browser] path` tier setting, and the Setup centre line
+  "Live pages: Chrome 158".
+- **Turning live pages off:** `[web] search = "off"` turns them off, and closes those already open.
+- **New routes:** `/v1/live/open`, `/v1/live/<window>/frames|input|nav|resize|close|agent`,
+  `/v1/live/<window>/agent/answer`,
+  `/v1/live/forget` and `/v1/live/status`.
+- **Limits:**
+  - 4 live pages at a time;
+  - the browser stops after 10 idle minutes;
+  - a window no one is watching closes after 30 to 60 s.
+- **Under the hood:** a stdlib WebSocket client and DevTools connection; no new dependencies.
+
+### Measured
+
+With Chrome 158 on the local-gpu tier:
+- a live page opened in about 2 s;
+- Click through on a Wikipedia search took 4 steps with two Allow once answers, and answered
+  "Bodiam Castle was built in 1385.";
+- killing the browser mid-session ended the view cleanly, and the next open started fresh.
+
 ## v0.15.0: The bound book (2026-11-16)
 
 Any book Primer makes, and the live trail, can be read inside Primer as a book with pages that

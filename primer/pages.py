@@ -40,6 +40,9 @@ class OpenRequest:
     node_id: str | None = None
     source: str | None = None
     source_url: str | None = None  # write from this one page (http(s) or kiwix:) alone
+    # the page's own text, read from a live page ({url, title, text}): used instead of fetching
+    # source_url, which is then the live page's address (the one cited)
+    source_page: dict | None = None
 
 
 class PageService:
@@ -126,7 +129,8 @@ class PageService:
                 else:
                     if self.drafter is not None:
                         self.drafter.moved_on()  # the old page's waiting drafts are stale now
-                    mode, sources, note = yield from self.ground(mode, node.title, req.source_url)
+                    mode, sources, note = yield from self.ground(mode, node.title, req.source_url,
+                                                                 req.source_page)
                     chunks: list[str] = []
                     # Lock order: per-node lock, then the GPU gate; released in reverse.
                     turn = self.gate.page() if self.gate else nullcontext()
@@ -179,7 +183,7 @@ class PageService:
             return cards
         return self._compute_cards(node_id, phrase) or []
 
-    def ground(self, mode: str, title: str, url: str | None = None):
+    def ground(self, mode: str, title: str, url: str | None = None, page: dict | None = None):
         """Gather sources for a page about `title` in `mode`. A generator: yields ("grounding",
         ...) and ("sources", ...) events and returns (mode, sources, note), where a note means
         the page falls back to storyteller (no grounder, or grounding failed)."""
@@ -191,7 +195,7 @@ class PageService:
             note = (f"Offline reference isn't set up in this tier; {_OWN}" if mode == "reference"
                     else f"Web search is off in this tier; {_OWN}")
         else:
-            for ev in self._ground(mode, title, url):
+            for ev in self._ground(mode, title, url, page):
                 if ev[0] == "result":
                     sources, note = ev[1]
                 else:
@@ -275,7 +279,7 @@ class PageService:
             return self.source_mode
         return req.source if req.source in MODES else "storyteller"
 
-    def _ground(self, mode: str, query: str, url: str | None = None):
+    def _ground(self, mode: str, query: str, url: str | None = None, page: dict | None = None):
         """Yield ("grounding", ...) events as retrieval reports, then ("result", (sources, note)).
         With a url, the one source is that page and nothing is searched."""
         box: queue.Queue = queue.Queue()
@@ -283,7 +287,12 @@ class PageService:
 
         def run() -> None:
             try:
-                if url:
+                if page is not None:  # a live page's text, already read
+                    box.put("Reading the page…")
+                    result.append(self.grounder.gather_page(page.get("url", ""),
+                                                            page.get("title", ""),
+                                                            page.get("text", "")))
+                elif url:
                     box.put("Reading the page…")
                     result.append(self.grounder.gather_url(url))
                 else:

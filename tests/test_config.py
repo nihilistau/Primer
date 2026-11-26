@@ -294,3 +294,18 @@ def test_voice_timeout_setting(tmp_path):
     (tmp_path / "b.toml").write_text(_TEXT + '[voice]\nkind="lfm3"\nbase_url="http://127.0.0.1:8840"\ntimeout_s=0\n')
     with pytest.raises(ConfigError, match="timeout_s"):
         load_tier("b", tiers_dir=tmp_path)
+
+
+def test_browser_path_parsed_and_validated(tmp_path):
+    from primer.config import BrowserConfig
+    base = 'fast="text"\n[text]\nkind="openai"\nbase_url="http://x"\n'
+    (tmp_path / "none.toml").write_text(base)
+    assert load_tier("none", tiers_dir=tmp_path).browser == BrowserConfig(path="")
+    (tmp_path / "set.toml").write_text(base + '[browser]\npath="C:/Tools/chrome.exe"\n')
+    assert load_tier("set", tiers_dir=tmp_path).browser.path == "C:/Tools/chrome.exe"
+    (tmp_path / "bad.toml").write_text(base + '[browser]\npath=3\n')
+    with pytest.raises(ConfigError, match="path must be a string"):
+        load_tier("bad", tiers_dir=tmp_path)
+    (tmp_path / "notab.toml").write_text('browser="chrome"\n' + base)
+    with pytest.raises(ConfigError, match="expected a table"):
+        load_tier("notab", tiers_dir=tmp_path)

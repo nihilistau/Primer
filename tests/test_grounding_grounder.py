@@ -302,3 +302,16 @@ def test_gather_url_reference_where_is_the_book_title(kiwix_two):
     title = {b["name"]: b["title"] for b in kiwix_two.books()}["wiki_b"]
     sources, _ = Grounder(kiwix_two, None).gather_url("kiwix:wiki_b/Humpback")
     assert sources[0].where == title
+
+
+def test_gather_page_uses_the_text_given():
+    sources, note = Grounder(None, _Searcher()).gather_page("https://www.example.org/v", "Visit", "  Open daily.  ")
+    assert note == "" and len(sources) == 1
+    s = sources[0]
+    assert (s.title, s.url, s.where, s.origin, s.text) == ("Visit", "https://www.example.org/v", "example.org", "web",
+                                                           "Open daily.")
+    assert Grounder(None, _Searcher()).gather_page("https://example.org/", "", "")[0] == []
+    assert Grounder(None, _Searcher()).gather_page("https://example.org/", "", "x")[0][0].title == "example.org"
+    assert Grounder(None, None).gather_page("https://example.org/", "T", "x")[0] == []  # web off
+    long = Grounder(None, _Searcher()).gather_page("https://example.org/", "T", "w " * 100_000)[0][0].text
+    assert len(long) < 100_000  # budgeted like a fetched page

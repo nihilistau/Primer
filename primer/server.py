@@ -47,6 +47,11 @@ from primer.book.service import (SHUT_DOWN as BOOKS_SHUT_DOWN, UNKNOWN_PAGE, Boo
 from primer.diagrams.intent import match_diagram_request
 from primer.diagrams.service import SHUT_DOWN as DIAGRAMS_SHUT_DOWN
 from primer.diagrams.service import DiagramService
+from primer.live.agent import BUSY as LIVE_BUSY
+from primer.live.agent import LiveAgents, run_live_agent
+from primer.live.service import GONE as LIVE_GONE
+from primer.live.service import OFF as LIVE_OFF
+from primer.live.service import LiveError, LiveService
 from primer.maps.geocode import Geocoder
 from primer.maps.intent import match_map_request
 from primer.maps.pmtiles import Archive, PMTilesError
@@ -87,6 +92,13 @@ UI_NOT_BUILT = {"error": "UI not built: run npm run build in ui/"}
 # and Kairos's command stream, which only Primer's own page may hold open
 PRIMER_HEADER = "X-Primer"
 NEEDS_PRIMER_HEADER = ("/v1/branches", "/v1/setup/updates", "/v1/tool/stream")
+LIVE_WINDOW = re.compile(r"[a-z0-9-]{1,32}")
+# /v1/live/<window>/<action>; the window part is checked against LIVE_WINDOW separately
+LIVE_PATH = re.compile(r"/v1/live/([^/]+)/(frames|input|nav|resize|close|agent|agent/answer)")
+LIVE_MIN_SIZE, LIVE_MAX_SIZE = 200, 4000
+LIVE_GOAL_CHARS = 1000
+LIVE_INPUT_BYTES = 4096  # an input post, checked on Content-Length before the body is read
+LIVE_TOO_LARGE = "That input is too large"
 MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm|wav)")
 MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm", ".wav": "audio/wav"}
 RANGE_RE = re.compile(r"bytes=([0-9]{0,18})-([0-9]{0,18})")  # one range only: a list (with a comma) doesn't match
@@ -217,6 +229,8 @@ class App:
     maps: MapService | None = None
     stories: StoryService | None = None
     browse: BrowseService | None = None
+    live: LiveService | None = None  # live pages in a driven browser; made when not passed
+    live_agents: LiveAgents | None = None  # Click through on live pages: one per window
     drafter: Drafter | None = None  # thinking ahead; a new one with every PageService
     make_sd_server: Callable | None = None  # tests: stands in for launching sd-server
     installer: object | None = None  # Setup's primer.setup.installer.Installer (serve.py builds it)
@@ -317,6 +331,13 @@ class App:
             self.books = BookService(self.graph, self.var_dir, self.book_archive)
         if self.browse is None:
             self.browse = self.make_browse(self.tier)
+        if self.live is None:
+            self.live = LiveService(self.var_dir, self.tier)
+        if self.live_agents is None:
+            self.live_agents = LiveAgents()
+        # a window that ends (closed, crashed, browser gone, forgotten, search off) stops its run
+        # and answers its pending ask with Stop at once
+        self.live.on_window_end = lambda name, gen, _reason: self.live_agents.stop(name, gen)
         self._thinking = self.saved_thinking_ahead()
         if self.pages.drafter is None:
             self.drafter = Drafter(self.graph, self.pages, self.gate, self.thinking_ahead)
@@ -473,6 +494,15 @@ class App:
             except ConfigError:
                 settings = {}
             write_settings(self.var_dir, {**settings, "remote_enabled": value})
+
+    def shutdown_live(self) -> None:
+        """Answer pending asks with Stop, end live frame streams and close the live browser."""
+        try:
+            if self.live_agents is not None:
+                self.live_agents.shutdown()
+        finally:
+            if self.live is not None:
+                self.live.shutdown()
 
     def shutdown_remote(self) -> None:
         """Fail Kairos's unfinished command and end the tool streams, so the server can stop."""
@@ -674,6 +704,11 @@ class App:
                 self.maps = self.make_maps(self.graph, tier, fast)
                 self.stories = self.make_stories(tier, pages, images, gate)
                 self.browse = self.make_browse(tier)
+                self.live.tier = tier  # web search off turns live pages off; [browser] path
+                if not self.live.enabled:  # off now: open live windows close, runs stop
+                    for w in self.live.status().get("windows", []):
+                        self.live_agents.stop(w)
+                    self.live.turn_off()
                 with self._voice_lock:
                     self._voice_cache = None
                 self._close_archive()  # a tile request during the switch may have reopened the old file
@@ -725,7 +760,12 @@ class App:
                 "voice": {"name": self.tier.voice.voice if self.tier.voice is not None else ""},
                 "thinking_ahead": {**(self.drafter.status() if self.drafter is not None else {}),
                                    "setting": self.thinking_ahead()},
-                "remote": {"enabled": self.remote.enabled, "listening": self.remote.listening()}}
+                "remote": {"enabled": self.remote.enabled, "listening": self.remote.listening()},
+                "live": self.live_status()}
+
+    def live_status(self) -> dict:
+        s = self.live.status()
+        return {"available": s["available"], "label": s["label"], "enabled": s["enabled"]}
 
     def cards_json(self, node_id: str, phrase: str) -> list[dict]:
         """The phrase's branch cards, each with `ready`: a finished draft of the page opening
@@ -948,7 +988,8 @@ def _make_handler(app: App):
                 status, error = 403, "forbidden host"
             elif path.startswith("/v1/") and site is not None and site.lower() not in ("same-origin", "none"):
                 status, error = 403, "forbidden cross-site request"
-            elif path in NEEDS_PRIMER_HEADER and self.headers.get(PRIMER_HEADER) != "1":
+            elif (path in NEEDS_PRIMER_HEADER or path.startswith("/v1/live/")
+                  and path.endswith("/frames")) and self.headers.get(PRIMER_HEADER) != "1":
                 status, error = 403, f"{PRIMER_HEADER} header required"
             elif (post or path.startswith("/v1/")) and origin is not None and \
                     origin.lower() not in ["http://" + h for h in local]:
@@ -1049,6 +1090,8 @@ def _make_handler(app: App):
                         self._json(diagram)
                 elif path.startswith("/v1/tool/"):
                     self._tool_get(path, parse_qs(url.query))
+                elif path.startswith("/v1/live/"):
+                    self._live_get(path)
                 elif path == "/v1/books":
                     self._json({"books": app.books.list()})
                 elif path == "/v1/books/pages":  # the read pages a branch book can start from
@@ -1073,10 +1116,30 @@ def _make_handler(app: App):
                 log.exception("GET %s failed", path)
                 self._json({"error": "internal error"}, 500)
 
+        def _live_too_large(self, path: str) -> bool:
+            """Refuse an oversized live post (413) from its Content-Length, before reading it:
+            4 KB for input, MAX_BODY for the rest. The body is drained, not parsed."""
+            if not path.startswith("/v1/live/"):
+                return False
+            m = LIVE_PATH.fullmatch(path)
+            limit = LIVE_INPUT_BYTES if m and m.group(2) == "input" else MAX_BODY
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return False  # _body() answers a bad Content-Length with 400
+            if length <= limit:
+                return False
+            self._drain()  # read and dropped (at most MAX_BODY, 2 s), so Windows sends no RST
+            self.close_connection = True
+            self._json({"error": LIVE_TOO_LARGE}, 413)
+            return True
+
         def do_POST(self) -> None:
             if self._refused(post=True):
                 return
             path = urlsplit(self.path).path
+            if self._live_too_large(path):
+                return
             try:
                 body = self._body()
                 if path == "/v1/tier":
@@ -1205,6 +1268,8 @@ def _make_handler(app: App):
                     self._scan(body)
                 elif path.startswith("/v1/setup/"):
                     self._setup_post(path[len("/v1/setup/"):], body)
+                elif path.startswith("/v1/live/"):
+                    self._live_post(path, body)
                 else:
                     self._json({"error": "not found"}, 404)
             except _BadRequest as e:
@@ -1309,9 +1374,18 @@ def _make_handler(app: App):
                     source_url = parse_address(source_url).url  # http(s) or kiwix: only, cleaned
                 except ValueError as exc:
                     raise _BadRequest(f"source_url: {exc}") from None
+            source_page = None
+            if body.get("source_live") is not None:  # Make a page from a live page's own text
+                lp = self._live_text(body.get("source_live"))
+                try:
+                    source_url = parse_address(lp["url"]).url
+                except ValueError as exc:
+                    raise _BadRequest(f"source_live: {exc}") from None
+                source_page = {"url": source_url, "title": lp["title"], "text": lp["text"]}
             return OpenRequest(concept=concept, via=via, from_id=from_id, phrase=phrase,
                                depth=depth, regenerate=bool(body.get("regenerate", False)),
-                               node_id=node_id, source=source, source_url=source_url)
+                               node_id=node_id, source=source, source_url=source_url,
+                               source_page=source_page)
 
         def _sse(self) -> Callable[[str, dict], None]:
             """Start a text/event-stream response; the returned emit(kind, data) writes one event."""
@@ -1653,21 +1727,31 @@ def _make_handler(app: App):
                 emit("error", {"message": "internal error"})
 
         def _browse_model(self, path: str, body: dict) -> None:
-            """POST /v1/browse/ask {u, question} and /v1/browse/agent {u, goal}: SSE."""
+            """POST /v1/browse/ask {u, question, live?} and /v1/browse/agent {u, goal}: SSE.
+            With `live` (a live window's id), Ask reads that live page's own text instead of
+            fetching u."""
             u, agent = body.get("u"), path.endswith("/agent")
+            live = body.get("live")
+            if live is not None and agent:
+                raise _BadRequest("live is for Ask only; Click through on a live page is /v1/live")
             field = "goal" if agent else "question"
             text = body.get(field)
             if text is None and not agent:
                 text = DEFAULT_QUESTION
-            if not isinstance(u, str) or not u:
+            if live is None and (not isinstance(u, str) or not u):
                 raise _BadRequest("u is required")
             if not isinstance(text, str) or not text.strip() or len(text) > 1000:
                 raise _BadRequest(f"{field} must be a short string")
             text = text.strip()
-            try:
-                page = app.browse.open(u)  # errors are JSON with a status, before the stream starts
-            except ValueError as e:
-                raise _BadRequest(str(e)) from None
+            if live is not None:  # the live page's text, as the reader's page (same Ask caps)
+                lp = self._live_text(live)
+                page = {"u": lp["url"], "final_url": lp["url"], "title": lp["title"] or lp["url"],
+                        "markdown": lp["text"]}
+            else:
+                try:
+                    page = app.browse.open(u)  # errors are JSON with a status, before the stream starts
+                except ValueError as e:
+                    raise _BadRequest(str(e)) from None
             emit = self._sse()
             try:
                 if agent:
@@ -1678,6 +1762,166 @@ def _make_handler(app: App):
             except Exception:
                 log.exception("browse model call failed")
                 emit("error", {"message": "internal error"})
+
+        # live pages (primer.live): the driven browser and Click through on it
+        @staticmethod
+        def _live_window(window) -> str:
+            # never percent-decoded: a valid id needs no encoding, so a % simply fails
+            if not isinstance(window, str) or not LIVE_WINDOW.fullmatch(window):
+                raise _BadRequest("window must be 1-32 characters: a-z, 0-9 and -")
+            return window
+
+        @staticmethod
+        def _live_size(body: dict) -> list[int]:
+            size = []
+            for name in ("width", "height"):
+                v = body.get(name)
+                if type(v) is not int or not LIVE_MIN_SIZE <= v <= LIVE_MAX_SIZE:
+                    raise _BadRequest(f"{name} must be a whole number from "
+                                      f"{LIVE_MIN_SIZE} to {LIVE_MAX_SIZE}")
+                size.append(v)
+            return size
+
+        def _live_text(self, window) -> dict:
+            """A live window's {title, url, text} for Ask and Make a page; its address must be
+            http(s). LiveError becomes its HTTP status."""
+            window = self._live_window(window)
+            try:
+                page = app.live.read_text(window)
+            except LiveError as e:
+                raise _HttpError(e.status, e.message) from None
+            if urlsplit(page["url"]).scheme not in ("http", "https"):
+                raise _HttpError(409, "That live page has no web address yet")
+            return page
+
+        def _live_get(self, path: str) -> None:
+            """GET /v1/live/status, and GET /v1/live/<window>/frames (SSE)."""
+            if path == "/v1/live/status":
+                self._json(app.live.status())
+                return
+            m = LIVE_PATH.fullmatch(path)
+            if not m or m.group(2) != "frames":
+                raise _HttpError(404, "not found")
+            self._live_frames(self._live_window(m.group(1)))
+
+        def _live_frames(self, window: str) -> None:
+            """SSE: frame {data, w, h}, note {text}, nav {url, title} (the page moved or retitled),
+            a ping comment when idle, and last gone {reason}. Ends when the window closes, the browser dies or the client goes."""
+            try:
+                frames = app.live.frames(window)
+            except LiveError as e:
+                raise _HttpError(e.status, e.message) from None
+            try:
+                emit = self._sse()
+                for ev in frames:
+                    if not emit.alive():
+                        break
+                    if "gone" in ev:
+                        emit("gone", {"reason": ev["gone"]})
+                        break
+                    if "ping" in ev:
+                        emit.comment("ping")
+                    elif "note" in ev:
+                        emit("note", {"text": ev["note"]})
+                    elif "nav" in ev:
+                        emit("nav", {"url": ev["nav"].get("url", ""), "title": ev["nav"].get("title", "")})
+                    else:
+                        emit("frame", {"data": ev.get("data"), "w": ev.get("w"), "h": ev.get("h")})
+            finally:
+                close = getattr(frames, "close", None)
+                if close is not None:
+                    close()
+
+        def _live_post(self, path: str, body: dict) -> None:
+            """POST /v1/live/open | forget | <window>/input | nav | close | agent | agent/answer."""
+            try:
+                if path == "/v1/live/open":
+                    window = self._live_window(body.get("window"))
+                    url = body.get("url")
+                    if not isinstance(url, str) or not url:
+                        raise _BadRequest("url is required")
+                    self._json(app.live.open(window, url, *self._live_size(body)))
+                    return
+                if path == "/v1/live/forget":
+                    if body:
+                        raise _BadRequest("forget takes an empty object")
+                    for w in app.live.status().get("windows", []):
+                        app.live_agents.stop(w)
+                    app.live.forget()
+                    self._json({"ok": True})
+                    return
+                m = LIVE_PATH.fullmatch(path)
+                if not m or m.group(2) == "frames":
+                    raise _HttpError(404, "not found")
+                window, what = self._live_window(m.group(1)), m.group(2)
+                if what == "input":
+                    app.live.input(window, body)
+                    self._json({"ok": True})
+                elif what == "nav":
+                    action, url = body.get("action"), body.get("url")
+                    if action not in ("back", "forward", "reload", "url"):
+                        raise _BadRequest("action must be back, forward, reload or url")
+                    if action == "url" and (not isinstance(url, str) or not url):
+                        raise _BadRequest("url is required")
+                    app.live.nav(window, action, url if action == "url" else None)
+                    self._json({"ok": True})
+                elif what == "resize":
+                    if set(body) != {"width", "height"}:
+                        raise _BadRequest("resize takes width and height")
+                    app.live.resize(window, *self._live_size(body))
+                    self._json({"ok": True})
+                elif what == "close":
+                    app.live_agents.stop(window)
+                    self._json({"closed": app.live.close(window)})
+                elif what == "agent/answer":
+                    ask_id, allow = body.get("id"), body.get("allow")
+                    if not isinstance(ask_id, str) or not ask_id or type(allow) is not bool:
+                        raise _BadRequest("id (a string) and allow (true or false) are required")
+                    if not app.live_agents.answer(window, ask_id, allow):
+                        raise _HttpError(404, "There is no question waiting with that id")
+                    self._json({"ok": True})
+                else:
+                    self._live_agent(window, body)
+            except LiveError as e:
+                raise _HttpError(e.status, e.message) from None
+
+        def _live_agent(self, window: str, body: dict) -> None:
+            """POST /v1/live/<window>/agent {goal}: SSE of step, ask, answer, stopped, error and
+            waiting. One run per window (409); it ends on answer, Stop, the limits, the window
+            closing or the client going."""
+            goal = body.get("goal")
+            if not isinstance(goal, str) or not goal.strip() or len(goal) > LIVE_GOAL_CHARS:
+                raise _BadRequest("goal must be a short string")
+            if not app.live.enabled:
+                raise LiveError(403, LIVE_OFF)
+            gen = app.live.generation(window)
+            if gen is None:
+                raise LiveError(404, LIVE_GONE)
+            agents = app.live_agents
+            cancel = agents.begin(window, gen)
+            if cancel is None:
+                raise _HttpError(409, LIVE_BUSY)
+            try:
+                emit = self._sse()
+
+                def alive() -> bool:  # the client is there and the window wasn't closed
+                    return not cancel.is_set() and emit.alive()
+
+                def live_emit(kind: str, data: dict) -> None:
+                    if kind == "ask":  # the ask exists before the client can see it
+                        agents.expect(window, data["id"])
+                    emit(kind, data)
+                live_emit.alive = alive
+                try:
+                    run_live_agent(app.live, window, goal.strip(), app.pages.text, app.pages.gate,
+                                   live_emit,
+                                   lambda ask_id, _text: agents.wait(window, ask_id, alive),
+                                   gen=gen)
+                except Exception:
+                    log.exception("live agent failed")
+                    emit("error", {"message": "internal error"})
+            finally:
+                agents.end(window)
 
         # images
         def _image_models(self) -> None:

@@ -35,14 +35,22 @@ export const graph = () => j('GET', '/v1/graph')
 /* POST a JSON body and stream the SSE reply to onEvent({event, data}). Resolves when the
  * stream ends; rejects on a non-2xx reply (a JSON {error}), a network failure, an abort
  * (AbortError) or a throwing onEvent. `signal` is an AbortSignal. */
-export async function postStream(url, body, onEvent, signal, what = 'request') {
-  const r = await fetch(url, {
+export function postStream(url, body, onEvent, signal, what = 'request') {
+  return readStream(fetch(url, {
     method: 'POST', headers: { ...PRIMER, 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
-  })
+  }), onEvent, what)
+}
+
+/* the same for a GET stream that needs X-Primer (so it can't be an EventSource) */
+export const getStream = (url, onEvent, signal, what = 'request') =>
+  readStream(fetch(url, { method: 'GET', headers: PRIMER, signal }), onEvent, what)
+
+async function readStream(pending, onEvent, what) {
+  const r = await pending
   if (!r.ok) {
     const data = await r.json().catch(() => ({}))
-    throw new Error(data.error || data.message || `${what}: ${r.status}`)
+    throw Object.assign(new Error(data.error || data.message || `${what}: ${r.status}`), { status: r.status })
   }
   const reader = r.body.getReader()
   const dec = new TextDecoder()
@@ -69,10 +77,29 @@ export const openPage = (body, onEvent, signal) => postStream('/v1/pages/open', 
 export const browse = (u, signal) => j('GET', `/v1/browse?u=${encodeURIComponent(u)}`, undefined, signal)
 export const browseSearch = (q, where, signal) =>
   j('GET', `/v1/browse/search?q=${encodeURIComponent(q)}&where=${encodeURIComponent(where)}`, undefined, signal)
-export const browseAsk = (u, question, onEvent, signal) =>
-  postStream('/v1/browse/ask', { u, question }, onEvent, signal, 'ask')
+// live: a live window's id, to ask about that live page's own text instead of fetching u
+export const browseAsk = (u, question, onEvent, signal, live) =>
+  postStream('/v1/browse/ask', live ? { u, question, live } : { u, question }, onEvent, signal, 'ask')
 export const browseAgent = (u, goal, onEvent, signal) =>
   postStream('/v1/browse/agent', { u, goal }, onEvent, signal, 'click through')
+
+/* Live pages (Phase 14): a real browser Primer drives, shown as a picture. `w` is the live
+ * window's id (^[a-z0-9-]{1,32}$, made by the window). frames streams {event: frame {data, w, h}
+ * | note {text} | nav {url, title} | gone {reason}}; resize follows the window's size; input takes one event (mouse, wheel, key, text; under 4 KB);
+ * nav is back, forward, reload or url; close always answers {closed}; agent streams step, ask,
+ * answer, stopped, error and waiting; answer settles an ask (allow: Allow once, or Stop). */
+const liveW = (w) => `/v1/live/${encodeURIComponent(w)}`
+export const liveStatus = () => j('GET', '/v1/live/status')
+export const liveOpen = (w, url, width, height) => j('POST', '/v1/live/open', { window: w, url, width, height })
+export const liveFrames = (w, onEvent, signal) => getStream(`${liveW(w)}/frames`, onEvent, signal, 'live page')
+export const liveInput = (w, event) => j('POST', `${liveW(w)}/input`, event)
+export const liveResize = (w, width, height) => j('POST', `${liveW(w)}/resize`, { width, height })
+export const liveNav = (w, action, url) => j('POST', `${liveW(w)}/nav`, action === 'url' ? { action, url } : { action })
+// keepalive: a close sent as the tab goes away still arrives
+export const liveClose = (w) => j('POST', `${liveW(w)}/close`, {}, undefined, { keepalive: true })
+export const liveForget = () => j('POST', '/v1/live/forget', {})
+export const liveAgent = (w, goal, onEvent, signal) => postStream(`${liveW(w)}/agent`, { goal }, onEvent, signal, 'click through')
+export const liveAnswer = (w, id, allow) => j('POST', `${liveW(w)}/agent/answer`, { id: String(id), allow: !!allow })
 
 /* images */
 export const intent = (text) => j('POST', '/v1/intent', { text })

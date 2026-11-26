@@ -38,6 +38,7 @@ if sys.platform == "win32":
 
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _PROCESS_TERMINATE = 0x0001
+    _PROCESS_SET_QUOTA = 0x0100
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     _SYNCHRONIZE = 0x00100000
     _STILL_ACTIVE = 259
@@ -112,20 +113,72 @@ if sys.platform == "win32":
         finally:
             _k32.CloseHandle(h)
 
-    def _terminate(pid: int, exe: str, created: str) -> bool:
-        """Kill pid if it still is (exe, created). Holding the handle, the pid can't be reused
-        between the check and the kill."""
-        h = _open(pid, _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_TERMINATE | _SYNCHRONIZE)
-        if h is None:
-            return False
-        try:
-            if _handle_identity(h) != (exe, created):
+    _ntdll = ctypes.WinDLL("ntdll")
+    _ntdll.NtQueryInformationProcess.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                 wintypes.ULONG, ctypes.POINTER(wintypes.ULONG))
+    _ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+    _ProcessCommandLineInformation = 60  # Windows 8.1 and later
+
+    class _UNICODE_STRING(ctypes.Structure):
+        _fields_ = [("Length", wintypes.USHORT), ("MaximumLength", wintypes.USHORT),
+                    ("Buffer", ctypes.c_void_p)]
+
+    def _handle_cmdline(h) -> str | None:
+        size = wintypes.ULONG(0)
+        _ntdll.NtQueryInformationProcess(h, _ProcessCommandLineInformation, None, 0,
+                                         ctypes.byref(size))
+        if not size.value or size.value > 1 << 20:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if _ntdll.NtQueryInformationProcess(h, _ProcessCommandLineInformation, buf, size,
+                                            ctypes.byref(size)) != 0:
+            return None
+        us = _UNICODE_STRING.from_buffer(buf)
+        return ctypes.wstring_at(us.Buffer, us.Length // 2) if us.Buffer else ""
+
+    class ProcessHandle:
+        """One open handle to one process. While it is held the pid can't be reused, and every
+        check (exe, creation time, command line) and the kill go through this same handle."""
+
+        def __init__(self, h, pid: int):
+            self._h, self.pid = h, pid
+
+        @classmethod
+        def open(cls, pid: int) -> "ProcessHandle | None":
+            base = _PROCESS_QUERY_LIMITED_INFORMATION | _PROCESS_TERMINATE | _SYNCHRONIZE
+            h = _open(pid, base | _PROCESS_SET_QUOTA) or _open(pid, base)
+            return cls(h, pid) if h is not None else None
+
+        def identity(self) -> tuple[str, str] | None:
+            return _handle_identity(self._h) if self._h else None
+
+        def command_line(self) -> str | None:
+            return _handle_cmdline(self._h) if self._h else None
+
+        def wait(self, timeout: float) -> bool:
+            """True once the process has exited."""
+            if not self._h:
+                return True
+            ms = int(max(0.0, timeout) * 1000)
+            return _k32.WaitForSingleObject(self._h, ms) == _WAIT_OBJECT_0
+
+        def terminate(self, ident: tuple[str, str], graceful: bool = False) -> bool:
+            """Kill the process, only if it still is `ident` (checked on this handle)."""
+            if not self._h or _handle_identity(self._h) != ident:
                 return False
-            _k32.TerminateProcess(h, 1)
-            _k32.WaitForSingleObject(h, int(REAP_WAIT_S * 1000))
-            return True
-        finally:
-            _k32.CloseHandle(h)
+            return bool(_k32.TerminateProcess(self._h, 1))
+
+        def assign_to(self, job) -> bool:
+            return bool(self._h) and bool(_k32.AssignProcessToJobObject(job, self._h))
+
+        def close(self) -> None:
+            h, self._h = self._h, None
+            if h:
+                _k32.CloseHandle(h)
+
+    def now_stamp() -> int | None:
+        """The current time in identity()'s creation-time units (FILETIME)."""
+        return int((time.time() + 11644473600) * 10_000_000)
 
 else:
     def identity(pid: int) -> tuple[str, str] | None:
@@ -141,22 +194,98 @@ else:
             return None
         return exe, fields[19]
 
-    def _terminate(pid: int, exe: str, created: str) -> bool:
-        if identity(pid) != (exe, created):
-            return False
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            return False
-        end = time.monotonic() + REAP_WAIT_S
-        while time.monotonic() < end and identity(pid) == (exe, created):
-            time.sleep(0.1)
-        if identity(pid) == (exe, created):
+    class ProcessHandle:
+        """A pidfd where there is one (Linux): a signal through it can only reach the original
+        process. The identity checks read /proc for the pid."""
+
+        def __init__(self, pid: int, fd: int | None, ident: tuple[str, str]):
+            self.pid, self._fd, self._ident = pid, fd, ident
+
+        @classmethod
+        def open(cls, pid: int) -> "ProcessHandle | None":
+            fd = None
+            if hasattr(os, "pidfd_open"):
+                try:
+                    fd = os.pidfd_open(pid)
+                except OSError:
+                    return None
+            ident = identity(pid)
+            if ident is None:
+                if fd is not None:
+                    os.close(fd)
+                return None
+            return cls(pid, fd, ident)
+
+        def identity(self) -> tuple[str, str] | None:
+            return identity(self.pid)
+
+        def command_line(self) -> str | None:
             try:
-                os.kill(pid, signal.SIGKILL)
+                raw = Path(f"/proc/{self.pid}/cmdline").read_bytes()
             except OSError:
-                pass
+                return None
+            return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+
+        def wait(self, timeout: float) -> bool:
+            end = time.monotonic() + max(0.0, timeout)
+            while True:
+                if identity(self.pid) != self._ident:
+                    return True
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(0.05)
+
+        def terminate(self, ident: tuple[str, str], graceful: bool = False) -> bool:
+            if identity(self.pid) != ident:
+                return False
+            sig = signal.SIGTERM if graceful else signal.SIGKILL
+            try:
+                if self._fd is not None:
+                    signal.pidfd_send_signal(self._fd, sig)
+                else:
+                    os.kill(self.pid, sig)
+            except OSError:
+                return False
+            return True
+
+        def assign_to(self, job) -> bool:
+            return False
+
+        def close(self) -> None:
+            fd, self._fd = self._fd, None
+            if fd is not None:
+                os.close(fd)
+
+    def now_stamp() -> int | None:
+        """The current time in identity()'s creation-time units (clock ticks since boot)."""
+        try:
+            up = float(Path("/proc/uptime").read_text().split()[0])
+            return int(up * os.sysconf("SC_CLK_TCK"))
+        except (OSError, ValueError, IndexError):
+            return None
+
+
+def open_process(pid: int):
+    """A ProcessHandle for pid, or None if it can't be opened (tests replace this)."""
+    return ProcessHandle.open(pid)
+
+
+def _terminate(pid: int, exe: str, created: str) -> bool:
+    """Stop pid only if it still is (exe, created), checked and killed through one handle.
+    Only that one process: never a tree."""
+    h = open_process(pid)
+    if h is None:
+        return False
+    try:
+        ident = (exe, created)
+        if not h.terminate(ident, graceful=True):
+            return False
+        if not h.wait(REAP_WAIT_S):
+            h.terminate(ident)
+            h.wait(REAP_WAIT_S)
         return True
+    finally:
+        h.close()
 
 
 # --- Windows Job Object -------------------------------------------------------------------------
@@ -183,6 +312,24 @@ class _Job:
         if not _k32.AssignProcessToJobObject(job, int(proc._handle)):
             log.warning("could not put pid %s in Primer's job object (error %s); the pid "
                         "ledger still covers it", proc.pid, ctypes.get_last_error())
+            return False
+        return True
+
+    def assign_handle(self, handle) -> bool:
+        """Put a process we didn't Popen ourselves (a launcher's relaunch) in the job, through
+        a ProcessHandle the caller has already verified."""
+        if sys.platform != "win32":
+            return False
+        with self._lock:
+            if self._handle is None and not self._failed:
+                self._handle = self._create()
+                self._failed = self._handle is None
+            job = self._handle
+        if job is None:
+            return False
+        if not handle.assign_to(job):  # e.g. it set up a job of its own
+            log.info("could not put pid %s in Primer's job object (error %s); the pid "
+                     "ledger still covers it", handle.pid, ctypes.get_last_error())
             return False
         return True
 
@@ -255,8 +402,10 @@ class Ledger:
             return False
         return identity(owner["pid"]) == (owner.get("exe"), owner.get("create_time"))
 
-    def record(self, role: str, pid: int, port: int | None = None) -> bool:
-        ident, me = identity(pid), identity(os.getpid())
+    def record(self, role: str, pid: int, port: int | None = None,
+               ident: tuple[str, str] | None = None) -> bool:
+        """`ident`: an identity the caller already verified (read through a held handle)."""
+        ident, me = ident or identity(pid), identity(os.getpid())
         if ident is None or me is None:  # already gone, or not verifiable here
             return False
         entry = {"role": role, "pid": pid, "exe": ident[0], "create_time": ident[1], "port": port,
@@ -282,8 +431,9 @@ class Ledger:
                     if self._alive(e):
                         kept.append(e)
                 elif _terminate(e["pid"], e["exe"], e["create_time"]):
-                    done.append(f"stopped a leftover {e.get('role') or 'model'} server from the "
-                                f"last run (pid {e['pid']})")
+                    what = ("browser" if e.get("role") == "browser"
+                            else f"{e.get('role') or 'model'} server")
+                    done.append(f"stopped a leftover {what} from the last run (pid {e['pid']})")
             self._write(kept)
         return done
 
@@ -313,6 +463,22 @@ def adopt(proc: subprocess.Popen, role: str, port: int | None = None) -> None:
             ledger.record(role, proc.pid, port)
         except Exception:
             log.exception("could not record pid %s in the ledger", proc.pid)
+
+
+def adopt_handle(handle, ident: tuple[str, str], role: str) -> None:
+    """Tie a process Primer started indirectly (a browser that relaunched itself) to Primer's
+    lifetime. The caller has verified it through `handle` (exe, creation time, command line)
+    and passes the identity it read there. Never raises."""
+    try:
+        _JOB.assign_handle(handle)
+    except Exception:
+        log.exception("job object assignment failed")
+    ledger = _ledger
+    if ledger is not None:
+        try:
+            ledger.record(role, handle.pid, ident=ident)
+        except Exception:
+            log.exception("could not record pid %s in the ledger", handle.pid)
 
 
 def release(pid: int) -> None:

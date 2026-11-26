@@ -502,6 +502,75 @@ Measured with the offline encyclopedia: an article opens in about 0.1 s, a Wikip
 about 1 s; Ask answers in about 3 s and a two-step click-through finishes in about 5 s with
 gemma-4-E4B writing.
 
+### Live pages (Phase 14)
+
+See [USING.md](USING.md#live-pages).
+- **The browser.** Live pages need **Chrome or Edge** installed. Primer looks for Chrome first,
+  then Edge, in the standard install places; nothing is downloaded. A tier can name one:
+
+  ```toml
+  [browser]
+  path = "C:/Program Files/Google/Chrome/Application/chrome.exe"
+  ```
+
+  The Setup centre and `/v1/status` show what was found (`live: {available, label, enabled}`),
+  for example "Live pages: Chrome 158".
+- **How it runs:**
+  - headless (`--headless=new`), with its own profile in `var/browser/`;
+  - remote debugging on `127.0.0.1` at a port Chrome picks, with no `--remote-allow-origins`, so
+    web pages can't reach it;
+  - started on first use, and stopped after 10 minutes with no live page, and when Primer stops.
+- **Process safety.** Primer stops it with the DevTools `Browser.close`. If that doesn't work, it
+  terminates only the verified browser process: checked by its program, start time and profile
+  through one process handle. It never kills a process tree, so your own Chrome is never
+  touched. A browser left over from a crash is stopped at the next start, checked by its program
+  and start time (its profile was checked when it was recorded).
+- **Request checking:**
+  - Every request a live page makes is paused through the DevTools `Fetch` domain. It is refused
+    if its host is, or resolves to, a non-public address (loopback, private, link-local, IPv4
+    inside IPv6), a local name (`localhost`, `*.localhost`, `*.local`) or a single-label name.
+    Lookups time out after 3 s and then refuse.
+  - **Only some schemes go through:** http and https are checked as above; data:, blob: and
+    about:blank are allowed; everything else, including file:, is refused.
+  - **Also blocked:** WebSocket, WebTransport and WebRTC are blocked in every page, frame and
+    worker; downloads and every permission prompt are denied; link prediction and preconnect are
+    off; Document Picture-in-Picture is off. `window.open` navigates the same tab.
+- **Presses.** Before an allowed press, one step in Primer's own script world scrolls the control
+  into view, checks that it and every element around it are shown (not hidden, not nearly
+  transparent, not zero-sized), and checks that the control is what sits at the point to be
+  clicked. If anything covers it, such as a transparent frame from another site, the press is
+  refused with "Something covers that control" and nothing is clicked. Any embedded frame over
+  the point counts as covering it, even one that ignores the pointer for now (a page could turn
+  it back on). The click is a bare press and release, sent straight after the check, with no
+  hover move first, so the page gets no signal that a click is coming. A page that moves
+  something over the control by chance in that one round trip is not caught. Labels and the model's typed text lose invisible and direction-changing characters
+  before they're shown in the question, and the text typed is the text shown.
+- **Known gap.** A host whose DNS answers differently to Primer's check and to Chrome (DNS
+  rebinding) is narrowed, not closed. The local-network-access permission is denied as a
+  backstop.
+- **Routes** (localhost-guarded; POSTs are same-origin JSON):
+  - `POST /v1/live/open {window, url, width, height}` answers 403 (off), 409 (4 open), 400 (an
+    address that can't be opened live) or 503 (no browser).
+  - `GET /v1/live/<window>/frames` is SSE (`frame`, `nav`, `note`, `gone`) and needs `X-Primer:
+    1`.
+  - `POST /v1/live/<window>/input`: at most 4 KB, else 413.
+  - `POST /v1/live/<window>/nav`, `/resize` and `/close`.
+  - `POST /v1/live/<window>/agent {goal}` is SSE (`step`, `ask`, `answer`, `stopped`, `error`,
+    `waiting`), and `/agent/answer {id, allow}` answers a waiting question.
+  - `POST /v1/live/forget`, and `GET /v1/live/status`.
+  - `/v1/browse/ask` takes an optional `live` window, and Make a page (`/v1/pages/open`) an
+    optional `source_live` window, to use the live page's text.
+- **Limits:**
+  - 4 live windows;
+  - a JPEG screencast at quality 70, at most 10 frames a second;
+  - the agent runs 8 steps in 180 s and types at most 200 characters, and a question waits 120 s;
+  - a window that no one is watching closes after 30 to 60 s.
+
+**Measured** with Chrome 158 on the local-gpu tier: a live page opened in about 2 s. Click through
+on "Search Wikipedia for Bodiam Castle and tell me when it was built" took 4 steps, with two Allow
+once answers, and answered "Bodiam Castle was built in 1385." Killing the browser mid-session ended
+the live view with "The browser stopped"; the next open started a fresh one.
+
 ## The reader model, Test me and Quest
 
 See [USING.md](USING.md#the-primer-knows-you). Everything is kept in the graph database in

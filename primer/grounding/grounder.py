@@ -100,6 +100,18 @@ class Grounder:
             return [], self._down(mode, exc)
         return [], ""
 
+    def gather_page(self, url: str, title: str, text: str) -> tuple[list[Source], str]:
+        """A page's text already read (a live page in Primer's browser) as the single source,
+        cited by its web address and budgeted like any fetched page."""
+        if self.searcher is None:  # web off in this tier: nothing web-based is read
+            return [], f"Web search is off in this tier; {_OWN}{_CHANGE}"
+        host = (urlsplit(url).hostname or "").removeprefix("www.")
+        kw = {"origin": "web", "url": url, "where": host, "title": (title or "").strip() or host or url}
+        sources = _budgeted([((text or "").strip(), kw)])
+        if not sources:
+            return [], f"That page had no text to read; {_OWN}"
+        return sources, ""
+
     def gather_url(self, u: str) -> tuple[list[Source], str]:
         """One given page (an http(s) URL or kiwix: address) as the single source. Never
         raises for a backend failure: returns ([], note) instead."""

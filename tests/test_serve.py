@@ -167,6 +167,7 @@ def test_shutdown_stops_timelines_even_if_maps_shutdown_is_interrupted(tmp_path,
     monkeypatch.setattr(App, "shutdown_diagrams", lambda self, *a: calls.append("diagrams"))
     monkeypatch.setattr(App, "shutdown_books", lambda self, *a: calls.append("books"))
     monkeypatch.setattr(App, "shutdown_remote", lambda self: calls.append("remote"))
+    monkeypatch.setattr(App, "shutdown_live", lambda self: calls.append("live"))
     monkeypatch.setattr(serve, "ROOT", tmp_path)
     monkeypatch.setattr(serve, "make_server", lambda *a, **kw: Server())
     monkeypatch.setattr(serve, "detect_hardware", lambda: HW)
@@ -175,4 +176,4 @@ def test_shutdown_stops_timelines_even_if_maps_shutdown_is_interrupted(tmp_path,
     monkeypatch.setattr(serve.ServerManager, "stop_all", lambda self: calls.append("stop_all"))
     with pytest.raises(KeyboardInterrupt):
         serve.main(["--tier", "light"])
-    assert calls == ["maps", "timelines", "stories", "diagrams", "books", "remote", "stop_all"]
+    assert calls == ["maps", "timelines", "stories", "diagrams", "books", "remote", "live", "stop_all"]

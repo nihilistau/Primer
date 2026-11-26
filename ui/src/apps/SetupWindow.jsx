@@ -11,6 +11,7 @@ import {
   downloadBlockedReason, errText, formatBytes, licencesToAccept, planHeld, planTotals, rememberLabels, withChoice,
 } from './setupPlan.js'
 import { markSetupOpened } from './setupSession.js'
+import { liveStatusLine } from './live.js'
 import KitPicker from './setup/KitPicker.jsx'
 import PlanItems from './setup/PlanItems.jsx'
 import Licences from './setup/Licences.jsx'
@@ -191,6 +192,12 @@ export function Install({ data, refresh }) {
   )
 }
 
+/* the live pages' line: which browser Primer found for them, or that it needs one */
+export function LiveLine({ live }) {
+  const t = liveStatusLine(live)
+  return t ? <div className="en-note su-live" role="status">{t}</div> : null
+}
+
 export default function SetupWindow() {
   const [tab, setTab] = useState('install')
   const [seen, setSeen] = useState(() => new Set(['install']))   // a tab mounts on its first visit
@@ -202,10 +209,13 @@ export default function SetupWindow() {
   useEffect(() => { setMs(ACTIVE.includes(state) || state === 'done' ? 1000 : 0) }, [state])
   const marked = useRef(false)
   useEffect(() => { if (!marked.current) { marked.current = true; markSetupOpened() } }, [])
+  const [live, setLive] = useState(null)
+  useEffect(() => { api.status().then(st => setLive(st && st.live)).catch(() => {}) }, [])
 
   return (
     <div className="en su">
       <Tabs tabs={TABS} value={tab} onChange={show} label="Setup" />
+      <LiveLine live={live} />
       {/* a tab stays mounted once seen, so a checked plan or a chosen move survives a look elsewhere */}
       <div hidden={tab !== 'install'}>
         <Body state={poll}>{(data) => <Install data={data} refresh={poll.refresh} />}</Body>

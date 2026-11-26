@@ -659,3 +659,30 @@ def test_fast_busy_while_prefetch_is_queued(graph, text_engine):
         release.set()
         s.shutdown()
     assert s.fast_busy() is False
+
+
+def test_open_from_a_live_page_uses_its_text_not_a_fetch(graph, text_engine, fast_engine):
+    from primer.grounding.grounder import Grounder
+
+    class Searcher:
+        pass
+
+    class LiveGrounder(Grounder):
+        def gather_url(self, u):  # a fetch would read the logged-out page: never called
+            raise AssertionError("fetched " + u)
+
+    g = LiveGrounder(None, Searcher())
+    s = PageService(graph, text_engine, fast_engine, grounder=g)
+    page = {"url": "https://castle.test/visit", "title": "Visit us", "text": "Signed in. Open 10 to 5."}
+    try:
+        ev = list(s.open(OpenRequest("Bodiam", "typed", source_url=page["url"], source_page=page)))
+    finally:
+        s.shutdown()
+    d = dict(ev)
+    assert d["done"]["source_mode"] == "web"
+    src = d["sources"]["sources"][0]
+    assert src["title"] == "Visit us" and src["where"] == "castle.test"
+    nid = d["node"]["id"]
+    cited = graph.sources(nid, graph.latest_version(nid).n)
+    assert [c.url for c in cited] == ["https://castle.test/visit"]  # the live address is cited
+    assert "Signed in. Open 10 to 5." in text_engine.calls[0][1]["content"]

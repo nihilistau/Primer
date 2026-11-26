@@ -133,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         app.shutdown_diagrams()
         app.shutdown_books()
         app.shutdown_remote()
+        app.shutdown_live()
         app.pages.shutdown(drain=False)
         print(f"error: cannot listen on port {args.port}: {e}", file=sys.stderr)
         return 2
@@ -173,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
                                     try:
                                         app.shutdown_remote()  # Kairos's tool streams end
                                     finally:
-                                        app.servers.stop_all()
+                                        try:
+                                            app.shutdown_live()  # the live browser closes
+                                        finally:
+                                            app.servers.stop_all()
         finally:
             server.server_close()
             app.pages.shutdown(drain=False)

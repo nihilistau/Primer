@@ -92,6 +92,7 @@ maps as images, and the trail as the table of contents.
 
 Agreed in Phase 7: a Primer-launched, isolated Chrome shown as live screenshots, for sites that
 need scripts or a login, with the model able to see the page and click for you.
+Design: [2026-11-27-primer-phase14-driven-browser-design.md](2026-11-27-primer-phase14-driven-browser-design.md).
 
 ## Phase 15: Kairos as the front door
 
@@ -108,3 +109,80 @@ magazine. Open any book Primer has made, or read the live trail as a book, as an
 Citations and contents still turn to their pages. CSS 3D, with no new dependencies; pages are
 real text, flowed into fixed page sizes in the browser from Phase 13's safe book blocks. Design:
 [2026-11-15-primer-phase16-bound-book-design.md](2026-11-15-primer-phase16-bound-book-design.md).
+
+## Phase 17: the leftovers
+
+Every small item parked in Phases 11 to 16, gathered into one phase as the user asked
+(2026-11-27). Each comes from that phase's notes.
+
+- **The bound book (Phase 16):**
+  - The live announcement can still say "of about N" after the count is exact.
+  - The bar's toolbar has no arrow-key movement between its buttons.
+  - No component tests cover the book window's key and turn wiring.
+  - A key pressed while a long book is laid out again can be undone when the place lands.
+  - "Open in the Browser?" for web links was only checked against a stub.
+  - Double-click can't select a word in a page's outer third.
+  - A click is swallowed for 400 ms after a lost pointer capture.
+- **Your book (Phase 13):**
+  - A chapter shows every finished map (Warwick Castle has 5 plates); keep only the latest per
+    phrase.
+  - A failed status read during a job removes the book's files.
+  - A heading indented 4 or more spaces is read as a heading, not code.
+- **Timelines and diagrams (Phase 12):**
+  - The 1st-millennium-CE axis bucket is too squashed to see.
+  - Choose the final date list better: the last list, unless its labels are a subset of an
+    earlier, fuller one.
+  - The regnal-number rule accepts the word "I".
+  - The window mount tests are missing.
+  - SVG `use` and markers are dropped from diagrams.
+- **The continuing story (Phase 11):**
+  - Chapter 1's look-back can reuse pages another tale used that day.
+  - Paraphrased repeats in picture prompts aren't removed.
+  - A crash between a chapter's story and its row leaves an orphan story.
+- **The driven browser (Phase 14):**
+  - Close the DNS-rebinding gap, perhaps with a local guarding proxy, which could also allow safe
+    public WebSockets.
+  - A service worker whose set-up fails can run briefly without the socket lock before it's
+    closed.
+  - Worker set-up can hold a DevTools thread for up to 9 s, and slow lookups hold DNS pool slots.
+  - Resizing has no lock (the UI's debounce prevents a pile-up).
+  - The orphan sweep closes a window outside its lock.
+  - A Make-a-page retry after its live window closes fails rather than falling back to the
+    address.
+  - Ask's live address skips `parse_address` cleaning.
+  - A stalled oversize post can hold a thread for 2 s.
+  - Test nits: sleep-based ordering in one WebSocket test, and an unasserted server error.
+  - A changed `[browser] path` applies only after a restart, because the browser found is
+    cached.
+  - The live pools' threads are joined at exit, so a stuck lookup or worker set-up can hold
+    up Primer's stop.
+  - One image-service test (a server dying mid-job) is timing-sensitive under load.
+  - The press's visibility check doesn't catch `filter: opacity(0)`, `clip-path`, `mask` or a near-zero
+    `transform: scale`; this affects only what the reader saw, not where the click lands.
+
+## Possible future: a native client (GPUI)
+
+Not scheduled. Primer could gain a native desktop window drawn with GPUI, the Rust UI framework
+from the Zed editor, beside the web UI rather than instead of it.
+
+- **A spike settled the basics** (2026-11-21). A GPUI window read the running server with no
+  server change: the trail, page text with clickable phrases and `[n]` citations, pictures and
+  sources, in one file of about 500 lines. A page opened in 2–3 ms and its pictures in about 55 ms,
+  using about 88 MB of memory. GPUI has clickable text ranges built in. The first build took about
+  8 minutes; later builds took seconds.
+- **The server stays as it is.** Reading needs nothing new. Writing (asking for a page, making
+  media) needs a way in for a client that isn't a browser, such as a local token. The localhost
+  guard trusts browser headers today.
+- **What would cost the most:**
+  - there is no HTML in GPUI, so the bound book's blocks need their own renderer;
+  - maps need a Rust renderer, or images drawn by the server;
+  - full-colour SVG diagrams and plates need to be turned into images first;
+  - the book's 3D page curl needs custom drawing;
+  - video and narration playback need their own Rust libraries;
+  - screen-reader support has to be checked before committing.
+- **A sensible order, if taken up:**
+  1. the Reader and trail, with a token for writes;
+  2. the Book window and the simpler windows;
+  3. maps, diagrams and the bound book last.
+- **A cheaper alternative** for a native window only: wrap the existing web UI (WebView2, for
+  example with Tauri). It keeps everything, and takes about a day.

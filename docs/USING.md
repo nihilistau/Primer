@@ -613,6 +613,57 @@ layouts, forms or logins: it is a reader, not a full browser.
 Pages fetched from the web go through the same checks as web sources: only public addresses,
 with size and time limits. Pictures are passed through Primer and checked to be real pictures.
 
+### Live pages
+
+Some pages need their scripts, or a sign-in: a timetable, a catalogue, a site you have an account
+on. **Live** in the Browser's bar opens the page in a real browser that Primer starts and controls
+(Chrome, or Edge if Chrome isn't installed). The browser runs out of sight, with no window of its
+own. You see the page as a live picture inside the Browser window, and you can click, scroll and
+type into it. **Reader** goes back to the clean reader view.
+
+The page also offers **Open it live** when the reader can't use it: when the page comes out nearly
+empty, says it needs JavaScript, or the site refuses the reader.
+
+![A Wikipedia page open live in the Browser window, with the Live badge and the Reader button](screenshots/live-page.webp)
+
+- **Signing in.** You sign in yourself, as on any site. Primer's browser has its own profile,
+  separate from your everyday browser, and it remembers sign-ins. The window's menu (⋯) has
+  **Forget everything (sign-ins, cookies, history)**, which asks first.
+- **Click through, live.** Give it a goal, as in the reader.
+  - The model may **scroll, read and follow links** on its own, for up to 8 steps.
+  - **Anything else stops and asks**, every time: pressing a button, typing into a field, or
+    choosing from a list. The panel says what it wants, for example "The model wants to type
+    **'Bodiam Castle'** into **Search Wikipedia**", with **Allow once** and **Stop**.
+  - **It never types into a password field**, and never reads one.
+  - **It never types an address**: it can only follow links the page shows.
+
+  ![Click through asking to type into a search box, with Allow once and Stop](screenshots/live-ask.webp)
+
+  ![Click through after two Allow once answers: it searched, followed the result, and answered "Bodiam Castle was built in 1385."](screenshots/live-answer.webp)
+
+- **Ask and Make a page** work on the live page's own text.
+- **Keys and leaving:**
+  - Esc goes to the page; **Shift+Esc**, or **Leave the page**, gives your keys back to Primer.
+  - Paste works once your browser allows Primer to read the clipboard.
+- **What live pages don't do:**
+  - **Downloads** are refused: "Primer's browser doesn't download files".
+  - **Pop-ups** and new windows open in the same view, so a site that signs you in through a
+    pop-up opens its sign-in page in place.
+  - **Camera, microphone, location and notifications** are always refused.
+  - **WebSockets** (live chat widgets, live tickers) are off, because Primer can't check where
+    they connect.
+- **Pages can't reach your own computer or network.** Every request a live page makes is checked
+  first. Requests to this computer (Primer, Kairos, LM Studio) or your local network (your
+  router, other machines) are refused, and so are local-sounding names such as `localhost` or
+  `router`.
+- **Limits:** up to 4 live pages at a time. The browser closes after 10 minutes with no live page,
+  and when Primer stops.
+- **Web search off:** turning web search off (`[web] search = "off"`) turns live pages off too.
+  Pages already open close with "Live pages are off while web search is off".
+
+The live picture is pixels, so a screen reader can't read it. The reader view, the agent's steps
+and its questions are all text, and **Reader** is always one key away.
+
 ## Models
 
 Open **Models** from the dock. It has two lists, **Pictures** and **Videos**, each with its own

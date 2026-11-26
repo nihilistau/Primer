@@ -109,6 +109,11 @@ class WebConfig:
 
 
 @dataclass(frozen=True)
+class BrowserConfig:
+    path: str = ""  # Chrome or Edge for live pages; empty means look in the usual places
+
+
+@dataclass(frozen=True)
 class Tier:
     name: str
     text: EngineSpec
@@ -120,6 +125,7 @@ class Tier:
     web: WebConfig = field(default_factory=WebConfig)
     map: MapConfig | None = None
     voice: VoiceConfig | None = None
+    browser: BrowserConfig = field(default_factory=BrowserConfig)
 
 
 def _engine(raw: object, where: str) -> EngineSpec:
@@ -223,6 +229,15 @@ def _web(raw: object, where: str) -> WebConfig:
     return WebConfig(search=search, searxng_url=url, api_key_file=key)
 
 
+def _browser(raw: object, where: str) -> BrowserConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected a table")
+    path = raw.get("path", "")
+    if not isinstance(path, str):
+        raise ConfigError(f"{where}: path must be a string")
+    return BrowserConfig(path=path)
+
+
 def _map(raw: object, where: str) -> MapConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"{where}: expected a table")
@@ -302,6 +317,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
     web = _web(data["web"], f"{name}.web") if "web" in data else WebConfig()
     map_ = _map(data["map"], f"{name}.map") if "map" in data else None
     voice = _voice(data["voice"], f"{name}.voice") if "voice" in data else None
+    browser = _browser(data["browser"], f"{name}.browser") if "browser" in data else BrowserConfig()
     return Tier(
         name=str(data.get("name", name)),
         text=text,
@@ -313,6 +329,7 @@ def load_tier(name: str, tiers_dir: Path = TIERS_DIR) -> Tier:
         web=web,
         map=map_,
         voice=voice,
+        browser=browser,
     )
 
 
