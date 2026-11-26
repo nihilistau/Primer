@@ -62,6 +62,16 @@ model.
 
 ![The Book window: the scope choices, the title and By line, the include switches, the preview line and the list of earlier books](docs/screenshots/book-window.webp)
 
+**Read it as a book.** Any book Primer has made, or your trail as it is right now, opens as a
+book on the desk. It has a cover, pages that curl when you drag them, two-page spreads and a back
+cover. Turn pages with a click, the arrow keys or a drag. Contents entries and citations turn to
+their pages, and **Open this page in Primer** takes you back to any chapter. Night paper is the
+default, with Day paper and an optional page-turn sound. Primer remembers your place in each
+book. **Book view** in the Reader opens the page you're reading, and what branched from it, as a
+book.
+
+![A spread of the bound book on night paper: a page of text about the water clock on the left, and two pictures with their captions on the right](docs/screenshots/bound-spread.webp)
+
 **Kairos as the front door.** If you use Kairos, the companion app on this computer, turn on
 **Let Kairos drive Primer** in Engines. Then Kairos can open pages and start a picture, map,
 timeline, diagram, story or reading in the tab you have open. "Tell me a story about that" means
@@ -124,6 +134,18 @@ phrase to explore it as a page, **Ask** about what's on the page, **Make a page*
 **Click through** a goal and watch the model follow links to the answer, one step at a time.
 
 ![A Browser window showing Michelangelo's offline Wikipedia article, with the Click through panel showing the goal "Find the town where Michelangelo was born", the two pages it followed and the answer Caprese, beside a page about Leonardo da Vinci](docs/screenshots/browser.webp)
+
+**Live pages.** Some pages need their scripts or a sign-in. **Live** opens them in a real browser
+(your installed Chrome or Edge) that Primer starts and runs out of sight. The page shows as a live
+picture inside the Browser window that you can click, scroll and type into. You sign in yourself,
+in Primer's own browser profile, which is kept apart from your everyday one. **Click through**
+works live too:
+- **On its own,** the model reads and follows links.
+- **Anything else asks first:** pressing a button, typing or choosing waits for your **Allow
+  once**, every time.
+- **Passwords and addresses:** it never types into a password field, and never types an address.
+
+![The Browser window with Wikipedia's Bodiam Castle page open live, and the Click through panel showing the steps it took (typing into the search box and pressing Search, each allowed once, then following the result) and its answer, "Bodiam Castle was built in 1385."](docs/screenshots/live-answer.webp)
 
 **A map of where you've been.** Every page you open joins a concept graph. The map shows the
 trail: which page you branched from, and how (in context, general, or sideways).
@@ -212,9 +234,12 @@ The short version:
 6. Click **Map** to see the places a page names, pinned on a map. Click a pin to open its page.
 7. Click **Listen** to hear the page, or **Story** for an illustrated, narrated story.
 8. Click a source, or the globe in the dock, to read the original in Primer's **Browser**.
+   Press **Live** there for a page that needs its scripts or a sign-in.
 9. Click the badge in a page's header (`storyteller`) to **rewrite it from** the offline
    encyclopedia or the web. Choose the default for new pages in **Engines**.
 10. Open **Map of where I've been** from the dock to see your trail and jump back.
+11. Click **Book** to make an EPUB or HTML book of your trail, or **Open as a book** to leaf
+    through it in Primer.
 
 The full guide, including tips, settings and troubleshooting, is in [docs/USING.md](docs/USING.md).
 
@@ -230,6 +255,14 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
   is sent).
 - Fetched pages and encyclopedia articles are treated as reference text, never as instructions
   to the model, and are never shown as HTML inside Primer.
+- **Live pages:**
+  - They run in a separate browser profile that Primer keeps in its own folder; **Forget
+    everything** wipes it.
+  - Every request a live page makes is checked, and requests to this computer or your local
+    network are refused.
+  - Downloads, pop-up windows, WebSockets, camera, microphone and location are all refused.
+  - The model can't press, type or choose without your OK each time.
+  - Primer only ever stops the browser it started itself.
 - **Setup** downloads only from Hugging Face, Kiwix, GitHub and Protomaps (and the mirrors and
   CDNs they redirect to), checks every file against its publisher's hash, and runs no program
   it downloaded until you approve it by its SHA-256. A Hugging Face token, if you add one, is sent only to huggingface.co.
@@ -238,9 +271,18 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.14**: pages, branching, pictures, video, grounding in an offline encyclopedia or the
-web, the map, narrated stories, the reader browser, thinking ahead, the Setup window, the reader
-model, Test me, Review, the Quest, the continuing Tale, timelines, diagrams, your book and Kairos driving Primer work.
+This is **v0.16**. All of these work:
+- pages, branching and thinking ahead;
+- pictures and video;
+- grounding in an offline encyclopedia or the web;
+- the map, and narrated stories;
+- the reader browser, and live pages;
+- the Setup window;
+- the reader model, Test me, Review and the Quest;
+- the continuing Tale;
+- timelines and diagrams;
+- your book, and reading it as a book;
+- Kairos driving Primer.
 The design is in [docs/superpowers/specs/](docs/superpowers/specs/), and what changed is in the
 [changelog](CHANGELOG.md).
 
