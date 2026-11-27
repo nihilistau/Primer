@@ -7,11 +7,15 @@ plain text that ElementTree escapes, and the root is always our own
 Refused outright: more than MAX_BYTES, any DOCTYPE or ENTITY declaration (entity bombs, external
 entities), anything that isn't well-formed XML with an <svg> root, and drawings with fewer than
 MIN_LABELS distinct labels. Dropped (with their contents): every element not on the allowlist,
-such as script, style, foreignObject, image, a, use, animate, set, filter, mask and clipPath.
+such as script, style, foreignObject, image, a, animate, set, filter, mask and clipPath.
 
-References are only `marker-start/mid/end="url(#id)"` to a marker in the same drawing, never from
-inside a marker (no chains, no cycles); every id is written with a per-drawing prefix so a
-drawing can't shadow the page's own ids or another drawing's. Every pattern match is linear:
+References are only same-drawing fragments: `marker-start/mid/end="url(#id)"` naming a marker in
+this drawing, and `<use href="#id">` (or `xlink:href`) naming an element in this drawing.
+External URLs, data: URIs and anything before the '#' are dropped (a `use` with such a reference
+goes, with the reference). Nothing inside a marker refers to anything, and a `use` may not name a
+`use` or an element holding one, so there are no chains, no cycles and no exponential re-use.
+Every id is written with a per-drawing prefix so a drawing can't shadow the page's own ids or
+another drawing's. Every pattern match is linear:
 scalar values are capped at MAX_SCALAR characters before matching, lists at MAX_POINTS."""
 from __future__ import annotations
 
@@ -28,11 +32,13 @@ MAX_TEXT = 60
 MIN_LABELS = 3
 MAX_POINTS = 4000  # characters of one `d`, `points` or dash list
 MAX_SCALAR = 32  # characters of any other attribute value (a transform: MAX_TRANSFORM)
+MAX_REF = 64  # a marker-* url(#id) or a use's #id: room for any id _ID allows, and spaces
 MAX_TRANSFORM = 200
 MIN_VIEW = 10.0  # a model view box narrower or lower than this is ignored
 NUM_MIN, NUM_MAX = -2000.0, 3000.0
 VIEW_W, VIEW_H = 1000.0, 700.0
 SVG_NS = "http://www.w3.org/2000/svg"
+XLINK_NS = "http://www.w3.org/1999/xlink"
 ID_PREFIX = "dg-"  # the default prefix of every kept id (DOM clobbering, clashes between drawings)
 
 TOO_LARGE = "the drawing is too large"
@@ -62,6 +68,7 @@ ALLOWED = {
     "defs": (),
     "marker": ("markerWidth", "markerHeight", "refX", "refY", "orient", "markerUnits",
                "viewBox") + _PRESENTATION,
+    "use": ("href", "x", "y", "width", "height") + _PRESENTATION,
 }
 ALLOWED_ELEMENTS = frozenset(ALLOWED) | {"svg"}
 _TEXT_ELEMENTS = ("text", "tspan", "title")
@@ -75,6 +82,10 @@ _D = re.compile(r"[MmLlHhVvCcSsQqTtAaZz0-9 .,\-eE+\t\r\n]*")
 _LIST = re.compile(r"[0-9 .,\-eE+\t\r\n]*")
 _TRANSFORM_PART = re.compile(r"\s*(translate|rotate|scale)\s*\(([^()]*)\)\s*,?")
 _URL_REF = re.compile(r"\s*url\(\s*#([A-Za-z][\w-]{0,30})\s*\)\s*", re.ASCII)
+_HREF = re.compile(r"\s*#([A-Za-z][\w-]{0,30})\s*", re.ASCII)
+_STORED = re.compile(r"dg[0-9a-f]{0,6}-", re.ASCII)  # the prefix a stored drawing's ids carry
+_STORED_URL = re.compile(r"(\s*url\(\s*#)dg[0-9a-f]{0,6}-", re.ASCII)
+_STORED_HREF = re.compile(r"(\s*#)dg[0-9a-f]{0,6}-", re.ASCII)
 _HEX = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})")
 _COLOURS = frozenset((
     "none", "black", "white", "gray", "grey", "silver", "lightgray", "lightgrey", "darkgray",
@@ -162,7 +173,8 @@ def _transform(text: str) -> str | None:
 def _value(name: str, raw: str) -> str | None:
     """The checked, re-written value of an allowlisted attribute, or None to drop it."""
     raw = raw.strip()
-    limit = MAX_POINTS if name in _LONG else MAX_TRANSFORM if name == "transform" else MAX_SCALAR
+    limit = (MAX_POINTS if name in _LONG else MAX_TRANSFORM if name == "transform"
+             else MAX_REF if name in _MARKERS or name == "href" else MAX_SCALAR)
     if not raw or len(raw) > limit:
         return None
     if name in ("fill", "stroke"):
@@ -215,6 +227,9 @@ def _value(name: str, raw: str) -> str | None:
     if name in _MARKERS:
         m = _URL_REF.fullmatch(raw)
         return f"url(#{m.group(1)})" if m else None
+    if name == "href":
+        m = _HREF.fullmatch(raw)
+        return f"#{m.group(1)}" if m else None
     return None
 
 
@@ -269,8 +284,10 @@ class _Builder:
             return None
         if in_text != (name == "tspan"):  # tspans only inside text, nothing else inside it
             return None
-        if in_marker and name == "marker":  # no nested markers
+        if in_marker and name in ("marker", "use"):  # no nested markers, nothing re-used in one
             return None
+        if name == "use" and not self.use_ref(src):
+            return None  # no reference, or one that isn't a fragment of this drawing
         out = ET.SubElement(parent, name)
         if split[1] != "svg":
             self.attributes(src, out, name, in_marker)
@@ -279,7 +296,7 @@ class _Builder:
             text = _plain(src.text)
             if text:
                 out.text = text
-        if name == "title":
+        if name in ("title", "use"):  # nothing inside a use is kept
             return out
         self.children(src, out, depth + 1, in_text=name in ("text", "tspan"),
                       in_marker=in_marker or name == "marker")
@@ -291,13 +308,26 @@ class _Builder:
             self.markers.add(out.get("id")[len(self.prefix):])
         return out
 
+    @staticmethod
+    def use_ref(src: ET.Element) -> str | None:
+        """A use's reference ("#id"): every href it has (plain or xlink) is the same fragment,
+        else None."""
+        refs = {_value("href", raw) if isinstance(raw, str) else None
+                for key, raw in src.attrib.items()
+                if _split(key) in ((None, "href"), (XLINK_NS, "href"))}
+        return refs.pop() if len(refs) == 1 and None not in refs else None
+
     def attributes(self, src: ET.Element, out: ET.Element, name: str, in_marker: bool) -> None:
         allowed = ALLOWED[name]
+        if name == "use":
+            out.set("href", self.use_ref(src))
         for key, raw in src.attrib.items():
             split = _split(key)
             if split is None or split[0] is not None or not isinstance(raw, str):
-                continue  # namespaced attributes (xlink:href, ...) are never kept
+                continue  # namespaced attributes (xlink:href, ...) are never copied
             key = split[1]
+            if key == "href":
+                continue  # a use's reference: set above
             if key == "id":
                 if _ID.fullmatch(raw) and raw not in self.ids:
                     out.set("id", self.prefix + raw)
@@ -348,6 +378,21 @@ def _resolve_markers(root: ET.Element, b: _Builder) -> None:
                 del el.attrib[key]
 
 
+def _resolve_uses(root: ET.Element, b: _Builder) -> None:
+    """A use must name an element of this drawing (rewritten to its prefixed id) that is not a
+    use and holds none (no chains, so no cycles or exponential re-use); other uses are dropped."""
+    by_id = {el.get("id"): el for el in root.iter() if el.get("id")}
+    parents = {child: parent for parent in root.iter() for child in parent}
+    # decided on the drawing as built, before any use goes, so the order of uses doesn't matter
+    targets = {use: by_id.get(b.prefix + use.get("href", "")[1:]) for use in root.iter("use")}
+    keep = {use: t is not None and not any(True for _ in t.iter("use")) for use, t in targets.items()}
+    for use, target in targets.items():
+        if keep[use]:
+            use.set("href", "#" + target.get("id"))
+        else:
+            parents[use].remove(use)
+
+
 def _labels(root: ET.Element) -> list[str]:
     out, seen = [], set()
     for el in root.iter("text"):
@@ -360,10 +405,32 @@ def _labels(root: ET.Element) -> list[str]:
     return out
 
 
-def clean_svg(raw: str, prefix: str = ID_PREFIX) -> tuple[str, list[str]]:
+def _unprefix(src: ET.Element) -> None:
+    """Take the stored `dg<hex>-` prefix off every id and every reference to one (marker-*
+    url(#...), a use's href or xlink:href), so a drawing cleaned before can be cleaned again
+    with another prefix and its ids keep their own length limit."""
+    for el in src.iter():
+        for key, raw in list(el.attrib.items()):
+            if not isinstance(raw, str):
+                continue
+            split = _split(key)
+            if split == (None, "id"):
+                m = _STORED.match(raw)
+                if m:
+                    el.set(key, raw[m.end():])
+            elif split is not None and split[0] is None and split[1] in _MARKERS:
+                el.set(key, _STORED_URL.sub(r"\1", raw, count=1))
+            elif split in ((None, "href"), (XLINK_NS, "href")):
+                el.set(key, _STORED_HREF.sub(r"\1", raw, count=1))
+
+
+def clean_svg(raw: str, prefix: str = ID_PREFIX, *, again: bool = False) -> tuple[str, list[str]]:
     """The drawing rebuilt from the allowlist, and its labels (the text of each <text>, in order,
     without repeats). Every kept id starts with `prefix` (letters, digits, _ and -; ValueError
-    otherwise). Raises DiagramError with the reason when the drawing can't be used."""
+    otherwise). With `again`, `raw` is a drawing this function already cleaned (stored as
+    `dg<hex>-<id>`): that stored prefix is taken off first, so `prefix` replaces it rather than
+    being added to it (an id of up to 31 characters survives). Raises DiagramError with the
+    reason when the drawing can't be used."""
     if not isinstance(prefix, str) or not _PREFIX.fullmatch(prefix):
         raise ValueError("bad id prefix")
     if not isinstance(raw, str) or not raw.strip():
@@ -379,12 +446,15 @@ def clean_svg(raw: str, prefix: str = ID_PREFIX) -> tuple[str, list[str]]:
     split = _split(src.tag)
     if split is None or split[0] not in (None, SVG_NS) or split[1] != "svg":
         raise DiagramError(UNREADABLE)
+    if again:
+        _unprefix(src)
     root = ET.Element("svg", {"xmlns": SVG_NS, "viewBox": f"0 0 {int(VIEW_W)} {int(VIEW_H)}"})
     fit = _scale_for(src.get("viewBox"))
     holder = ET.SubElement(root, "g", {"transform": fit}) if fit else root
     b = _Builder(prefix)
     b.children(src, holder, depth=1 if fit else 0)
     _resolve_markers(root, b)
+    _resolve_uses(root, b)
     labels = _labels(root)
     if len(labels) < MIN_LABELS:
         raise DiagramError(TOO_FEW)

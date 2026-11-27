@@ -13,7 +13,8 @@ long timeline never makes one block taller than many pages.
 Every block is written out again by `_html`, a second guard that emits only what it parsed and
 only what it allows: the elements the builders write (and `clean_svg`'s, in SVG), with names
 compared case-insensitively; no `style`, `on…`, namespaced or `xmlns` attribute; `href` only on
-`a`, to `#…` or http(s); `src` only on `img`, to our own `/v1/media/<64hex>.png`; and no
+`a`, to `#…` or http(s), and on an SVG `use`, to `#id` of an element the guard keeps in the same
+`svg` that is not a `use` and holds none (a `use` without such a reference is dropped); `src` only on `img`, to our own `/v1/media/<64hex>.png`; and no
 attribute whose value says "javascript:". In text, "javascript:" keeps its words with the colon
 as a character reference. `_html` is idempotent, so a saved block can be checked with `guard`.
 
@@ -47,6 +48,7 @@ HTML_ATTRS = frozenset(("id", "class", "href", "src", "alt", "value", "start", "
 SVG_ROOT_ATTRS = frozenset(("viewBox", "width", "height", "role", "aria-label"))
 MAX_NEST = 64  # deeper markup is refused, never recursed into
 _HREF = re.compile(r"#[\w.:-]*|https?://\S+", re.ASCII)
+_USE_HREF = re.compile(r"#([A-Za-z][\w-]*)", re.ASCII)
 _MEDIA_SRC = re.compile(r"/v1/media/[0-9a-f]{64}\.png", re.ASCII)
 _JS = re.compile(r"javascript\s*:", re.I)
 
@@ -91,15 +93,51 @@ def _attr_ok(tag: str, key: str, value: str, svg: bool = False) -> bool:
     if key.startswith("{") or k.startswith("on") or k in ("style", "xmlns") or _JS.search(value):
         return False
     if k == "href":
+        if svg:
+            return tag == "use" and _USE_HREF.fullmatch(value) is not None
         return tag == "a" and _HREF.fullmatch(value.strip()) is not None
     if k == "src":
         return tag == "img" and _MEDIA_SRC.fullmatch(value.strip()) is not None
     return True
 
 
-def _html(el: ET.Element, parent_ns: str = "", depth: int = 0) -> str:
+def _svg_kept(el: ET.Element, depth: int):
+    """(element, tag) for the svg `el` and everything in it that `_html` keeps, in document
+    order: SVG elements of the allowlist, no deeper than MAX_NEST."""
+    if depth > MAX_NEST:
+        return
+    ns, name = _local(el.tag)
+    tag = SVG_TAGS.get(name.lower()) if ns == SVG_NS else None
+    if tag is None:
+        return
+    yield el, tag
+    for child in el:
+        yield from _svg_kept(child, depth + 1)
+
+
+class _SvgRefs:
+    """What a `use` in one svg may name: the ids on elements the guard keeps (the first of each),
+    and which kept elements are uses."""
+
+    def __init__(self, svg: ET.Element, depth: int) -> None:
+        self.ids: dict[str, ET.Element] = {}
+        self.uses: set[ET.Element] = set()
+        for e, tag in _svg_kept(svg, depth):
+            if tag == "use":
+                self.uses.add(e)
+            ident = e.get("id")
+            if ident and _attr_ok(tag, "id", ident, True):
+                self.ids.setdefault(ident, e)
+
+    def target_ok(self, ident: str) -> bool:
+        """The id is on a kept element that is not a use and holds none (no chains, no cycles)."""
+        target = self.ids.get(ident)
+        return target is not None and not any(e in self.uses for e in target.iter())
+
+
+def _html(el: ET.Element, parent_ns: str = "", depth: int = 0, refs: _SvgRefs | None = None) -> str:
     """The element and what it holds, through the guard; "" for an element it doesn't allow
-    (or one nested deeper than MAX_NEST)."""
+    (or one nested deeper than MAX_NEST). `refs` is what a use in the svg it is in may name."""
     if depth > MAX_NEST:
         return ""
     ns, name = _local(el.tag)
@@ -107,10 +145,16 @@ def _html(el: ET.Element, parent_ns: str = "", depth: int = 0) -> str:
     tag = allowed.get(name.lower())
     if tag is None or (ns == SVG_NS and parent_ns != SVG_NS and tag != "svg"):
         return ""
+    if ns == SVG_NS and tag == "svg" and parent_ns != SVG_NS:
+        refs = _SvgRefs(el, depth)
+    if tag == "use":  # only a reference to a kept element of the same svg, never a chain
+        m = _USE_HREF.fullmatch(el.get("href") or "")
+        if m is None or refs is None or not refs.target_ok(m.group(1)):
+            return ""
     attrs = [f' xmlns="{ns}"'] if ns and ns != parent_ns else []
     attrs += [f' {k}="{_text(v)}"' for k, v in el.attrib.items() if _attr_ok(tag, k, v, ns == SVG_NS)]
     head = f"<{tag}{''.join(attrs)}"
-    inner = _text(el.text) + "".join(_html(c, ns, depth + 1) + _text(c.tail) for c in el)
+    inner = _text(el.text) + "".join(_html(c, ns, depth + 1, refs) + _text(c.tail) for c in el)
     if not inner and not ns and tag in VOID:
         return head + "/>"
     return f"{head}>{inner}</{tag}>"

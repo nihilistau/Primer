@@ -628,7 +628,7 @@ def test_make_a_page_from_the_live_text(env):
         yield ("done", {})
     app.pages.open = fake_open
     body = {"concept": "Bodiam", "via": "typed", "source_url": "https://castle.test/", "source_live": "w1"}
-    client.sse("/v1/pages/open", body, expect=404)
+    client.sse("/v1/pages/open", {**body, "source_url": None}, expect=404)  # no address either
     opened(client)
     app.live.page = {**app.live.page, "url": "https://castle.test/visit", "title": "Visit us",
                      "text": "Open 10 to 5."}
@@ -639,3 +639,58 @@ def test_make_a_page_from_the_live_text(env):
     client.sse("/v1/pages/open", {**body, "source_live": "../x"}, expect=400)
     client.sse("/v1/pages/open", {"concept": "Bodiam", "via": "typed", "source_url": "https://castle.test/"})
     assert seen[-1].source_page is None and seen[-1].source_url == "https://castle.test/"
+
+
+# --- Phase 17: the browser's parked items ------------------------------------------------------
+
+def test_make_a_page_retry_without_its_live_window_falls_back_to_the_address(env):
+    """The reader's Retry resends the request as it was: once its live window has closed,
+    the page is made from source_url instead of failing."""
+    app, client = env
+    seen = []
+
+    def fake_open(req):
+        seen.append(req)
+        yield ("done", {})
+    app.pages.open = fake_open
+    body = {"concept": "Bodiam", "via": "typed", "source_url": "https://castle.test/visit",
+            "source_live": "w1"}
+    client.sse("/v1/pages/open", body)  # no window w1 (closed since)
+    assert seen[-1].source_url == "https://castle.test/visit" and seen[-1].source_page is None
+    # with no address to fall back to, a closed window is still 404
+    client.sse("/v1/pages/open", {k: v for k, v in body.items() if k != "source_url"}, expect=404)
+    app.live.on = False  # live pages off: still refused, not quietly fetched
+    client.sse("/v1/pages/open", body, expect=403)
+
+
+def test_ask_cleans_the_live_address_like_make_a_page(env):
+    app, client = env
+    agent_env(app, ["ok"])
+    opened(client)
+    app.live.page = {**app.live.page, "title": "",
+                     "url": "https://castle.test/a b)<x>#top"}
+    client.sse("/v1/browse/ask", {"live": "w1", "question": "When?"})
+    prompt = app.pages.text.calls[-1][1]["content"]
+    assert "https://castle.test/a%20b%29%3Cx%3E" in prompt
+    assert "#top" not in prompt and "a b)" not in prompt
+
+
+def test_an_oversize_post_is_refused_without_waiting_for_its_body(env):
+    app, client = env
+    opened(client)
+    port = client.port
+    for path, length in (("/v1/live/w1/input", 5000), ("/v1/live/open", 1_100_000)):
+        status, out, took = claimed(port, path, length, b'{"kind": "text"')
+        assert status == 413 and took < 0.5, (path, took)
+    assert app.live.inputs == 0
+
+
+def test_an_oversize_post_still_being_sent_gets_its_413(env):
+    """A client that really sends its large body reads the 413, not a reset."""
+    app, client = env
+    port = client.port
+    for _ in range(3):
+        status, out = raw(port, "POST", "/v1/live/open", b"x" * 1_100_000)
+        assert status == 413 and json.loads(out)["error"] == "That input is too large"
+        status, out = raw(port, "POST", "/v1/live/w1/input", b"y" * 300_000)
+        assert status == 413

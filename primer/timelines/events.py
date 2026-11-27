@@ -114,25 +114,39 @@ def _decode(text: str, at: int):
         return None
 
 
-def _better(found: list, best: list) -> bool:
-    """The answer is the fullest list, and of equally full ones the last: chatter before it may
-    quote the prompt or a draft, and chatter after it may quote one event again."""
-    return bool(found) and len(found) >= len(best)
+def _labels(items: list) -> frozenset:
+    return frozenset(clean_text(x.get("label"), MAX_LABEL).casefold() for x in items)
+
+
+def _final(lists: list[list]) -> list:
+    """The answer among the lists of real events, in the order the model wrote them: the last
+    list, unless its labels are a strict subset of an earlier list's (chatter after the answer
+    may quote part of it again); then the nearest such earlier list. A shorter corrected list,
+    even of one event, beats a longer draft, and a quote of the correction after it is a subset
+    of the correction, so it doesn't bring the draft back. [] when there are none."""
+    if not lists:
+        return []
+    last = lists[-1]
+    labels = _labels(last)
+    for earlier in reversed(lists[:-1]):
+        if labels < _labels(earlier):
+            return earlier
+    return last
 
 
 def _best_run(text: str) -> list:
-    """The real events of the best strict JSON array, or run of arrays with only commas and
-    whitespace between them (a small model may write '[{...}], [{...}]' with no outer array).
+    """The real events of the final strict JSON array (see _final), or run of arrays with only
+    commas and whitespace between them (a small model may write '[{...}], [{...}]' with no outer array).
     [] when there is none. A run's inner arrays are not read again on their own. Bounded: a real
     answer has far fewer than 512 places an array of objects may start, so only the last 512 are
     tried (a hostile reply of thousands costs a decode each)."""
-    best: list = []
+    lists: list[list] = []
     starts = [m.start() for m in _START.finditer(text)]
     pos = starts[-_STRICT_STARTS] if len(starts) > _STRICT_STARTS else 0
     while True:
         m = _START.search(text, pos)
         if m is None:
-            return best
+            return _final(lists)
         got = _decode(text, m.start())
         objects = _flatten(got[0]) if got and isinstance(got[0], list) else []
         if not objects:
@@ -150,8 +164,8 @@ def _best_run(text: str) -> list:
             objects.extend(extra)
             end = more[1]
         found = [x for x in objects if _real(x)]
-        if _better(found, best):
-            best = found
+        if found:
+            lists.append(found)
         pos = end
 
 
@@ -162,7 +176,7 @@ _REPAIRS = (
 
 
 def _repaired(text: str) -> list:
-    """The real events of the best array once a trailing comma or single quotes are mended.
+    """The real events of the final array (see _final) once a trailing comma or single quotes are mended.
     Bounded, unlike primer.prompts._extract_json (which tries every '[' ... ']' pair, cubic on a
     hostile reply): only a reply of at most 16 KB, from its last 16 starts to its last 8 closers."""
     if len(text) > REPAIR_MAX_CHARS:
@@ -171,7 +185,7 @@ def _repaired(text: str) -> list:
     starts = [m.start() for m in _START.finditer(text)][-_REPAIR_STARTS:]
     ends = [m.start() for m in _CLOSER.finditer(text)][-_REPAIR_ENDS:][::-1]
     for repair in _REPAIRS:
-        best: list = []
+        lists: list[list] = []
         for i in starts:
             for j in ends:  # the longest span first
                 if j <= i:
@@ -182,19 +196,19 @@ def _repaired(text: str) -> list:
                     continue
                 found = [x for x in _flatten(value) if _real(x)] if isinstance(value, list) else []
                 if found:
-                    if _better(found, best):
-                        best = found
+                    lists.append(found)
                     break
-        if best:
-            return best
+        if lists:
+            return _final(lists)
     return []
 
 
 def read_event_list(raw) -> list | None:
     """The answer's event list. Of the JSON arrays (or runs of arrays) holding real events, the
-    one with the most, and of equally full ones the last: a citation mark like [1], the prompt's
-    own "reply []", format line or example, or a draft that a small model quotes while it thinks
-    aloud is skipped, and a later quote of one event doesn't replace the full answer. Placeholder
+    last list (see _final), unless its labels are a strict subset of an earlier one's: a
+    citation mark like [1], the prompt's own "reply []", format line or example, or a draft that
+    a small model quotes while it thinks aloud is skipped, and a later quote of one event doesn't
+    replace the full answer. Placeholder
     labels ("...") and the prompt's example events are dropped. An answer that is just [] (fenced
     or not) is [] (nothing dated); anything else is None (unreadable)."""
     text = raw if isinstance(raw, str) else ""

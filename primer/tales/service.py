@@ -243,29 +243,27 @@ class TaleService:
             raise ValueError(NO_MATERIAL)
         tale = self.graph.get_tale(tid)
         bible = Bible.from_json(tale["bible_json"])
-        n = len(self.graph.tale_chapters(tid)) + 1
+        rows = self.graph.tale_chapters(tid)
+        n = (rows[-1]["n"] if rows else 0) + 1
         messages = prompts.chapter_messages(bible, n, material, self._reader(), tale["seed"])
         scenes = self._scenes(messages, n)
         main = material[0]["node_id"]
         version = self.graph.latest_version(main)
         title = clean(f"Chapter {n}: {scenes[0]['title']}", CHAPTER_TITLE_MAX)
-        try:
-            sid = stories.create_chapter(main, version.n if version else 1, title, scenes,
-                                         bible.look_prefix)
-        except ValueError as e:
-            if str(e) == SHUT_DOWN:  # Primer shutting down or switching tiers
-                raise TaleConflict(str(e)) from None
-            raise
-        # only now, with the scenes told, does the tale get the chapter; its update counts as
-        # running from before the row exists, so the chapter never shows a failed update
+        # the story and the tale's row for it are written together (one transaction), so a crash
+        # leaves both or neither; the update counts as running from before the row exists, so the
+        # chapter never shows a failed update
         with self._lock:
             self._updating.add((tid, n))
         try:
-            added = self.graph.add_tale_chapter(tid, sid, [m["node_id"] for m in material], "",
-                                                at=started)
-        except BaseException:
+            sid, added = stories.create_chapter(
+                main, version.n if version else 1, title, scenes, bible.look_prefix,
+                tale={"tale_id": tid, "pages": [m["node_id"] for m in material], "at": started})
+        except BaseException as e:
             with self._lock:
                 self._updating.discard((tid, n))
+            if isinstance(e, ValueError) and str(e) == SHUT_DOWN:  # shutting down or switching tiers
+                raise TaleConflict(str(e)) from None
             raise
         if added != n:  # (one writer at a time, so it is n)
             with self._lock:

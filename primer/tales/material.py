@@ -22,7 +22,12 @@ def _since(graph, tale_id: str) -> float:
 def candidates(graph, tale_id: str) -> list[dict]:
     """Every unused page read since the last chapter, best first: [{node_id, title, opens,
     seconds, last}]."""
-    used = graph.used_pages(tale_id)
+    used = set(graph.used_pages(tale_id))
+    if not graph.tale_chapters(tale_id):  # chapter 1's look-back skips what another tale used that day
+        tale = graph.get_tale(tale_id)
+        if tale:
+            used |= graph.pages_used_by_other_tales_since(
+                tale_id, max(0.0, float(tale["created_at"]) - LOOK_BACK_S))
     pages = [p for p in graph.pages_read_since(_since(graph, tale_id)) if p["node_id"] not in used]
     pages.sort(key=lambda p: (-p["seconds"], -p["opens"], -p["last"], p["node_id"]))
     return pages

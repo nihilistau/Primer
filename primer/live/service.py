@@ -4,10 +4,19 @@ Safety, for every target the browser makes (tabs, pop-ups, out-of-process iframe
 What was checked against Chrome 158 is said so; the rest is how the protocol is documented.
 - Fetch.enable on the *browser* session pauses every request: checked for pages, OOPIFs,
   dedicated workers and redirect hops. Each paused request goes to the guard pool, which
-  resolves the host (on a separate DNS pool, refusing after DNS_TIMEOUT_S) and continues it or
+  resolves the host (on daemon lookup threads, at most DNS_WORKERS at once, refusing after
+  DNS_TIMEOUT_S; a lookup given up frees its slot) and continues it or
   fails it with BlockedByClient. Frame acks and target set-up use their own pool, so slow DNS
   never stalls the picture or new tabs.
-- WebSockets, WebTransport and WebRTC never reach the Fetch domain, so their constructors are
+- Every connection the browser makes goes through the guarding proxy (proxy.py), started
+  before the browser and stopped after it: the proxy resolves each host once, refuses unless
+  every address is public, and connects to that checked address, so a name that answers
+  differently to Chrome (DNS rebinding) can't reach anything local. The Fetch check stays as
+  the first layer, with a clear page error; the proxy is the layer that enforces. WebSockets
+  go through the proxy too and work. The proxy proves it is in the path (_prove_proxy) at each
+  browser start, again before each new live window, and at most once every REPROBE_S while
+  windows are open (Chrome applies a proxy policy change at once); a miss stops the browser.
+- WebTransport and WebRTC use UDP, which the proxy can't see, so their constructors are
   replaced, before any script runs, by ones that throw (NO_SOCKETS_JS). Target.setAutoAttach
   with waitForDebuggerOnStart pauses each new target:
   - documents (pages, OOPIFs) get Page.addScriptToEvaluateOnNewDocument, then are resumed;
@@ -16,8 +25,14 @@ What was checked against Chrome 158 is said so; the rest is how the protocol is 
     before the opener can touch it;
   - workers are resumed into an instrumentation breakpoint before their first script, get the
     script there, then run on; checked for dedicated, nested dedicated, shared and service
-    workers.
+    workers. Their set-up runs on its own pool, so a slow one never holds the others.
   A target whose set-up fails is never resumed.
+- Service workers are blocked in live pages. A paused service worker doesn't always answer
+  DevTools before it runs (checked against Chrome 158: some answered, some only after being
+  resumed), so a failed set-up can't be guaranteed to close it before it runs. Registration
+  is refused in the page (NO_SOCKETS_JS), every script request a registration or update makes
+  (Service-Worker: script) is failed, and workers left in the profile from earlier versions
+  are removed before the browser starts. Sites fall back to the network.
 - Pop-ups are opened in their opener's tab; a new page that isn't one of our tabs is closed.
 - Downloads are denied (Browser.setDownloadBehavior), every permission is denied
   (Browser.setPermission), dialogs are dismissed, and network prediction (preconnect, DNS
@@ -30,6 +45,7 @@ import json
 import logging
 import math
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -38,13 +54,12 @@ import threading
 import time
 import unicodedata
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 from primer.live import guard
 from primer.live.browser import Browser, find_browser
 from primer.live.cdp import CdpError
+from primer.live.proxy import GuardProxy
 
 log = logging.getLogger("primer.live.service")
 
@@ -62,8 +77,11 @@ MAX_ACT_TEXT = 200  # characters the agent may type
 MAX_URL = 8192
 ATTACH_WAIT_S = 10.0
 GUARD_WORKERS = 8
-DNS_WORKERS = 16
+DNS_WORKERS = 16  # lookups running at once; one given up after DNS_TIMEOUT_S frees its slot
+MAX_DNS_THREADS = 64  # lookup threads alive in all, given-up ones included
 CDP_WORKERS = 4
+WORKER_SETUP_WORKERS = 4  # worker set-up (up to 3 x WORKER_PAUSE_S each) has its own pool
+POOL_JOIN_S = 1.0  # how long Primer's stop waits for the pools' threads, in all
 DNS_TIMEOUT_S = 3.0  # a lookup slower than this is refused
 FIND_RETRY_S = 60.0  # look for a browser again this long after finding none
 MAX_POPUPS = 8  # blank pop-ups waiting for an address; more are closed at once
@@ -74,7 +92,12 @@ MAX_DNS_BACKLOG = 64  # more lookups than this waiting: refuse at once
 OFF = "Live pages are off while web search is off"
 FULL = "Up to 4 live pages at a time"
 NO_BROWSER = "Live pages need Chrome or Edge"
+NO_PROXY = ("{label} isn't sending its traffic through Primer's guarding proxy (a browser "
+            "proxy policy may be overriding it), so live pages stay off")
+PROBE_TIMEOUT_S = 5.0  # for the new browser's probe request to reach the proxy
+REPROBE_S = 60.0  # while live windows are open, the proxy is proved again at most this often
 BAD_ADDRESS = "That address can't be opened live"
+BROWSER_STOPPED = "The browser stopped"
 NO_DOWNLOADS = "Primer's browser doesn't download files"
 STALE = "The page has changed; read it again"
 COVERED = "Something covers that control"
@@ -119,19 +142,30 @@ NO_SOCKETS_JS = """(() => {
   const apply = Reflect.apply;
   const toString = String;
   const DOMExc = G.DOMException;
-  const NAMES = ["WebSocket", "WebSocketStream", "WebTransport", "RTCPeerConnection",
-                 "webkitRTCPeerConnection"];
+  const P = G.Promise;
+  const reject = P.reject;
+  const NAMES = ["WebTransport", "RTCPeerConnection", "webkitRTCPeerConnection"];
   const refuse = function () {
-    throw new DOMExc("Primer's live browser doesn't open sockets", "SecurityError");
+    throw new DOMExc("Primer's live browser doesn't allow WebRTC or WebTransport", "SecurityError");
   };
   const fixed = (value) => ({__proto__: null, value: value, writable: false,
                              configurable: false});
+  // service workers: registration is refused (a worker that registers would run outside
+  // Primer's checks); the browser also fails every service-worker script request
+  const noWorker = function register() {
+    return apply(reject, P, [new DOMExc("Primer's live browser doesn't run service workers",
+                                        "SecurityError")]);
+  };
   const lock = (g) => {
     for (let i = 0; i < NAMES.length; i++) {
       try {
         if (NAMES[i] in g) defineProperty(g, NAMES[i], fixed(refuse));
       } catch (e) {}  // cross-origin: the caller can't reach its sockets either
     }
+    try {
+      const C = g.ServiceWorkerContainer;
+      if (C && C.prototype) defineProperty(C.prototype, "register", fixed(noWorker));
+    } catch (e) {}
   };
   lock(G);
   if (typeof G.Window !== "function" || !(G instanceof G.Window)) return;  // a worker
@@ -202,6 +236,62 @@ _KINDS = ("link", "button", "field", "list")
 _TYPING_MODS = 1 | 2 | 4  # Alt, Ctrl, Meta: a keyDown with these is a shortcut, not text
 
 
+class _Pool:
+    """A fixed number of daemon threads (started as needed) running tasks from a queue.
+    Daemon, so a task stuck in a lookup or a DevTools call never holds up Primer's exit;
+    shutdown drops the queued tasks and joins the threads for at most join_s in all."""
+
+    def __init__(self, workers: int, name: str):
+        self._q: queue.SimpleQueue = queue.SimpleQueue()
+        self._max, self._name = workers, name
+        self._threads: list[threading.Thread] = []
+        self._idle = 0
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def submit(self, fn, *args) -> None:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("the pool is shut down")
+            self._q.put((fn, args))
+            if self._idle > 0:
+                self._idle -= 1  # an idle thread takes it
+            elif len(self._threads) < self._max:
+                t = threading.Thread(target=self._work, daemon=True,
+                                     name=f"{self._name}-{len(self._threads)}")
+                self._threads.append(t)
+                t.start()
+
+    def _work(self) -> None:
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            fn, args = item
+            try:
+                fn(*args)
+            except Exception:
+                log.debug("live task failed", exc_info=True)
+            with self._lock:
+                self._idle += 1
+
+    def shutdown(self, join_s: float = POOL_JOIN_S) -> None:
+        with self._lock:
+            self._closed = True
+            threads = list(self._threads)
+        while True:  # queued tasks never run
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+        for _t in threads:
+            self._q.put(None)
+        deadline = time.monotonic() + join_s
+        for t in threads:
+            if t is not threading.current_thread():
+                t.join(max(0.0, deadline - time.monotonic()))
+
+
 class LiveError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
@@ -270,6 +360,7 @@ class _Window:
         self.nav_seq = 0
         self.readers = 0  # frames streams reading this window now
         self.orphan_since: float | None = None  # when the last reader went (or the window opened)
+        self.lock = threading.Lock()  # held while the window's size changes
 
     def push(self, frame: dict) -> None:
         with self.cond:
@@ -310,11 +401,24 @@ class _Window:
 class LiveService:
     def __init__(self, var_dir, tier, launcher=Browser, *, find=find_browser,
                  clock=time.monotonic, resolve=socket.getaddrinfo, idle_s: float = IDLE_S,
-                 start_threads: bool = True, dns_timeout: float = DNS_TIMEOUT_S):
+                 start_threads: bool = True, dns_timeout: float = DNS_TIMEOUT_S,
+                 proxy=GuardProxy, probe_timeout: float = PROBE_TIMEOUT_S):
         self.var_dir = Path(var_dir)
         self.profile = self.var_dir / "browser"
-        self.tier = tier
+        self._found: tuple[str, str] | None = None
+        self._looked_at: float | None = None
+        self._refind = False  # the browser path changed while a browser ran
+        self._tier = tier
         self._launcher = launcher
+        self._proxy_cls = proxy  # called as proxy(resolve=...) for each browser start
+        self._proxy = None
+        self._probe_timeout = probe_timeout
+        self._label = ""  # the running browser's name, for NO_PROXY
+        self._proved_at: float | None = None  # when the running browser last proved its proxy
+        self._probe_host: str | None = None  # the probe name while a running browser re-proves
+        self._probe_sessions: set[str] = set()  # the probe tab's own session (its Fetch is its own)
+        self._probe_tabs: set[str] = set()  # a re-probe's tab: _on_attached leaves it alone
+        self._probe_attach: dict[str, str] = {}  # while re-proving: new page tab -> auto session
         self._find = find
         self._clock = clock
         self._resolve = resolve
@@ -323,8 +427,6 @@ class LiveService:
         self._lock = threading.RLock()
         self._start_lock = threading.Lock()
         self._attach_cond = threading.Condition(self._lock)
-        self._found: tuple[str, str] | None = None
-        self._looked_at: float | None = None
         self._dns_timeout = dns_timeout
         self._browser = None
         self._cdp = None
@@ -337,11 +439,13 @@ class LiveService:
         self._sweeper: threading.Thread | None = None
         # worker session -> (cdp, target id, deadline to reach its first-script breakpoint)
         self._worker_init: dict[str, tuple] = {}
-        self._dns_backlog = 0
+        self._dns_backlog = 0  # lookups asked for and not yet answered or given up
+        self._dns_threads = 0  # lookup threads alive, given-up ones included
+        self._dns_slots = threading.Semaphore(DNS_WORKERS)
         self._empty_since: float | None = None
-        self._guard_pool = ThreadPoolExecutor(GUARD_WORKERS, thread_name_prefix="live-guard")
-        self._dns_pool = ThreadPoolExecutor(DNS_WORKERS, thread_name_prefix="live-dns")
-        self._cdp_pool = ThreadPoolExecutor(CDP_WORKERS, thread_name_prefix="live-cdp")
+        self._guard_pool = _Pool(GUARD_WORKERS, "live-guard")
+        self._cdp_pool = _Pool(CDP_WORKERS, "live-cdp")
+        self._worker_pool = _Pool(WORKER_SETUP_WORKERS, "live-worker")
         self._closed = False
         self._stop_ev = threading.Event()
         self._idle_thread: threading.Thread | None = None
@@ -350,6 +454,28 @@ class LiveService:
         self.on_window_end = None
 
     # --- status ----------------------------------------------------------------------------
+
+    @staticmethod
+    def _path_of(tier) -> str:
+        return getattr(getattr(tier, "browser", None), "path", "") or ""
+
+    @property
+    def tier(self):
+        return self._tier
+
+    @tier.setter
+    def tier(self, tier) -> None:
+        """A tier switch: a changed [browser] path is looked for again, with no restart of
+        Primer. A browser already running keeps running (and is the one status reports)
+        until it stops; the next start uses the new path."""
+        with self._lock:
+            changed = self._path_of(tier) != self._path_of(self._tier)
+            self._tier = tier
+            if changed:
+                if self._browser is None:
+                    self._found, self._looked_at = None, None
+                else:
+                    self._refind = True  # when this browser stops
 
     @property
     def enabled(self) -> bool:
@@ -360,7 +486,7 @@ class LiveService:
         """The browser found; a failed look is tried again after FIND_RETRY_S."""
         if self._found is None and (self._looked_at is None
                                     or self._clock() - self._looked_at >= FIND_RETRY_S):
-            cfg = getattr(getattr(self.tier, "browser", None), "path", "") or ""
+            cfg = self._path_of(self.tier)
             self._looked_at = self._clock()
             try:
                 self._found = self._find(cfg)
@@ -387,27 +513,54 @@ class LiveService:
             pass
 
     def _timed_resolve(self, host, port, *a, **k):
-        """getaddrinfo on the DNS pool, given up (refused) after dns_timeout seconds, and
-        refused at once when MAX_DNS_BACKLOG lookups are already waiting."""
+        """getaddrinfo on a daemon thread of its own, refused after dns_timeout seconds (the
+        wait for a free slot included). At most DNS_WORKERS run at once; one given up frees
+        its slot at once and its thread ends on its own, uncounted, so stuck lookups never
+        block later ones. Refused at once when MAX_DNS_BACKLOG lookups are already waiting,
+        or MAX_DNS_THREADS lookup threads are alive."""
+        deadline = time.monotonic() + self._dns_timeout
         with self._lock:
+            if self._closed:
+                raise OSError("stopping")
             if self._dns_backlog >= MAX_DNS_BACKLOG:
                 raise OSError("too many lookups waiting")
             self._dns_backlog += 1
+        try:
+            if not self._dns_slots.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                raise OSError(f"looking up {host} took too long")
+            try:
+                with self._lock:
+                    if self._dns_threads >= MAX_DNS_THREADS:
+                        raise OSError("too many lookups running")
+                    self._dns_threads += 1
+                box: dict = {}
+                done = threading.Event()
 
-        def done(_f):
+                def lookup():
+                    try:
+                        box["r"] = self._resolve(host, port, *a, **k)
+                    except BaseException as e:  # handed to the caller
+                        box["e"] = e
+                    finally:
+                        with self._lock:
+                            self._dns_threads -= 1
+                        done.set()
+                try:
+                    threading.Thread(target=lookup, name="live-dns", daemon=True).start()
+                except RuntimeError:
+                    with self._lock:
+                        self._dns_threads -= 1
+                    raise OSError("no thread for the lookup") from None
+                if not done.wait(max(0.0, deadline - time.monotonic())):
+                    raise OSError(f"looking up {host} took too long")  # its slot is freed now
+                if "e" in box:
+                    raise box["e"]
+                return box["r"]
+            finally:
+                self._dns_slots.release()
+        finally:
             with self._lock:
                 self._dns_backlog -= 1
-        try:
-            fut = self._dns_pool.submit(self._resolve, host, port, *a, **k)
-        except RuntimeError:  # the pool is shut down
-            done(None)
-            raise OSError("stopping") from None
-        fut.add_done_callback(done)
-        try:
-            return fut.result(timeout=self._dns_timeout)
-        except FutureTimeout:
-            fut.cancel()  # still queued: never runs (a lookup already running can't be stopped)
-            raise OSError(f"looking up {host} took too long") from None
 
     def _allowed(self, url) -> bool:
         return guard.allowed(url, self._timed_resolve)
@@ -436,37 +589,53 @@ class LiveService:
             with self._lock:
                 cdp = self._cdp
             if cdp is not None and not cdp.closed.is_set():
+                self._reprove(cdp)  # before each new window: a policy may have come since
                 return cdp
             if cdp is not None:
-                self._stop_browser("The browser stopped")
+                self._stop_browser(BROWSER_STOPPED)
             found = self._found_browser()
             if not found:
                 raise LiveError(503, NO_BROWSER)
             self._sweep_forgotten()
-            browser = self._launcher(found[0], self.profile)
-            try:
-                cdp = browser.start()
-            except Exception as e:
+            self._drop_service_workers()
+            proxy = browser = None
+            try:  # whatever fails from here on, the browser stops first, then the proxy
+                proxy = self._proxy_cls(resolve=self._resolve)  # a fresh one for each browser
                 try:
-                    browser.stop()
-                except Exception:
-                    pass
-                raise LiveError(503, f"Couldn't start {found[1]}: {e}") from None
-            self._wire(cdp)
-            try:
-                self._quiet(cdp, "Target.setDiscoverTargets", {"discover": True})
-                cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
-                cdp.call("Target.setAutoAttach", dict(_AUTO))
-                self._deny(cdp)
-                # pages the browser opened by itself (a new-tab page) aren't ours
-                for t in (self._quiet(cdp, "Target.getTargets") or {}).get("targetInfos", []):
-                    if isinstance(t, dict) and t.get("type") == "page":
-                        self._quiet(cdp, "Target.closeTarget", {"targetId": t.get("targetId")})
-            except CdpError as e:
-                browser.stop()
-                raise LiveError(503, f"Couldn't set up {found[1]}: {e}") from None
+                    port = proxy.start()
+                except Exception as e:
+                    raise LiveError(503, f"Couldn't start the live browser's proxy: {e}") from None
+                browser = self._launcher(found[0], self.profile)
+                try:
+                    cdp = browser.start(port)
+                except Exception as e:
+                    raise LiveError(503, f"Couldn't start {found[1]}: {e}") from None
+                try:
+                    self._prove_proxy(cdp, proxy, found[1])
+                    self._wire(cdp)
+                    self._quiet(cdp, "Target.setDiscoverTargets", {"discover": True})
+                    cdp.call("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
+                    cdp.call("Target.setAutoAttach", dict(_AUTO))
+                    self._deny(cdp)
+                    # pages the browser opened by itself (a new-tab page) aren't ours
+                    for t in (self._quiet(cdp, "Target.getTargets") or {}).get("targetInfos",
+                                                                               []):
+                        if isinstance(t, dict) and t.get("type") == "page":
+                            self._quiet(cdp, "Target.closeTarget",
+                                        {"targetId": t.get("targetId")})
+                except CdpError as e:
+                    raise LiveError(503, f"Couldn't set up {found[1]}: {e}") from None
+            except BaseException:
+                if browser is not None:
+                    try:
+                        browser.stop()
+                    except Exception:
+                        log.exception("stopping the live browser failed")
+                self._stop_proxy(proxy)
+                raise
             with self._lock:
-                self._browser, self._cdp = browser, cdp
+                self._browser, self._cdp, self._proxy = browser, cdp, proxy
+                self._label, self._proved_at = found[1], self._clock()
                 self._empty_since = self._clock() if not self._windows else None
             if self._start_threads:
                 threading.Thread(target=self._watch, args=(cdp,), name="live-watch",
@@ -477,6 +646,159 @@ class LiveService:
                     self._idle_thread.start()
             return cdp
 
+    def _prove_proxy(self, cdp, proxy, label: str, wired: bool = False) -> None:
+        """Have the new browser ask for the proxy's probe URL (a random .invalid name only the
+        proxy answers) and refuse to go on unless the proxy saw it. A browser proxy policy
+        outranks --proxy-server, and the flag alone can't tell.
+
+        The probe tab runs no page content, even when the proxy is bypassed and something
+        else answers for the name: it is made blank, its scripts are switched off, and its own
+        Fetch lets through only the probe's request (any scheme, the probe host only) and fails
+        every response, redirect target and subresource. Then it is stopped and closed."""
+        deadline = time.monotonic() + self._probe_timeout
+        tid = cdp.call("Target.createTarget", {"url": "about:blank"}, timeout=10).get("targetId")
+        if not tid:
+            raise CdpError("no probe tab")
+        if wired:
+            with self._lock:
+                self._probe_tabs.add(tid)
+        paused = None
+        sid = None
+        try:
+            sid = cdp.call("Target.attachToTarget", {"targetId": tid, "flatten": True},
+                           timeout=10).get("sessionId")
+            if not sid:
+                raise CdpError("no probe session")
+            with self._lock:  # the browser-wide guard (_decide) leaves this session alone
+                self._probe_sessions.add(sid)
+            cdp.call("Emulation.setScriptExecutionDisabled", {"value": True}, session=sid)
+
+            def paused(p, s):  # on the connection's thread: send only, never wait
+                if s != sid:
+                    return
+                rid = p.get("requestId")
+                req = p.get("request") if isinstance(p.get("request"), dict) else {}
+                try:
+                    host = urllib.parse.urlsplit(str(req.get("url", ""))).hostname
+                except ValueError:
+                    host = None
+                response = "responseStatusCode" in p or "responseErrorReason" in p
+                try:
+                    if host == proxy.probe_host and not response:
+                        cdp.send("Fetch.continueRequest", {"requestId": rid}, s)
+                    else:
+                        cdp.send("Fetch.failRequest",
+                                 {"requestId": rid, "errorReason": "BlockedByClient"}, s)
+                except CdpError:
+                    pass
+            cdp.on("Fetch.requestPaused", paused)
+            cdp.call("Fetch.enable", {"patterns": [
+                {"urlPattern": "*", "requestStage": "Request"},
+                {"urlPattern": "*", "requestStage": "Response"}]}, session=sid)
+            if wired:  # auto-attach made the tab paused: resume it here, not behind the cdp pool
+                self._resume_probe_tab(cdp, tid, deadline)
+            try:  # returns once the navigation fails (the proxy's 403 is failed, too)
+                cdp.call("Page.navigate", {"url": proxy.probe_url}, session=sid,
+                         timeout=max(0.1, deadline - time.monotonic()))
+            except CdpError:
+                pass  # timed out: the wait below decides
+            seen = proxy.wait_probe(max(0.0, deadline - time.monotonic()))
+        finally:
+            if sid:
+                self._quiet(cdp, "Page.stopLoading", {}, sid, timeout=3)
+            self._quiet(cdp, "Target.closeTarget", {"targetId": tid}, timeout=3)
+            if paused is not None:
+                cdp.off("Fetch.requestPaused", paused)
+            with self._lock:
+                self._probe_sessions.discard(sid)
+        if not seen:
+            log.warning("live browser: %s did not use the guarding proxy; refusing it", label)
+            raise LiveError(503, NO_PROXY.format(label=label))
+
+    def _resume_probe_tab(self, cdp, tid: str, deadline: float) -> None:
+        """The re-probe's tab, paused by auto-attach, resumed on this thread: its scripts are
+        off and its own Fetch is on by now, so it needs none of _on_attached's set-up."""
+        with self._lock:
+            self._attach_cond.wait_for(lambda: tid in self._probe_attach or cdp.closed.is_set(),
+                                       max(0.0, min(2.0, deadline - time.monotonic())))
+            auto = self._probe_attach.get(tid)
+        if auto:
+            self._quiet(cdp, "Runtime.runIfWaitingForDebugger", None, auto,
+                        timeout=max(0.1, deadline - time.monotonic()))
+
+    def _reprove(self, cdp) -> None:
+        """Prove again that the running browser uses its proxy, with a fresh probe name: Chrome
+        applies a proxy policy change while it runs. On a miss (or a browser that can't run the
+        probe) the browser stops, then the proxy, and LiveError(503) is raised. The caller
+        holds _start_lock.
+
+        The browser is wired by now, so: the probe tab counts as one being made (_creating), so
+        it is never closed as a stray while the probe runs, and it is resumed by the probe
+        itself, never behind the cdp pool; the probe's own request is let through the
+        browser-wide guard on the connection's thread (_on_paused: only it, only while this
+        runs, only at the request stage; the proxy answers it without a lookup), never behind
+        the guard pool's page lookups; and the probe tab's own session is left to its own Fetch,
+        which fails every response and anything else. A browser that crashed meanwhile gets
+        "The browser stopped", not the proxy-policy message."""
+        with self._lock:
+            proxy, label = self._proxy, self._label or "The browser"
+            if proxy is None or self._cdp is not cdp:
+                return
+            self._probe_host = proxy.new_probe()
+            self._creating += 1
+        missed = None
+        try:
+            self._prove_proxy(cdp, proxy, label, wired=True)
+        except LiveError as e:
+            missed = e
+        except CdpError as e:
+            log.warning("live browser: the proxy check couldn't run (%s); stopping it", e)
+            missed = LiveError(503, f"Couldn't check the proxy of {label}: {e}")
+        finally:
+            with self._lock:
+                self._probe_host = None
+                self._probe_tabs.clear()
+                self._probe_attach.clear()
+                self._creating -= 1
+                strays = list(self._attached) if self._creating == 0 else []
+                for t in strays:
+                    del self._attached[t]
+            for t in strays:  # the probe tab (closed already), or a pop-up that came meanwhile
+                self._quiet(cdp, "Target.closeTarget", {"targetId": t})
+        if missed is not None and cdp.closed.is_set():
+            # the browser crashed meanwhile: not a proxy policy. The next open starts a fresh one
+            self._stop_browser(BROWSER_STOPPED, only=cdp)
+            raise LiveError(503, BROWSER_STOPPED)
+        if missed is not None:
+            self._stop_browser(missed.message, only=cdp)
+            raise missed
+        with self._lock:
+            if self._cdp is cdp:
+                self._proved_at = self._clock()
+
+    def _reprobe_due(self) -> bool:
+        return (self._cdp is not None and bool(self._windows) and self._proved_at is not None
+                and self._clock() - self._proved_at >= REPROBE_S)
+
+    def _tick_probe(self) -> bool:
+        """While live windows are open, prove the proxy again at most every REPROBE_S. True if
+        that stopped the browser."""
+        with self._lock:
+            if not self._reprobe_due():
+                return False
+        with self._start_lock:
+            with self._lock:
+                if self._closed or not self._reprobe_due():
+                    return False
+                cdp = self._cdp
+            if cdp.closed.is_set():
+                return False  # _watch stops it
+            try:
+                self._reprove(cdp)
+            except LiveError:
+                return True
+        return False
+
     def _deny(self, cdp) -> None:
         """Downloads and every permission denied (browser-wide; set again for each tab)."""
         self._quiet(cdp, "Browser.setDownloadBehavior", {"behavior": "deny", "eventsEnabled": True})
@@ -484,10 +806,37 @@ class LiveService:
             self._quiet(cdp, "Browser.setPermission",
                         {"permission": {"name": name}, "setting": "denied"})
 
+    def _on_paused(self, cdp, params: dict, sid) -> None:
+        """On the connection's thread, send-only: a re-probe's requests never wait behind page
+        lookups in the guard pool. Everything else goes to _decide on that pool."""
+        req = params.get("request") if isinstance(params.get("request"), dict) else {}
+        with self._lock:
+            if sid is not None and sid in self._probe_sessions:
+                return  # the probe tab's own Fetch decides its requests
+            probe = self._probe_host
+        if probe is not None and self._is_probe(str(req.get("url", "")), probe, params):
+            try:
+                cdp.send("Fetch.continueRequest", {"requestId": params.get("requestId")}, sid)
+            except CdpError:
+                pass
+            return
+        self._submit(self._decide, cdp, params, sid, pool=self._guard_pool)
+
+    def _on_attach_event(self, cdp, params: dict, parent) -> None:
+        """On the connection's thread: while a re-probe runs, note each new top-level page's
+        session so the probe can resume its own tab; every target is still set up on the cdp
+        pool (_on_attached), which leaves a probe tab alone."""
+        info = params.get("targetInfo") if isinstance(params.get("targetInfo"), dict) else {}
+        if parent is None and info.get("type") == "page" and params.get("sessionId"):
+            with self._lock:
+                if self._probe_host is not None:
+                    self._probe_attach[info.get("targetId")] = params["sessionId"]
+                    self._attach_cond.notify_all()
+        self._submit(self._on_attached, cdp, params, parent)
+
     def _wire(self, cdp) -> None:
-        cdp.on("Fetch.requestPaused", lambda p, s: self._submit(self._decide, cdp, p, s,
-                                                                pool=self._guard_pool))
-        cdp.on("Target.attachedToTarget", lambda p, s: self._submit(self._on_attached, cdp, p, s))
+        cdp.on("Fetch.requestPaused", lambda p, s: self._on_paused(cdp, p, s))
+        cdp.on("Target.attachedToTarget", lambda p, s: self._on_attach_event(cdp, p, s))
         cdp.on("Target.detachedFromTarget", lambda p, s: self._on_detached(p, s))
         cdp.on("Target.targetDestroyed", lambda p, s: self._on_target_gone(p, "The page closed"))
         cdp.on("Target.targetCrashed", lambda p, s: self._on_target_gone(p, "The page crashed"))
@@ -500,12 +849,32 @@ class LiveService:
         cdp.on("Browser.downloadWillBegin", lambda p, s: self._on_download(p))
         cdp.on("Debugger.paused", lambda p, s: self._on_worker_paused(p, s))
 
+    @staticmethod
+    def _worker_script(req) -> bool:
+        """A service worker's script request (a registration or an update check)."""
+        headers = req.get("headers") if isinstance(req, dict) else None
+        if not isinstance(headers, dict):
+            return False
+        return any(isinstance(k, str) and k.lower() == "service-worker" for k in headers)
+
+    @staticmethod
+    def _is_probe(url: str, probe: str, params: dict) -> bool:
+        """The running browser's re-probe request (any scheme, the probe name only, not a
+        response): the proxy answers it itself, never resolving or connecting."""
+        if "responseStatusCode" in params or "responseErrorReason" in params:
+            return False
+        try:
+            return urllib.parse.urlsplit(url).hostname == probe
+        except ValueError:
+            return False
+
     def _decide(self, cdp, params: dict, sid) -> None:
-        """A paused request: continue it only if guard.allowed (runs in the pool)."""
+        """A paused request: continue it only if guard.allowed (runs in the pool). A service
+        worker's script is always refused: service workers don't run in live pages."""
         rid = params.get("requestId")
         req = params.get("request") or {}
         url = req.get("url", "") if isinstance(req, dict) else ""
-        if self._allowed(url):
+        if not self._worker_script(req) and self._allowed(url):
             self._quiet(cdp, "Fetch.continueRequest", {"requestId": rid}, sid)
         else:
             log.info("live browser: refused %s", url[:200])
@@ -519,6 +888,9 @@ class LiveService:
         ttype, tid = info.get("type"), info.get("targetId")
         if not sid:
             return
+        with self._lock:
+            if tid in self._probe_tabs:
+                return  # a re-probe's tab: the probe resumes it and closes it
         try:
             if ttype in ("page", "iframe"):
                 cdp.call("Page.enable", session=sid)
@@ -532,8 +904,8 @@ class LiveService:
                 # what's there now
                 cdp.call("Runtime.evaluate", {"expression": NO_SOCKETS_JS}, session=sid)
                 return
-            elif ttype in _WORKERS:
-                self._setup_worker(cdp, sid, tid, ttype)
+            elif ttype in _WORKERS:  # on its own pool: it can wait up to 3 x WORKER_PAUSE_S
+                self._submit(self._setup_worker, cdp, sid, tid, ttype, pool=self._worker_pool)
                 return
             elif params.get("waitingForDebugger"):  # a kind we don't know: never run it
                 log.info("live browser: closing a %s target", ttype)
@@ -570,9 +942,11 @@ class LiveService:
         """Arm a breakpoint before the worker's first script, checking each reply, then let it
         run to there; _lock_worker locks it. Any failure, or no pause within WORKER_PAUSE_S,
         closes it. Dedicated and shared workers answer while paused, so their replies are
-        checked before they run. A service worker answers nothing until it runs, so its
-        set-up is queued in order, it is resumed into the breakpoint, and the replies are
-        checked then (a failure closes it)."""
+        checked before they run. Service workers are blocked in live pages (see the module
+        docstring); this path is the fallback for any that still attach. A paused service
+        worker may answer nothing until it runs, so its set-up is queued in order, it is
+        resumed into the breakpoint, and the replies are checked then (a failure closes it,
+        but it may have run briefly by then)."""
         with self._lock:
             self._worker_init[sid] = (cdp, tid, self._clock() + WORKER_PAUSE_S)
         steps = (("Debugger.enable", None),
@@ -703,14 +1077,18 @@ class LiveService:
 
     def _forget_window(self, w: _Window, reason: str) -> None:
         with self._lock:
-            if self._windows.get(w.name) is w:
-                del self._windows[w.name]
-                if not self._windows:
-                    self._empty_since = self._clock()
-            self._by_session.pop(w.session, None)
-            self._by_target.pop(w.target_id, None)
+            self._unlink(w)
         if w.end(reason):
             self._ended(w, reason)
+
+    def _unlink(self, w: _Window) -> None:
+        """Take the window out of every map (the caller holds the lock)."""
+        if self._windows.get(w.name) is w:
+            del self._windows[w.name]
+            if not self._windows:
+                self._empty_since = self._clock()
+        self._by_session.pop(w.session, None)
+        self._by_target.pop(w.target_id, None)
 
     def _ended(self, w: _Window, reason: str) -> None:
         hook = self.on_window_end
@@ -747,7 +1125,7 @@ class LiveService:
 
     def _watch(self, cdp) -> None:
         cdp.closed.wait()
-        self._stop_browser("The browser stopped", only=cdp)
+        self._stop_browser(BROWSER_STOPPED, only=cdp)
 
     def _idle_loop(self) -> None:
         while not self._stop_ev.wait(IDLE_CHECK_S):
@@ -757,23 +1135,28 @@ class LiveService:
                 log.exception("live idle check failed")
 
     def tick(self) -> bool:
-        """Close windows nobody has watched for ORPHAN_S, then the browser after idle_s with no
-        live window. True if the browser was closed."""
+        """Close windows nobody has watched for ORPHAN_S, prove the proxy again when due, then
+        close the browser after idle_s with no live window. True if the browser was closed."""
         self.sweep_orphans()
+        if self._tick_probe():
+            return True
         return self._tick_browser()
 
     def sweep_orphans(self) -> list[str]:
         """Close every open window with no frames reader for ORPHAN_S (its tab reloaded or went
         away without a close). Returns the names closed."""
-        now = self._clock()
+        def orphaned(w: _Window) -> bool:
+            return (w.session is not None and w.gone is None and w.readers == 0
+                    and w.orphan_since is not None
+                    and self._clock() - w.orphan_since >= ORPHAN_S)
         with self._lock:
-            names = [w.name for w in self._windows.values()
-                     if w.session is not None and w.gone is None and w.readers == 0
-                     and w.orphan_since is not None and now - w.orphan_since >= ORPHAN_S]
-        for name in names:
-            log.info("live window %s: no reader for %.0f s; closing it", name, ORPHAN_S)
-            self.close(name)
-        return names
+            seen = [w for w in self._windows.values() if orphaned(w)]
+        closed = []
+        for w in seen:  # checked again under the lock: a reader may have come since
+            if self._close(w, orphaned):
+                log.info("live window %s: no reader for %.0f s; closed it", w.name, ORPHAN_S)
+                closed.append(w.name)
+        return closed
 
     def _tick_browser(self) -> bool:
         def idle() -> bool:
@@ -795,6 +1178,9 @@ class LiveService:
             if only is not None and self._cdp is not only:
                 return
             browser, self._browser, self._cdp = self._browser, None, None
+            proxy, self._proxy = self._proxy, None
+            if self._refind:  # the path changed while it ran: look again for the next start
+                self._found, self._looked_at, self._refind = None, None, False
             # windows on this browser end; one still being opened (no tab yet) waits for the next
             windows = [w for w in self._windows.values() if w.cdp is not None]
             for w in windows:
@@ -813,6 +1199,15 @@ class LiveService:
                 browser.stop()
             except Exception:
                 log.exception("stopping the live browser failed")
+        self._stop_proxy(proxy)  # after the browser, so it never runs unproxied
+
+    @staticmethod
+    def _stop_proxy(proxy) -> None:
+        if proxy is not None:
+            try:
+                proxy.stop()
+            except Exception:
+                log.exception("stopping the live proxy failed")
 
     # --- windows ---------------------------------------------------------------------------
 
@@ -872,8 +1267,7 @@ class LiveService:
                 self._empty_since = None
         if not fresh:
             w = self._live(name)
-            if (width, height) != (w.width, w.height):
-                self._resize(w, width, height)
+            self._resize(w, width, height)
             self._navigate(w, url)
             return {"window": name, "label": found[1]}
         try:
@@ -932,11 +1326,12 @@ class LiveService:
                     del self._attached[t]
             for t in strays:  # pages nobody claimed: pop-ups without an opener of ours
                 self._quiet(cdp, "Target.closeTarget", {"targetId": t})
-        cdp.call("Emulation.setDeviceMetricsOverride",
-                 {"width": w.width, "height": w.height, "deviceScaleFactor": 1, "mobile": False},
-                 session=sid)
-        self._quiet(cdp, "Page.setDownloadBehavior", {"behavior": "deny"}, sid)
-        self._screencast(w)
+        with w.lock:  # a resize from now on (w.session is set) waits for the first size
+            cdp.call("Emulation.setDeviceMetricsOverride",
+                     {"width": w.width, "height": w.height, "deviceScaleFactor": 1,
+                      "mobile": False}, session=sid)
+            self._quiet(cdp, "Page.setDownloadBehavior", {"behavior": "deny"}, sid)
+            self._screencast(w)
 
     def _claim(self, cdp, w: _Window, tid: str) -> str:
         with self._lock:
@@ -964,6 +1359,14 @@ class LiveService:
                     "everyNthFrame": 1}, session=w.session)
 
     def _resize(self, w: _Window, width: int, height: int) -> None:
+        """Under the window's lock, so two resizes never interleave and the viewport and
+        the screencast always agree."""
+        with w.lock:
+            if (width, height) == (w.width, w.height):
+                return
+            self._resize_now(w, width, height)
+
+    def _resize_now(self, w: _Window, width: int, height: int) -> None:
         try:
             w.cdp.call("Emulation.setDeviceMetricsOverride",
                        {"width": width, "height": height, "deviceScaleFactor": 1,
@@ -1138,10 +1541,18 @@ class LiveService:
         name = self._name(window)
         with self._lock:
             w = self._windows.get(name)
-        if w is None:
-            return False
+        return w is not None and self._close(w)
+
+    def _close(self, w: _Window, only_if=None) -> bool:
+        """Close this window (not a later one with its name). With only_if, only when
+        only_if(w) still holds, checked under the lock it is taken from the windows in."""
+        with self._lock:
+            if self._windows.get(w.name) is not w or (only_if is not None and not only_if(w)):
+                return False
+            self._unlink(w)
+        if w.end("closed"):  # told outside the lock
+            self._ended(w, "closed")
         cdp, sid, tid = w.cdp, w.session, w.target_id
-        self._forget_window(w, "closed")
         if cdp is not None and not cdp.closed.is_set():
             if sid:
                 self._quiet(cdp, "Page.stopScreencast", None, sid, timeout=3)
@@ -1298,8 +1709,7 @@ class LiveService:
         """The window's view changed size: the page's viewport and the screencast follow."""
         w = self._live(window, need_on=True)
         width, height = self._dim(width, 200, 3840), self._dim(height, 150, 2160)
-        if (width, height) != (w.width, w.height):
-            self._resize(w, width, height)
+        self._resize(w, width, height)
 
     def _recheck(self, w: _Window, n: int, ctl: dict, op: str = "find") -> dict:
         """Find control n again; refuse unless it is still the control the snapshot listed."""
@@ -1407,6 +1817,12 @@ class LiveService:
 
     # --- forgetting and stopping -----------------------------------------------------------
 
+    def _drop_service_workers(self) -> None:
+        """Remove service workers registered in the profile by earlier versions (the browser
+        isn't running): service workers don't run in live pages. Sign-ins stay."""
+        for d in self.profile.glob("*/Service Worker"):
+            shutil.rmtree(d, ignore_errors=True)
+
     def _sweep_forgotten(self) -> None:
         for p in self.var_dir.glob("browser-forget-*"):
             shutil.rmtree(p, ignore_errors=True)
@@ -1437,5 +1853,6 @@ class LiveService:
         with self._start_lock:
             self._closed = True
             self._stop_browser("Primer stopped")
-        for pool in (self._guard_pool, self._cdp_pool, self._dns_pool):
-            pool.shutdown(wait=False, cancel_futures=True)
+        deadline = time.monotonic() + POOL_JOIN_S  # daemon threads: a stuck one is left
+        for pool in (self._guard_pool, self._cdp_pool, self._worker_pool):
+            pool.shutdown(max(0.0, deadline - time.monotonic()))

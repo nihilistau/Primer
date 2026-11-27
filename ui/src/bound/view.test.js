@@ -3,7 +3,7 @@ import { layoutAll, spreads } from './layout.js'
 import { cleanBlocks } from './sanitize.js'
 import {
   WIDE_MIN, aboutTotal, clickZone, linkEvent, anchorPage, announcement, chapterList, chapterSpread, isWide, openBound, pageLabel, pageMetrics,
-  pagePicture, placeKey, readPaper, readPlace, readSound, routeLink, sides, spreadChapter, writePlace, writePref,
+  pagePicture, placeKey, readPaper, readPlace, readSound, roveCurrent, roveNext, routeLink, sides, spreadChapter, writePlace, writePref,
 } from './view.js'
 import * as wm from '../windowManager.js'
 
@@ -225,5 +225,25 @@ describe('link events and click zones', () => {
     expect(clickZone(120, narrow, false)).toBe(-1)
     expect(clickZone(300, narrow, false)).toBe(0)
     expect(clickZone(300, null, false)).toBe(0)
+  })
+})
+
+describe('the toolbar roving tabindex', () => {
+  const items = [['prev', true], ['label', false], ['next', false], ['sound', false]]
+  test('the button in the tab order is the remembered one while enabled, else the first enabled', () => {
+    expect(roveCurrent(items, 'next')).toBe('next')
+    expect(roveCurrent(items, 'prev')).toBe('label')
+    expect(roveCurrent(items, 'gone')).toBe('label')
+    expect(roveCurrent([['a', true]], 'a')).toBe(null)
+  })
+  test('the arrows move to the next enabled button, wrapping; Home and End to the ends', () => {
+    expect(roveNext(items, 'label', 'ArrowRight')).toBe('next')
+    expect(roveNext(items, 'sound', 'ArrowRight')).toBe('label')
+    expect(roveNext(items, 'label', 'ArrowLeft')).toBe('sound')
+    expect(roveNext(items, 'next', 'Home')).toBe('label')
+    expect(roveNext(items, 'label', 'End')).toBe('sound')
+    expect(roveNext(items, 'label', 'PageDown')).toBe(null)
+    expect(roveNext(items, 'label', 'Enter')).toBe(null)
+    expect(roveNext([], 'label', 'ArrowRight')).toBe(null)
   })
 })

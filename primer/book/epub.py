@@ -104,7 +104,7 @@ def write_epub(plan: BookPlan, media_dir: Path, out: Path, plate=map_plate, arch
         index = {ch.node_id: i for i, ch in enumerate(plan.chapters, start=1)}
         svg_chapters = set()
         for i, ch in enumerate(plan.chapters, start=1):
-            body = xhtml.chapter(i, ch, index, links, plate, archive, plates)
+            body = xhtml.chapter(i, ch, index, links, plate, archive, plates, xlink=True)
             if "<svg" in body:
                 svg_chapters.add(i)
             z.writestr(f"OEBPS/{chapter_file(i)}", page(ch.title, body))

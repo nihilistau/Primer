@@ -80,7 +80,13 @@ def test_model_guess_only_when_in_range_and_well_formed():
 
 
 @pytest.mark.parametrize("text", ["not stated", "...", "", "   ", "the text doesn't say", "I can't tell",
-                                  "a long time ago", "the Middle Ages"])
+                                  "a long time ago", "the Middle Ages", "Unclear I think",
+                                  "Uncertain, I believe", "Before I checked", "Sometime I guess",
+                                  "Unclear I'm afraid", "Sometime I'd guess", "Unknown I've read",
+                                  "Before I, too, checked", "Unclear I’m afraid", "Unknown I'll say", "Hard I s",
+                                  "Unclear I am", "Unknown I’d say", "Unsure I’ve seen", "Uncertain I, too",
+                                  "Unclear I can't say", "Unclear I'M afraid", "Sometime I'D guess",
+                                  "Unknown I'VE read", "Unknown I’LL say", "UNCLEAR I'M AFRAID"])
 def test_no_guess_for_a_date_text_that_names_no_date(text):
     """Final review, item 7: the model's year is used only when the date text has a digit, a
     century, decade or millennium word, an era mark or a regnal number."""
@@ -91,6 +97,17 @@ def test_no_guess_for_a_date_text_that_names_no_date(text):
     ("the reign of Henry VIII", 1509), ("the late thirteenth century", 1290),
     ("the early decades of the reign", 1300), ("the first millennium BC", -500),
     ("the winter of 1282-3", 1282), ("around the time of the Conquest, AD", 1066),
+    ("Henry I", 1100), ("the reign of Henry I", 1100), ("under Edward I.", 1272),
+    ("Edward I of England", 1272), ("Henry I's reign", 1100), ("Henry V", 1413),
+    ("Louis XIV", 1643), ("Edward II", 1307), ("Elizabeth II", 1952), ("Henry I’s reign", 1100),
+    ("Henry I, Stephen", 1100), ("Henry I,", 1100), ("(under Henry I)", 1100), ("Henry I; later", 1100),
+    ("Henry I, 1100s", 1100),
+    # the lone "I" is regnal unless a contraction, a lower-case word or ", too" follows; "of",
+    # "and", "or", "the" and "to" are list or title words, not a clause carrying on
+    ("Henry I, king of England", 1100), ("Henry I, the Lion", 1100), ("Edward I - Longshanks", 1272),
+    ("reign of Henry I - early", 1100), ("Charles I of England", 1625), ("Mary I and Elizabeth I", 1553),
+    ("Edward I.", 1272), ("Peter I the Great", 1682), ("Henry I or Stephen", 1100),
+    ("from Henry I to Stephen", 1100), ("Henry I – Beauclerc", 1100), ("Henry I (Beauclerc)", 1100),
 ])
 def test_guess_kept_for_a_date_text_that_names_a_date(text, year):
     got = normalise(text, year)

@@ -700,16 +700,49 @@ class Graph:
 
     # stories
     def add_story(self, node_id: str, n: int, kind: str, voice: str) -> str:
+        with self._lock, self._db:
+            return self._insert_story(node_id, n, kind, voice)
+
+    def _insert_story(self, node_id: str, n: int, kind: str, voice: str, title: str = "") -> str:
+        """Add a story (call with the lock held, in a transaction)."""
         if kind not in ("story", "listen", "chapter"):
             raise ValueError(f"unknown story kind {kind!r}")
         sid = uuid.uuid4().hex[:16]
         now = time.time()
-        with self._lock, self._db:
-            self._db.execute(
-                "INSERT INTO stories(id, node_id, n, kind, title, status, error, voice, highlights_json, "
-                "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (sid, node_id, n, kind, "", "writing", None, voice, "[]", now, now))
+        self._db.execute(
+            "INSERT INTO stories(id, node_id, n, kind, title, status, error, voice, highlights_json, "
+            "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, node_id, n, kind, title, "writing", None, voice, "[]", now, now))
         return sid
+
+    def add_chapter_story(self, node_id: str, n: int, voice: str, title: str, scenes: Sequence[dict],
+                          tale_id: str, pages: Sequence[str], at: float | None = None) -> tuple[str, int]:
+        """A Tale chapter's story (with its scenes and title) and its chapter row, written in one
+        transaction: a crash leaves both or neither. Returns (story id, chapter number)."""
+        now = time.time() if at is None else at
+        with self._lock, self._db:
+            sid = self._insert_story(node_id, n, "chapter", voice, title)
+            self._db.executemany(
+                "INSERT INTO story_scenes(story_id, idx, title, text, spoken, media_id, audio, chunks_json, "
+                "status, error) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                [(sid, i, s["title"], s["text"], s.get("spoken", ""), None, None, "[]", "waiting", None)
+                 for i, s in enumerate(scenes)])
+            chapter = self._add_chapter_row(tale_id, sid, pages, "", now)
+        return sid, chapter
+
+    def sweep_orphan_chapters(self) -> dict[str, int]:
+        """Remove what an older version's crash left behind: chapter rows whose story is gone
+        (with their page index). Never a story: a chapter story with no row is still on its page
+        for the reader to open, play or tell again, so it stays; and a complete chapter is never
+        touched. Returns {"chapters": n removed}."""
+        with self._lock, self._db:
+            gone = self._db.execute(
+                "SELECT tale_id, n FROM tale_chapters WHERE story_id NOT IN (SELECT id FROM stories)"
+            ).fetchall()
+            for tale_id, n in gone:
+                self._db.execute("DELETE FROM tale_chapter_pages WHERE tale_id=? AND n=?", (tale_id, n))
+                self._db.execute("DELETE FROM tale_chapters WHERE tale_id=? AND n=?", (tale_id, n))
+        return {"chapters": len(gone)}
 
     def update_story(self, id: str, status: str | None = None, error=_KEEP, title: str | None = None,
                      highlights: list[str] | None = None) -> None:
@@ -1215,13 +1248,18 @@ class Graph:
         "pending" (set_chapter_update says how it ended)."""
         now = time.time() if at is None else at
         with self._lock, self._db:
-            n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM tale_chapters WHERE tale_id=?",
-                                 (tale_id,)).fetchone()[0]
-            self._db.execute("INSERT INTO tale_chapters(tale_id, n, story_id, pages_json, summary, "
-                             "created_at, bible_update) VALUES(?,?,?,?,?,?,?)",
-                             (tale_id, n, story_id, json.dumps(list(pages)), summary, now, "pending"))
-            self._add_chapter_pages(tale_id, n, pages)
-            self._db.execute("UPDATE tales SET updated_at=? WHERE id=?", (time.time(), tale_id))
+            return self._add_chapter_row(tale_id, story_id, pages, summary, now)
+
+    def _add_chapter_row(self, tale_id: str, story_id: str, pages: Sequence[str], summary: str,
+                         now: float) -> int:
+        """The chapter row and its page index (call with the lock held, in a transaction)."""
+        n = self._db.execute("SELECT COALESCE(MAX(n), 0) + 1 FROM tale_chapters WHERE tale_id=?",
+                             (tale_id,)).fetchone()[0]
+        self._db.execute("INSERT INTO tale_chapters(tale_id, n, story_id, pages_json, summary, "
+                         "created_at, bible_update) VALUES(?,?,?,?,?,?,?)",
+                         (tale_id, n, story_id, json.dumps(list(pages)), summary, now, "pending"))
+        self._add_chapter_pages(tale_id, n, pages)
+        self._db.execute("UPDATE tales SET updated_at=? WHERE id=?", (time.time(), tale_id))
         return n
 
     def _add_chapter_pages(self, tale_id: str, n: int, pages) -> None:
@@ -1289,6 +1327,15 @@ class Graph:
             rows = self._db.execute("SELECT pages_json FROM tale_chapters WHERE tale_id=?",
                                     (tale_id,)).fetchall()
         return {p for (raw,) in rows for p in json.loads(raw)}
+
+    def pages_used_by_other_tales_since(self, tale_id: str, since: float) -> set[str]:
+        """Node ids of pages the chapters of any tale but this one drew on, written after `since`."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT DISTINCT p.node_id FROM tale_chapter_pages p JOIN tale_chapters c "
+                "ON c.tale_id = p.tale_id AND c.n = p.n WHERE p.tale_id != ? AND c.created_at > ?",
+                (tale_id, since)).fetchall()
+        return {r[0] for r in rows}
 
     def pages_read_since(self, since: float) -> list[dict]:
         """Pages with a stored version opened after `since`: [{node_id, title, opens, seconds,

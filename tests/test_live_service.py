@@ -19,8 +19,8 @@ from primer import children
 from primer.live import guard
 from primer.live.browser import Browser, find_browser
 from primer.live.cdp import CdpError
-from primer.live.service import (COVERED, HREF_JS, NO_SOCKETS_JS, STATE_JS, LiveError,
-                                 LiveService, _jpeg_size)
+from primer.live.service import (BAD_ADDRESS, COVERED, HREF_JS, NO_PROXY, NO_SOCKETS_JS,
+                                 STATE_JS, LiveError, LiveService, _jpeg_size)
 
 # --- fakes -------------------------------------------------------------------------------------
 
@@ -47,6 +47,7 @@ class FakeCdp:
     """Records calls; handlers answer them; fire() delivers events like the dispatcher."""
 
     def __init__(self):
+        self.proxy_port = None  # where the probe goes; None: as if a policy bypassed the proxy
         self.calls = []
         self.listeners = {}
         self.closed = threading.Event()
@@ -64,8 +65,61 @@ class FakeCdp:
         self.texts = []  # the caps asked of the "text" op
         self.aims = []  # replies for the "aim" op, in turn; after them, found with clear: True
         self.handlers["Runtime.evaluate"] = self._evaluate
+        self.handlers["Target.attachToTarget"] = self._attach_probe
+        self.handlers["Page.navigate"] = self._navigate
+        self.probe_targets = set()  # tabs the service attached to itself: its probe tabs
+        self.probe_held = []  # browser-wide pauses of a re-probe's request, as (id, url)
+
+    def _attach_probe(self, params, session):
+        """Only the proxy probe attaches to a tab itself: "PS" at start-up, "PS-<tab>" after."""
+        tid = params.get("targetId")
+        self.probe_targets.add(tid)
+        return {"sessionId": "PS" if tid == "PROBE" else f"PS-{tid}"}
+
+    probe_pauses = False  # True: the probe tab's Fetch sees PROBE_PAUSES as it navigates
+    PROBE_PAUSES = (  # what the probe tab's Fetch sees, in turn, as a bypassed page would load
+        ("probe", {}), ("probe-https", {}), ("probe", {"responseStatusCode": 200}),
+        ("http://127.0.0.1:8810/x.png", {}), ("ws://172.31.0.5/", {}))
+
+    def _navigate(self, params, session):
+        url = params.get("url", "")
+        if not str(session).startswith("PS") or ".primer-proxy-probe.invalid" not in url:
+            return None
+        if session.startswith("PS-T"):  # a re-probe's tab, made paused by auto-attach
+            auto = "S" + session[len("PS-T"):]
+            if ("Runtime.runIfWaitingForDebugger", {}, auto) not in self.calls:
+                return {"frameId": "PF", "errorText": "net::ERR_TIMED_OUT"}  # never ran
+        for i, (what, extra) in enumerate(self.PROBE_PAUSES if self.probe_pauses else ()):
+            u = (url if what == "probe" else url.replace("http://", "https://")
+                 if what == "probe-https" else what)
+            self.fire("Fetch.requestPaused", {"requestId": f"P{i}", "request": {"url": u},
+                                              **extra}, session)
+        with self._lock:
+            guarded = any(m == "Fetch.enable" and s is None for m, _p, s in self.calls)
+        if guarded:
+            # the browser-wide guard is on (a re-probe): the request pauses there too, and
+            # goes on only if the service continues it
+            rid = f"BP{len(self.probe_held)}"
+            self.probe_held.append((rid, url))
+            self.fire("Fetch.requestPaused", {"requestId": rid, "request": {"url": url}}, None)
+            if not wait_for(lambda: {"requestId": rid} in self.named("Fetch.continueRequest")
+                            or any(p.get("requestId") == rid
+                                   for p in self.named("Fetch.failRequest")), 3):
+                return {"frameId": "PF", "errorText": "net::ERR_TIMED_OUT"}
+            if {"requestId": rid} not in self.named("Fetch.continueRequest"):
+                return {"frameId": "PF", "errorText": "net::ERR_BLOCKED_BY_CLIENT"}
+        if self.proxy_port:  # the request Chrome sends through the proxy
+            try:
+                with socket.create_connection(("127.0.0.1", self.proxy_port), 3) as c:
+                    c.sendall(f"GET {url} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+                    c.recv(100)
+            except OSError:
+                pass  # the proxy is gone: the probe is simply never seen
+        return {"frameId": "PF", "errorText": "net::ERR_BLOCKED_BY_CLIENT"}
 
     def _create(self, params, session):
+        if not self.listeners.get("Target.attachedToTarget"):
+            return {"targetId": "PROBE"}  # before the service wires up: the start-up probe tab
         i = next(self._n)
         tid, sid = f"T{i}", f"S{i}"
         # the attach comes before createTarget's reply, as it can in Chrome
@@ -149,6 +203,7 @@ class FakeCdp:
 
 class FakeBrowser:
     made: list = []
+    proxied = True  # False: the browser ignores --proxy-server (a proxy policy wins)
 
     def __init__(self, path, profile_dir):
         self.path, self.profile_dir = path, profile_dir
@@ -157,7 +212,10 @@ class FakeBrowser:
         self.profile_at_stop = None
         FakeBrowser.made.append(self)
 
-    def start(self):
+    def start(self, proxy_port):
+        self.proxy_port = proxy_port
+        if self.proxied and proxy_port not in {p.port for p in FakeProxy.made}:
+            self.cdp.proxy_port = proxy_port  # a real GuardProxy: send it the probe
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         (self.profile_dir / "Cookies").write_text("x")
         return self.cdp
@@ -194,6 +252,11 @@ def make(tmp_path):
 
 def cdp_of(svc):
     return FakeBrowser.made[-1].cdp
+
+
+def closed_but_probe(cdp):
+    return [p for p in cdp.named("Target.closeTarget")
+            if p.get("targetId") not in cdp.probe_targets]
 
 
 def frame_event(i, w=800, h=600):
@@ -243,12 +306,22 @@ def test_find_browser_label_without_version():
 
 
 def test_browser_command_has_the_required_flags_only(tmp_path):
-    cmd = Browser("chrome", tmp_path / "browser").command()
+    cmd = Browser("chrome", tmp_path / "browser").command(4321)
     assert cmd[1:] == ["--headless=new", "--remote-debugging-port=0",
                        f"--user-data-dir={tmp_path / 'browser'}", "--no-first-run",
                        "--no-default-browser-check",
-                       "--disable-features=DocumentPictureInPictureAPI"]
+                       "--disable-features=DocumentPictureInPictureAPI",
+                       "--proxy-server=http://127.0.0.1:4321",
+                       "--proxy-bypass-list=<-loopback>", "--disable-quic"]
     assert not any("remote-allow-origins" in a for a in cmd)
+
+
+def test_browser_start_needs_the_proxy_port(tmp_path):
+    from primer.live.browser import BrowserError
+    b = Browser("chrome", tmp_path / "b", popen=lambda c, **k: 1 / 0)
+    for bad in (None, 0, 70000, "4321"):
+        with pytest.raises(BrowserError, match="proxy"):
+            b.start(bad)
 
 
 class FakeProcess:
@@ -371,7 +444,7 @@ def test_browser_start_reads_the_port_file_and_verifies_the_browser(tmp_path, mo
     (tmp_path / "browser" / "DevToolsActivePort").write_text("1\n/devtools/browser/stale\n")
     table.add(200, EXE, NOW + 5, _good_cmd(tmp_path / "browser"))
     b, cdp, seen, adopted, prof = _browser(tmp_path, monkeypatch, table)
-    b.start()
+    b.start(4321)
     assert seen["url"] == "ws://127.0.0.1:45678/devtools/browser/ab-12"
     assert b.pid == 200 and adopted == [(200, (EXE, str(NOW + 5)))]
     prefs = json.loads((prof / "Default" / "Preferences").read_text())
@@ -404,7 +477,7 @@ def test_a_pid_that_is_not_verifiably_ours_is_never_adopted_or_killed(tmp_path, 
             cdp.closed.set()
             return out
         cdp.handlers["SystemInfo.getProcessInfo"] = info_then_close
-    b.start()
+    b.start(4321)
     assert b.pid is None and adopted == []
     assert all(h.closed for h in table.handles)
     b.stop()
@@ -419,7 +492,7 @@ def test_stop_kills_only_the_verified_browser_through_its_handle(tmp_path, monke
     # an older orphan whose parent pid happens to be 200: a tree kill would take it
     table.add(400, os.path.normcase("C:/Users/x/chrome.exe"), NOW - 10 ** 9, "user chrome")
     b, *_ = _browser(tmp_path, monkeypatch, table, browser_exits_on_close=False)
-    b.start()
+    b.start(4321)
     b.stop()
     assert table.killed == [200]
     assert table.procs[400].alive
@@ -429,7 +502,7 @@ def test_stop_never_kills_a_process_whose_creation_time_differs(tmp_path, monkey
     table = FakeTable()
     table.add(200, EXE, NOW + 5, _good_cmd(tmp_path / "browser"))
     b, *_ = _browser(tmp_path, monkeypatch, table, browser_exits_on_close=False)
-    b.start()
+    b.start(4321)
     table.procs[200].created = NOW + 999  # no longer the process we verified
     b.stop()
     assert table.killed == []
@@ -450,7 +523,7 @@ def test_browser_start_fails_when_the_process_dies(tmp_path, monkeypatch):
     b = Browser("chrome", tmp_path / "b", popen=lambda c, **k: Proc(), timeout=2,
                 open_process=FakeTable().open)
     with pytest.raises(Exception, match="exited"):
-        b.start()
+        b.start(4321)
 
 
 def _ledger_entry(pid, exe, created, role="browser"):
@@ -519,6 +592,44 @@ def test_local_names_refused_without_asking_dns():
 ])
 def test_guard_allows(url):
     assert guard.allowed(url, resolve=fake_resolve) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://public.example:9000/", "http://public.example:8079/", "wss://public.example:8444/",
+    "http://public.example:22/", "https://public.example:0/",
+])
+def test_guard_refuses_ports_the_proxy_refuses(url):
+    assert guard.allowed(url, resolve=fake_resolve) is False
+
+
+@pytest.mark.parametrize("url", [
+    "https://public.example:8443/", "http://public.example:80/", "ws://public.example:8080/",
+    "https://public.example:443/x", "http://public.example:8200/",
+])
+def test_guard_allows_the_proxys_ports(url):
+    assert guard.allowed(url, resolve=fake_resolve) is True
+
+
+def test_the_guard_and_the_proxy_share_one_port_rule():
+    from primer.live import proxy
+    assert proxy.ALLOWED_PORTS is guard.ALLOWED_PORTS
+    assert proxy.GuardProxy().allowed_ports == guard.ALLOWED_PORTS
+
+
+def test_an_off_list_port_is_a_bad_address_not_a_tunnel_failure(make):
+    svc = make()
+    with pytest.raises(LiveError) as e:
+        svc.open("w1", "https://public.example:9000/", 800, 600)
+    assert (e.value.status, e.value.message) == (400, BAD_ADDRESS)
+    svc.open("w1", "https://public.example/", 800, 600)
+    with pytest.raises(LiveError) as e:
+        svc.nav("w1", "url", "http://public.example:9000/")
+    assert (e.value.status, e.value.message) == (400, BAD_ADDRESS)
+    cdp = cdp_of(svc)
+    cdp.fire("Fetch.requestPaused", {"requestId": "r9",
+                                     "request": {"url": "https://public.example:9000/a.js"}})
+    assert wait_for(lambda: cdp.named("Fetch.failRequest"))
+    assert cdp.named("Fetch.failRequest")[0]["requestId"] == "r9"
 
 
 # --- the service: requests, limits, settings ---------------------------------------------------
@@ -644,7 +755,8 @@ def test_downloads_and_permissions_denied_on_each_tab(make):
         cdp = cdp_of(svc)
         assert len([p for p in cdp.named("Browser.setDownloadBehavior")
                     if p["behavior"] == "deny"]) >= i + 2  # browser start + each tab
-        assert cdp.named("Page.setDownloadBehavior", f"S{i + 1}") == [{"behavior": "deny"}]
+        sid = svc._windows[name].session  # b's tab comes after a re-probe's tab
+        assert cdp.named("Page.setDownloadBehavior", sid) == [{"behavior": "deny"}]
     denied = [p["permission"]["name"] for p in cdp.named("Browser.setPermission")
               if p["setting"] == "denied"]
     for name in ("geolocation", "notifications", "camera", "microphone", "local-network-access"):
@@ -765,7 +877,7 @@ def test_unknown_paused_target_types_are_closed_not_run(make):
     assert "Runtime.runIfWaitingForDebugger" not in cdp.methods("OT")
 
 
-def test_dns_backlog_is_capped_and_timeouts_cancel(make):
+def test_dns_backlog_is_capped_and_slow_lookups_time_out(make):
     gate = threading.Event()
     started = []
 
@@ -783,15 +895,13 @@ def test_dns_backlog_is_capped_and_timeouts_cancel(make):
         assert time.monotonic() - t0 < 0.1 and started == []
         with svc._lock:
             svc._dns_backlog = 0
-        for i in range(20):  # 16 run (and stick), the rest queue, then are cancelled
-            with pytest.raises(OSError):
+        for i in range(20):  # each is given up after the timeout (and frees its slot)
+            with pytest.raises(OSError, match="took too long"):
                 svc._timed_resolve(f"h{i}.example", None)
-        time.sleep(0.2)
-        assert len(started) == 16
+        assert svc._dns_backlog == 0
     finally:
         gate.set()
-    assert wait_for(lambda: svc._dns_backlog == 0, 3)
-    assert len(started) == 16  # the cancelled ones never ran
+    assert wait_for(lambda: svc._dns_backlog == 0 and svc._dns_threads == 0, 3)
 
 
 def test_a_target_that_cannot_be_made_safe_never_runs(make):
@@ -862,12 +972,12 @@ def test_blank_popups_are_capped_and_swept(make):
                                              "targetInfo": {"type": "page", "targetId": f"BL{i}",
                                                             "url": "", "openerId": "T1"}})
     # beyond MAX_POPUPS (8) waiting, the extras are closed at once
-    assert wait_for(lambda: len(cdp.named("Target.closeTarget")) == 2)
+    assert wait_for(lambda: len(closed_but_probe(cdp)) == 2)
     sweepers = [t for t in threading.enumerate() if t.name == "live-sweep"]
     assert sweepers and all(t.daemon for t in sweepers)  # one sweeper, not a thread a pop-up
     assert svc._sweeper in sweepers
     now[0] += 6  # the address never came
-    assert wait_for(lambda: len(cdp.named("Target.closeTarget")) == 10, 3)
+    assert wait_for(lambda: len(closed_but_probe(cdp)) == 10, 3)
 
 
 def test_finding_no_browser_is_retried_after_a_minute(make):
@@ -1067,6 +1177,344 @@ def test_idle_shutdown_after_10_minutes(make):
     assert len(FakeBrowser.made) == 2
 
 
+class FakeProxy:
+    made: list = []
+    events: list = []
+
+    def __init__(self, resolve):
+        self.resolve = resolve
+        self.port = 40000 + len(FakeProxy.made)
+        self.stopped = False
+        self.probe_host = f"p{self.port}.primer-proxy-probe.invalid"
+        self.probe_url = f"http://{self.probe_host}/"
+        self.probes = 1
+        FakeProxy.made.append(self)
+
+    seen = True  # False: the probe never arrives (a proxy policy now routes around it)
+
+    def new_probe(self):
+        self.probes += 1
+        self.probe_host = f"p{self.port}-{self.probes}.primer-proxy-probe.invalid"
+        self.probe_url = f"http://{self.probe_host}/"
+        return self.probe_host
+
+    def wait_probe(self, timeout):
+        return FakeProxy.seen
+
+    def start(self):
+        FakeProxy.events.append(("proxy start", self.port))
+        return self.port
+
+    def stop(self):
+        FakeProxy.events.append(("proxy stop", self.port,
+                                 all(b.stopped for b in FakeBrowser.made)))
+        self.stopped = True
+
+
+@pytest.fixture
+def proxied(make):
+    FakeProxy.made, FakeProxy.events, FakeProxy.seen = [], [], True
+    return lambda **kw: make(proxy=FakeProxy, **kw)
+
+
+def test_the_proxy_starts_before_the_browser_and_stops_after_it(proxied):
+    svc = proxied()
+    svc.open("w1", "https://public.example/", 800, 600)
+    p = FakeProxy.made[0]
+    assert p.resolve is fake_resolve
+    assert FakeBrowser.made[0].proxy_port == p.port
+    assert FakeProxy.events == [("proxy start", p.port)]
+    svc.turn_off()
+    assert FakeProxy.events[-1] == ("proxy stop", p.port, True)  # the browser stopped first
+
+
+def test_a_restarted_browser_gets_a_fresh_proxy(proxied):
+    svc = proxied()
+    svc.open("w1", "https://public.example/", 800, 600)
+    cdp_of(svc).close()  # the browser died
+    svc.open("w2", "https://public.example/", 800, 600)
+    first, second = FakeProxy.made
+    assert first.stopped and not second.stopped
+    assert FakeBrowser.made[1].proxy_port == second.port != first.port
+    svc.shutdown()
+    assert second.stopped
+
+
+def test_the_proxy_stops_with_the_idle_browser_and_when_the_start_fails(proxied):
+    now = [1000.0]
+    svc = proxied(clock=lambda: now[0])
+    svc.open("w1", "https://public.example/", 800, 600)
+    svc.close("w1")
+    now[0] += 601
+    assert svc.tick() is True and FakeProxy.made[0].stopped
+
+    class Broken(FakeBrowser):
+        def start(self, proxy_port):
+            raise OSError("no")
+    svc._launcher = Broken
+    with pytest.raises(LiveError):
+        svc.open("w1", "https://public.example/", 800, 600)
+    assert FakeProxy.made[1].stopped
+
+
+def test_a_browser_that_bypasses_the_proxy_is_refused(make, monkeypatch):
+    from primer.live.proxy import GuardProxy
+    proxies = []
+
+    class Recorded(GuardProxy):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.browser_stopped_first = None
+            proxies.append(self)
+
+        def stop(self):
+            if self.browser_stopped_first is None:
+                self.browser_stopped_first = all(b.stopped for b in FakeBrowser.made)
+            super().stop()
+    monkeypatch.setattr(FakeBrowser, "proxied", False)
+    svc = make(probe_timeout=0.3, proxy=Recorded)
+    with pytest.raises(LiveError) as e:
+        svc.open("w1", "https://public.example/", 800, 600)
+    assert e.value.status == 503 and "guarding proxy" in e.value.message
+    b = FakeBrowser.made[0]
+    assert b.stopped
+    probe = b.cdp.named("Page.navigate", "PS")[0]["url"]
+    assert probe == proxies[0].probe_url and probe.endswith(".primer-proxy-probe.invalid/")
+    assert {"targetId": "PROBE"} in b.cdp.named("Target.closeTarget")  # the probe tab closed
+    assert not b.cdp.named("Fetch.enable", None) or all(
+        s == "PS" for m, _p, s in b.cdp.calls if m == "Fetch.enable")  # no page ever ran
+    assert svc._proxy is None and svc.status()["windows"] == []
+    p = proxies[0]
+    assert p._stopping.is_set() and p._listener is None  # the real proxy was stopped
+    assert p.browser_stopped_first is True
+
+
+def test_the_probe_tab_runs_no_page_content(make, monkeypatch):
+    monkeypatch.setattr(FakeCdp, "probe_pauses", True)
+    svc = make()
+    svc.open("w1", "https://public.example/", 800, 600)
+    cdp = cdp_of(svc)
+    calls = [(m, p, s) for m, p, s in cdp.calls]
+
+    def at(method, session="any", **match):
+        return next(i for i, (m, p, s) in enumerate(calls) if m == method
+                    and (session == "any" or s == session)
+                    and all(p.get(k) == v for k, v in match.items()))
+    made = at("Target.createTarget", url="about:blank")
+    attach = at("Target.attachToTarget", targetId="PROBE")
+    noscript = at("Emulation.setScriptExecutionDisabled", "PS", value=True)
+    fetch = at("Fetch.enable", "PS")
+    nav = at("Page.navigate", "PS", url=svc._proxy.probe_url)
+    stop = at("Page.stopLoading", "PS")
+    close = at("Target.closeTarget", targetId="PROBE")
+    assert made < attach < noscript < fetch < nav < stop < close
+    assert close < at("Fetch.enable", None)  # the browser-wide guard comes after
+    stages = {p["requestStage"] for p in calls[fetch][1]["patterns"]}
+    assert stages == {"Request", "Response"}
+    # only the probe host's request goes on; its response, other hosts and sockets fail
+    assert cdp.named("Fetch.continueRequest", "PS") == [{"requestId": "P0"},
+                                                        {"requestId": "P1"}]
+    assert [p["requestId"] for p in cdp.named("Fetch.failRequest", "PS")] == ["P2", "P3", "P4"]
+    assert svc._proxy.wait_probe(0)
+    assert not [fn for fn in cdp.listeners.get("Fetch.requestPaused", [])
+                if getattr(fn, "__name__", "") == "paused"]  # the probe's handler is gone
+
+
+@pytest.mark.parametrize("where", ["launcher", "wire", "deny"])
+def test_nothing_leaks_when_start_up_fails_anywhere(proxied, monkeypatch, where):
+    svc = proxied()
+    if where == "launcher":
+        def boom(*a, **k):
+            raise ValueError("launcher")
+        svc._launcher = boom
+    else:
+        def boom(*a, **k):
+            raise TimeoutError(where)
+        monkeypatch.setattr(svc, "_" + where, boom)
+    with pytest.raises((ValueError, TimeoutError)):
+        svc.open("w1", "https://public.example/", 800, 600)
+    assert FakeProxy.made[0].stopped
+    assert all(b.stopped for b in FakeBrowser.made)
+    assert FakeProxy.events[-1][2] is True  # the browser stopped before the proxy
+
+
+def probes_of(cdp):
+    """The probe URLs the service had a probe tab load, in order."""
+    with cdp._lock:
+        return [p["url"] for m, p, s in cdp.calls
+                if m == "Page.navigate" and str(s).startswith("PS")]
+
+
+def test_each_new_window_proves_the_proxy_again(make):
+    """Chrome applies a proxy policy change at once, so a running browser proves its proxy
+    again, with a fresh probe name, before each new live window opens."""
+    svc = make(probe_timeout=2)
+    svc.open("w1", "https://public.example/", 800, 600)
+    cdp = cdp_of(svc)
+    assert len(probes_of(cdp)) == 1
+    svc.open("w1", "https://public.example/", 800, 600)  # the same window again: no new probe
+    assert len(probes_of(cdp)) == 1
+    svc.open("w2", "https://public.example/", 800, 600)
+    first, second = probes_of(cdp)
+    assert first != second and second == svc._proxy.probe_url and svc._proxy.wait_probe(0)
+    # the browser-wide guard let the re-probe's request (and only it) through to the proxy
+    (held,) = cdp.probe_held
+    assert {"requestId": held[0]} in cdp.named("Fetch.continueRequest", None)
+    assert svc.status()["windows"] == ["w1", "w2"] and not FakeBrowser.made[0].stopped
+    probe_tab = next(t for t in cdp.probe_targets if t != "PROBE")
+    assert {"targetId": probe_tab} in cdp.named("Target.closeTarget")
+    assert probe_tab not in svc._by_target and not svc._attached and svc._creating == 0
+    assert svc._probe_host is None and not svc._probe_sessions
+    # once the re-probe is over, a request for that name is an ordinary (unresolvable) one
+    cdp.fire("Fetch.requestPaused", {"requestId": "late", "request": {"url": second}})
+    assert wait_for(lambda: any(p["requestId"] == "late" for p in cdp.named("Fetch.failRequest")))
+
+
+def test_a_proxy_policy_that_appears_while_running_stops_the_browser(make):
+    proxies = []
+    from primer.live.proxy import GuardProxy
+
+    class Recorded(GuardProxy):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.browser_stopped_first = None
+            proxies.append(self)
+
+        def stop(self):
+            if self.browser_stopped_first is None:
+                self.browser_stopped_first = all(b.stopped for b in FakeBrowser.made)
+            super().stop()
+    ended = []
+    svc = make(probe_timeout=0.5, proxy=Recorded)
+    svc.on_window_end = lambda name, gen, reason: ended.append((name, reason))
+    svc.open("w1", "https://public.example/", 800, 600)
+    b = FakeBrowser.made[0]
+    b.cdp.proxy_port = None  # a policy now routes the browser around the proxy
+    with pytest.raises(LiveError) as e:
+        svc.open("w2", "https://public.example/", 800, 600)
+    message = NO_PROXY.format(label="Chrome 158")
+    assert (e.value.status, e.value.message) == (503, message)
+    assert b.stopped and proxies[0]._stopping.is_set() and proxies[0].browser_stopped_first
+    assert svc._proxy is None and svc.status()["windows"] == []
+    assert ("w1", message) in ended  # (w2, still being opened, is discarded: "closed")
+
+
+def test_while_windows_are_open_the_proxy_is_proved_again_each_minute(make):
+    now = [1000.0]
+    svc = make(clock=lambda: now[0], probe_timeout=0.5)
+    svc.open("w1", "https://public.example/", 800, 600)
+    it = svc.frames("w1", keepalive=0.05)
+    assert next(it) == {"ping": True}  # read, so the orphan sweep leaves it open
+    cdp = cdp_of(svc)
+    now[0] += 59
+    assert svc.tick() is False and len(probes_of(cdp)) == 1  # not yet a minute
+    now[0] += 2
+    assert svc.tick() is False and len(probes_of(cdp)) == 2  # proved again: still in the path
+    now[0] += 30
+    assert svc.tick() is False and len(probes_of(cdp)) == 2  # at most once a minute
+    cdp.proxy_port = None  # a policy now routes around the proxy
+    now[0] += 31
+    assert svc.tick() is True and len(probes_of(cdp)) == 3
+    assert FakeBrowser.made[0].stopped and svc._proxy is None
+    assert svc.status()["windows"] == []
+    it.close()
+
+
+def test_no_windows_no_reprobe(proxied):
+    now = [1000.0]
+    svc = proxied(clock=lambda: now[0])
+    svc.open("w1", "https://public.example/", 800, 600)
+    svc.close("w1")
+    now[0] += 120
+    FakeProxy.seen = False
+    assert svc.tick() is False and not FakeBrowser.made[0].stopped  # only the idle timer runs
+    with pytest.raises(LiveError) as e:  # the next window proves it first, and is refused
+        svc.open("w2", "https://public.example/", 800, 600)
+    assert e.value.status == 503 and "guarding proxy" in e.value.message
+    assert FakeBrowser.made[0].stopped and FakeProxy.made[0].stopped
+    assert FakeProxy.events[-1][2] is True  # the browser stopped before the proxy
+    assert svc.status()["windows"] == []
+
+
+def test_a_reprobe_never_waits_behind_page_lookups_or_tab_set_up(make):
+    """A page with many slow-resolving names fills the guard pool, and slow targets fill the
+    cdp pool: the re-probe is handled on the connection's thread and resumes its own tab, so it
+    still passes, and no live window is closed."""
+    gate = threading.Event()
+
+    def slow_resolve(host, port, *a, **k):
+        if host.startswith("slow"):
+            gate.wait(10)
+        return fake_resolve("public.example", port)
+    svc = make(resolve=slow_resolve, dns_timeout=10, probe_timeout=1.5)
+    try:
+        svc.open("w1", "https://public.example/", 800, 600)
+        cdp = cdp_of(svc)
+        for i in range(40):  # far more than the guard pool's workers
+            cdp.fire("Fetch.requestPaused", {"requestId": f"slow{i}",
+                                             "request": {"url": f"https://slow{i}.example/x.js"}})
+        block = threading.Event()
+        cdp.handlers["Page.enable"] = lambda p, sess: block.wait(10) if sess.startswith("F") else None
+        for i in range(8):  # frames whose set-up hangs: the cdp pool's workers are all busy
+            cdp.fire("Target.attachedToTarget", {"sessionId": f"F{i}", "waitingForDebugger": True,
+                                                 "targetInfo": {"type": "iframe",
+                                                                "targetId": f"FR{i}"}}, "S1")
+        # both pools stay blocked for longer than the probe may take (1.5 s); then they clear,
+        # so w2's own tab can be set up
+        threading.Timer(3.0, lambda: (gate.set(), block.set())).start()
+        svc.open("w2", "https://public.example/", 800, 600)  # proves the proxy first
+        assert len(probes_of(cdp)) == 2 and svc._proxy.wait_probe(0)
+        assert not FakeBrowser.made[0].stopped and svc.status()["windows"] == ["w1", "w2"]
+    finally:
+        gate.set()
+        block.set()
+
+
+def test_a_crash_during_a_reprobe_says_the_browser_stopped_and_the_next_open_restarts(make):
+    svc = make(probe_timeout=0.5)
+    svc.open("w1", "https://public.example/", 800, 600)
+    cdp = cdp_of(svc)
+    real = cdp.handlers["Page.navigate"]
+
+    def crash(params, session):
+        if str(session).startswith("PS-"):
+            cdp.close()  # the browser dies mid-probe
+            raise CdpError("browser closed")
+        return real(params, session)
+    cdp.handlers["Page.navigate"] = crash
+    with pytest.raises(LiveError) as e:
+        svc.open("w2", "https://public.example/", 800, 600)
+    assert (e.value.status, e.value.message) == (503, "The browser stopped")
+    assert FakeBrowser.made[0].stopped and svc.status()["windows"] == []
+    svc.open("w3", "https://public.example/", 800, 600)  # a fresh browser
+    assert len(FakeBrowser.made) == 2 and svc.status()["windows"] == ["w3"]
+
+
+def test_the_default_proxy_is_a_real_guard_proxy(make):
+    from primer.live.proxy import GuardProxy
+    svc = make()
+    svc.open("w1", "https://public.example/", 800, 600)
+    proxy = svc._proxy
+    assert isinstance(proxy, GuardProxy)
+    assert FakeBrowser.made[0].proxy_port == proxy.port
+    svc.shutdown()
+    try:
+        s = socket.create_connection(("127.0.0.1", proxy.port), timeout=5)
+    except OSError:
+        pass
+    else:
+        s.close()
+        pytest.fail("the proxy still listens after shutdown")
+
+
+def test_no_sockets_js_leaves_websockets_to_the_proxy():
+    names = NO_SOCKETS_JS[NO_SOCKETS_JS.index("const NAMES"):]
+    names = names[:names.index(";")]
+    assert "WebSocket" not in names and "WebSocketStream" not in names
+    for kept in ("WebTransport", "RTCPeerConnection", "webkitRTCPeerConnection"):
+        assert f'"{kept}"' in names
+
+
 def test_forget_stops_first_then_deletes(make, tmp_path):
     svc = make()
     svc.open("w1", "https://public.example/", 800, 600)
@@ -1255,7 +1703,15 @@ def test_real_browser_smoke(tmp_path):
     local = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=local.serve_forever, daemon=True).start()
     raw = socket.socket()
-    raw.bind(("127.0.0.1", 0))
+    for p in range(8080, 8444):  # a port the proxy allows, so only the address rule refuses
+        try:
+            raw.bind(("127.0.0.1", p))
+            break
+        except OSError:
+            continue
+    else:
+        raw.close()
+        pytest.skip("no free port in 8080-8443 for the local listener")
     raw.listen(8)
     raw_port, accepts = raw.getsockname()[1], []
 
@@ -1285,9 +1741,23 @@ def test_real_browser_smoke(tmp_path):
                           ".then(() => 'reached', e => 'failed')",
             "awaitPromise": True, "returnByValue": True}, session=w.session)
         assert r["result"]["value"] == "failed"
+        # WebSockets are allowed now; the guarding proxy refuses one to a local address
+        proxy = svc._proxy
+        assert proxy.wait_probe(0)  # the start-up probe came through it
+        assert raw_port in proxy.allowed_ports
+        before = proxy.stats()["refused"]
         r = w.cdp.call("Runtime.evaluate", {
-            "expression": f"try {{ new WebSocket('ws://127.0.0.1:{port}/'); 'made' }} "
-                          "catch (e) { 'refused' }", "returnByValue": True}, session=w.session)
+            "expression": "new Promise(done => { let ws; try { ws = new WebSocket("
+                          f"'ws://127.0.0.1:{raw_port}/'); }} catch (e) {{ "
+                          "return done('threw') } ws.onopen = () => done('opened'); "
+                          "ws.onerror = ws.onclose = () => done('failed'); "
+                          "setTimeout(() => done('timeout'), 8000) })",
+            "awaitPromise": True, "returnByValue": True}, session=w.session)
+        assert r["result"]["value"] == "failed"
+        assert proxy.stats()["refused"] > before  # Chrome's traffic goes through the proxy
+        r = w.cdp.call("Runtime.evaluate", {
+            "expression": "try { new RTCPeerConnection(); 'made' } catch (e) { 'refused' }",
+            "returnByValue": True}, session=w.session)
         assert r["result"]["value"] == "refused"
         # a page that tampers with the builtins first still can't get a pop-up's first
         # document (window.open returns null: pop-ups open in the same view) or a socket
@@ -1297,8 +1767,8 @@ def test_real_browser_smoke(tmp_path):
         r = w.cdp.call("Runtime.evaluate", {
             "expression": "(() => { " + tamper + "const p = window.open(''); "
                           "const q = document.open('', 'x', ''); "
-                          "if (p || q) { try { new (p || q).WebSocket("
-                          f"'ws://127.0.0.1:{port}/'); return 'made' }} catch (e) {{ "
+                          "if (p || q) { try { new (p || q).RTCPeerConnection(); "
+                          "return 'made' } catch (e) { "
                           "return 'refused' } } return 'no-popup' })()",
             "userGesture": True, "returnByValue": True}, session=w.session)
         assert r["result"]["value"] == "no-popup"
@@ -1309,15 +1779,14 @@ def test_real_browser_smoke(tmp_path):
             "awaitPromise": True, "userGesture": True, "returnByValue": True}, session=w.session)
         assert r["result"]["value"] in ("none", "rejected")
         r = w.cdp.call("Runtime.evaluate", {
-            "expression": "(() => { " + tamper + "try { new WebSocket("
-                          f"'ws://127.0.0.1:{port}/'); return 'made' }} "
-                          "catch (e) { return 'refused' } })()",
+            "expression": "(() => { " + tamper + "try { new RTCPeerConnection(); "
+                          "return 'made' } catch (e) { return 'refused' } })()",
             "returnByValue": True}, session=w.session)
         assert r["result"]["value"] == "refused"
         r = w.cdp.call("Runtime.evaluate", {
             "expression": "(() => { const f = document.createElement('iframe'); "
                           "document.body.appendChild(f); "
-                          f"try {{ new f.contentWindow.WebSocket('ws://127.0.0.1:{port}/'); "
+                          "try { new f.contentWindow.RTCPeerConnection(); "
                           "return 'made' } catch (e) { return 'refused' } })()",
             "returnByValue": True}, session=w.session)
         assert r["result"]["value"] == "refused"
@@ -1345,7 +1814,10 @@ def test_real_browser_smoke(tmp_path):
             "width:100%;height:100%;border:0;opacity:0'></iframe>"
             "<script>window.framed = 0; addEventListener('message', () => window.framed++)"
             "</script></body></html>")
+        first_probe = proxy.probe_host
         svc.open("jack", "data:text/html," + page, 640, 480)
+        # a new window: the running browser proved its proxy again, through the page guard
+        assert svc._proxy is proxy and proxy.probe_host != first_probe and proxy.wait_probe(0)
         jw = svc._windows["jack"]
 
         def main(expr):
@@ -1716,3 +2188,353 @@ def test_press_sends_no_hover_move_first(snapped):
     svc.act("w1", {"action": "press", "n": 5})
     kinds = [p["type"] for p in cdp.named("Input.dispatchMouseEvent", "S1")]
     assert kinds == ["mousePressed", "mouseReleased"]
+
+
+# --- Phase 17: the browser's parked items ------------------------------------------------------
+
+def test_service_worker_scripts_are_refused(make):
+    """A paused service worker doesn't always answer before it runs (checked against Chrome
+    158), so its set-up can't be checked before it runs: registration is blocked instead. The
+    script request every registration and update makes carries Service-Worker: script."""
+    svc = make()
+    svc.open("w1", "https://public.example/", 800, 600)
+    cdp = cdp_of(svc)
+    for i, headers in enumerate(({"Service-Worker": "script"}, {"service-worker": "script"})):
+        cdp.fire("Fetch.requestPaused", {"requestId": f"sw{i}", "request": {
+            "url": "https://public.example/sw.js", "headers": headers}})
+    cdp.fire("Fetch.requestPaused", {"requestId": "page", "request": {
+        "url": "https://public.example/app.js", "headers": {"Accept": "*/*"}}})
+    assert wait_for(lambda: len(cdp.named("Fetch.failRequest")) == 2
+                    and cdp.named("Fetch.continueRequest"))
+    assert {p["requestId"] for p in cdp.named("Fetch.failRequest")} == {"sw0", "sw1"}
+    assert cdp.named("Fetch.continueRequest") == [{"requestId": "page"}]
+
+
+def test_no_sockets_js_refuses_service_worker_registration():
+    body = NO_SOCKETS_JS[:NO_SOCKETS_JS.index("lock(G);")]
+    assert "ServiceWorkerContainer" in body and '"register"' in body
+    assert "Promise" in NO_SOCKETS_JS[:NO_SOCKETS_JS.index("const lock")]  # captured first
+
+
+def test_service_workers_left_in_the_profile_are_removed_before_start(make, tmp_path):
+    sw = tmp_path / "var" / "browser" / "Default" / "Service Worker"
+    (sw / "ScriptCache").mkdir(parents=True)
+    (sw / "ScriptCache" / "x").write_text("old")
+    cookies = tmp_path / "var" / "browser" / "Default" / "Network"
+    cookies.mkdir(parents=True)
+    (cookies / "Cookies").write_text("sign-ins")
+    svc = make()
+    svc.open("w1", "https://public.example/", 800, 600)
+    assert not sw.exists()
+    assert (cookies / "Cookies").read_text() == "sign-ins"  # sign-ins stay
+
+
+def test_worker_set_up_has_its_own_pool(make):
+    """Workers whose set-up hangs (each step can wait WORKER_PAUSE_S) never hold the pool
+    that sets up pages and frames."""
+    gate = threading.Event()
+    svc = make()
+    try:
+        svc.open("w1", "https://public.example/", 800, 600)
+        cdp = cdp_of(svc)
+
+        def hang(p, s):
+            if s.startswith("SWH"):
+                gate.wait(10)
+            return {}
+        cdp.handlers["Debugger.enable"] = hang
+        for i in range(8):  # more than the DevTools pool has threads
+            cdp.fire("Target.attachedToTarget", {"sessionId": f"SWH{i}", "waitingForDebugger": True,
+                                                 "targetInfo": {"type": "worker",
+                                                                "targetId": f"XH{i}"}})
+        time.sleep(0.1)
+        cdp.fire("Target.attachedToTarget", {"sessionId": "IFP", "waitingForDebugger": True,
+                                             "targetInfo": {"type": "iframe", "targetId": "XP"}}, "S1")
+        assert wait_for(lambda: "Runtime.runIfWaitingForDebugger" in cdp.methods("IFP"), 1.0)
+    finally:
+        gate.set()
+
+
+def test_a_stuck_lookup_frees_its_slot(make):
+    """A lookup that never returns is given up after the timeout and frees its slot, so
+    later lookups still run (they used to queue behind 16 stuck ones and be refused)."""
+    gate = threading.Event()
+
+    def resolve(host, port, *a, **k):
+        if host.endswith("stuck.example"):
+            gate.wait(10)
+        return fake_resolve(host, port)
+    svc = make(resolve=resolve, dns_timeout=0.2)
+    try:
+        for i in range(20):  # more than there are slots
+            with pytest.raises(OSError):
+                svc._timed_resolve(f"h{i}.stuck.example", 443)
+        assert svc._timed_resolve("public.example", 443)[0][4][0] == "93.184.215.14"
+    finally:
+        gate.set()
+
+
+def test_running_lookups_are_capped(make, monkeypatch):
+    from primer.live import service as service_mod
+    monkeypatch.setattr(service_mod, "MAX_DNS_THREADS", 5)
+    gate = threading.Event()
+    started = []
+
+    def stuck(host, port, *a, **k):
+        started.append(host)
+        gate.wait(10)
+        return fake_resolve("public.example", port)
+    svc = make(resolve=stuck, dns_timeout=0.1)
+    try:
+        for i in range(8):
+            with pytest.raises(OSError):
+                svc._timed_resolve(f"h{i}.example", None)
+        assert len(started) == 5  # the rest were refused without a thread
+    finally:
+        gate.set()
+    assert wait_for(lambda: svc._dns_threads == 0 and svc._dns_backlog == 0)
+
+
+def test_pool_threads_are_daemons_and_shutdown_is_bounded(make):
+    gate = threading.Event()
+
+    def stuck(host, port, *a, **k):
+        if host == "x.example":
+            gate.wait(30)
+        return fake_resolve("public.example", port)
+    svc = make(resolve=stuck, dns_timeout=5)
+    try:
+        svc.open("w1", "https://public.example/", 800, 600)
+        cdp = cdp_of(svc)
+        cdp.fire("Fetch.requestPaused", {"requestId": "s", "request": {"url": "http://x.example/"}})
+        assert wait_for(lambda: svc._dns_threads == 1)
+        live = [t for t in threading.enumerate() if t.name.startswith("live-")]
+        assert live and all(t.daemon for t in live)
+        t0 = time.monotonic()
+        svc.shutdown()
+        assert time.monotonic() - t0 < 3
+    finally:
+        gate.set()
+
+
+def test_primers_stop_does_not_wait_on_a_stuck_lookup(tmp_path):
+    """A process whose live service has a lookup that never returns still exits."""
+    import subprocess
+    import sys
+    code = (
+        "import threading, sys\n"
+        "from types import SimpleNamespace as NS\n"
+        "from primer.live.service import LiveService\n"
+        "def stuck(*a, **k):\n"
+        "    threading.Event().wait()\n"
+        "svc = LiveService(sys.argv[1], NS(web=NS(search='duckduckgo'), browser=NS(path='')),\n"
+        "                  resolve=stuck, dns_timeout=0.2, start_threads=False)\n"
+        "try:\n"
+        "    svc._timed_resolve('stuck.example', 443)\n"
+        "except OSError:\n"
+        "    pass\n"
+        "svc._submit(svc._timed_resolve, 'stuck2.example', 443, pool=svc._guard_pool)\n"
+        "svc.shutdown()\n"
+        "print('stopped', flush=True)\n")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    p = subprocess.run([sys.executable, "-c", code, str(tmp_path / "var")], cwd=root,
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0 and "stopped" in p.stdout, p.stderr
+
+
+def test_resize_takes_the_windows_lock(opened):
+    """Two resizes at once run one after the other, so the viewport and the screencast
+    never disagree."""
+    svc, cdp = opened
+    first_in, release = threading.Event(), threading.Event()
+
+    def metrics(p, s):
+        if p["width"] == 1000 and not first_in.is_set():
+            first_in.set()
+            release.wait(5)
+        return {}
+    cdp.handlers["Emulation.setDeviceMetricsOverride"] = metrics
+    a = threading.Thread(target=svc.resize, args=("w1", 1000, 700))
+    a.start()
+    assert first_in.wait(3)
+    b = threading.Thread(target=svc.resize, args=("w1", 1200, 800))
+    b.start()
+    time.sleep(0.2)  # b would call in now if nothing held it back
+    release.set()
+    a.join(5), b.join(5)
+    seq = [(m, p.get("width", p.get("maxWidth"))) for m, p, s in cdp.calls
+           if s == "S1" and m in ("Emulation.setDeviceMetricsOverride", "Page.startScreencast")]
+    assert seq[-4:] == [("Emulation.setDeviceMetricsOverride", 1000), ("Page.startScreencast", 1000),
+                        ("Emulation.setDeviceMetricsOverride", 1200), ("Page.startScreencast", 1200)]
+    w = svc._windows["w1"]
+    assert (w.width, w.height) == (1200, 800)
+
+
+def test_the_orphan_sweep_rechecks_under_the_lock(make):
+    """A reader that comes between the sweep's look and its close keeps the window open."""
+    now = [0.0]
+    svc = make(clock=lambda: now[0])
+    svc.open("w1", "https://public.example/", 800, 600)
+    w = svc._windows["w1"]
+    reads = []
+
+    class Watched(type(w)):
+        @property
+        def readers(self):
+            reads.append(1)
+            return 0 if len(reads) == 1 else 1  # a reader arrives just after the first look
+
+        @readers.setter
+        def readers(self, v):
+            pass
+    w.__class__ = Watched
+    now[0] += 60
+    assert svc.sweep_orphans() == []
+    assert svc.status()["windows"] == ["w1"] and w.gone is None
+    assert {"targetId": "T1"} not in cdp_of(svc).named("Target.closeTarget")
+
+
+def test_a_changed_browser_path_applies_on_a_tier_switch(make):
+    looked = []
+
+    def find(cfg):
+        looked.append(cfg)
+        return (cfg or "C:/Chrome/chrome.exe", "Edge 158" if "Edge" in cfg else "Chrome 158")
+    svc = make(tier(path=""), find=find)
+    assert svc.status()["label"] == "Chrome 158"
+    svc.tier = tier(path="C:/Edge/msedge.exe")
+    assert svc.status()["label"] == "Edge 158"
+    assert looked == ["", "C:/Edge/msedge.exe"]
+    svc.tier = tier(path="C:/Edge/msedge.exe")  # the same path: no new look
+    svc.status()
+    assert looked == ["", "C:/Edge/msedge.exe"]
+
+
+def test_shown_checks_filter_clip_mask_and_scale():
+    from primer.live.service import SNAPSHOT_JS
+    shown = SNAPSHOT_JS[SNAPSHOT_JS.index("function shown("):]
+    shown = shown[:shown.index("\n  }\n")]
+    for word in ("filterAlpha(", "clipsAll(", "masksAll(", "scaleOf(", "0.05"):
+        assert word in shown
+
+
+HIDDEN_WAYS = {
+    "Filtered": "<div style='filter:opacity(0)'>{b}</div>",
+    "Filtered half twice": "<div style='filter:opacity(0.3)'><div style='filter:opacity(30%)'>"
+                           "{b}</div></div>",
+    "Inset": "<div style='clip-path:inset(50%)'>{b}</div>",
+    "Circle": "<div style='clip-path:circle(0px at 50% 50%)'>{b}</div>",
+    "Polygon": "<div style='clip-path:polygon(10px 10px, 10px 10px, 10px 10px)'>{b}</div>",
+    "Line": "<div style='clip-path:polygon(0% 0%, 50% 50%, 100% 100%)'>{b}</div>",
+    "Masked": "<div style='mask-image:linear-gradient(transparent, rgba(0,0,0,0));"
+              "-webkit-mask-image:linear-gradient(transparent, rgba(0,0,0,0))'>{b}</div>",
+    "Mask sized 0": "<div style='mask-image:linear-gradient(black, black);mask-size:0 0;"
+                    "-webkit-mask-image:linear-gradient(black, black);-webkit-mask-size:0 0'>"
+                    "{b}</div>",
+    "Tiny": "<div style='transform:scale(0.2)'><div style='transform:scale(0.2)'>{b}</div></div>",
+    "Shrunk": "<div style='scale:0.02'>{b}</div>",
+}
+SHOWN_WAYS = {
+    "Half size": "<div style='transform:scale(0.5)'>{b}</div>",
+    "Icon mask": "<div style='mask-image:linear-gradient(black, transparent);"
+                 "-webkit-mask-image:linear-gradient(black, transparent)'>{b}</div>",
+    "Rounded": "<div style='clip-path:inset(10% round 8px)'>{b}</div>",
+    # self-crossing, so its signed area is 0, but the centre is inside and shows
+    "Bowtie": "<div style='clip-path:polygon(0% 0%, 0% 75%, 100% 0%, 50% 75%)'>{b}</div>",
+}
+
+
+@pytest.mark.skipif(os.environ.get("PRIMER_LIVE_CHROME") != "1",
+                    reason="set PRIMER_LIVE_CHROME=1 to run against the installed browser")
+def test_real_browser_press_refuses_controls_hidden_by_filter_clip_mask_or_scale(tmp_path):
+    if find_browser() is None:
+        pytest.skip("no Chrome or Edge installed")
+    rows = []
+    for i, (label, wrap) in enumerate({**HIDDEN_WAYS, **SHOWN_WAYS}.items()):
+        button = (f"<button style='width:200px;height:60px' onclick='window.pressed.push("
+                  f"&quot;{label}&quot;)'>{label}</button>")
+        rows.append(f"<div style='position:absolute;left:150px;top:{40 + i * 90}px'>"
+                    + wrap.format(b=button) + "</div>")
+    page = urllib.parse.quote("<html><body style='margin:0;height:3000px'><script>"
+                              "window.pressed = []</script>" + "".join(rows) + "</body></html>")
+    svc = LiveService(tmp_path / "var", tier())
+    try:
+        svc.open("vis", "data:text/html," + page, 640, 480)
+        w = svc._windows["vis"]
+
+        def main(expr):
+            return w.cdp.call("Runtime.evaluate", {"expression": expr, "returnByValue": True},
+                              session=w.session)["result"].get("value")
+        assert wait_for(lambda: main("document.readyState") == "complete", 10)
+        snap = svc.snapshot("vis", with_token=True)
+        by = {c["label"]: c["n"] for c in snap["controls"]}
+        refused = []
+        for label in HIDDEN_WAYS:
+            if label not in by:
+                continue  # not even listed: never pressed
+            try:
+                svc.act("vis", {"action": "press", "n": by[label]}, token=snap["token"])
+            except LiveError as e:
+                assert e.message == COVERED, (label, e.message)
+                refused.append(label)
+        for label in SHOWN_WAYS:
+            assert svc.act("vis", {"action": "press", "n": by[label]},
+                           token=snap["token"])["done"] == "press", label
+        time.sleep(0.3)
+        assert main("window.pressed") == list(SHOWN_WAYS)
+        assert refused == [k for k in HIDDEN_WAYS if k in by]
+    finally:
+        svc.shutdown()
+
+
+# --- Phase 17 fix round 1 ------------------------------------------------------------------------
+
+def test_a_new_tabs_first_size_is_set_under_the_windows_lock(make):
+    """A resize that comes while a new tab gets its first size waits for it, so the viewport
+    and the screencast end at the size the window says."""
+    svc = make()
+    first_in, release = threading.Event(), threading.Event()
+    seen = []
+
+    def metrics(p, s):
+        if p["width"] == 800 and not first_in.is_set():
+            first_in.set()
+            release.wait(5)
+        return {}
+
+    real_ensure = svc._ensure
+
+    def ensure():
+        cdp = real_ensure()
+        cdp.handlers["Emulation.setDeviceMetricsOverride"] = metrics
+        seen.append(cdp)
+        return cdp
+    svc._ensure = ensure
+    opener = threading.Thread(target=svc.open, args=("w1", "https://public.example/", 800, 600))
+    opener.start()
+    assert first_in.wait(3)
+    resizer = threading.Thread(target=svc.resize, args=("w1", 1000, 700))
+    resizer.start()
+    time.sleep(0.2)  # the resize would call in now if nothing held it back
+    release.set()
+    opener.join(5), resizer.join(5)
+    cdp = seen[0]
+    seq = [(m, p.get("width", p.get("maxWidth"))) for m, p, s in cdp.calls
+           if s == "S1" and m in ("Emulation.setDeviceMetricsOverride", "Page.startScreencast")]
+    assert seq == [("Emulation.setDeviceMetricsOverride", 800), ("Page.startScreencast", 800),
+                   ("Emulation.setDeviceMetricsOverride", 1000), ("Page.startScreencast", 1000)]
+    assert (svc._windows["w1"].width, svc._windows["w1"].height) == (1000, 700)
+
+
+def test_status_shows_the_running_browser_until_it_stops(make):
+    def find(cfg):
+        return (cfg or "C:/Chrome/chrome.exe", "Edge 158" if "Edge" in cfg else "Chrome 158")
+    svc = make(tier(path=""), find=find)
+    svc.open("w1", "https://public.example/", 800, 600)
+    svc.tier = tier(path="C:/Edge/msedge.exe")
+    assert svc.status()["label"] == "Chrome 158"  # the browser still running
+    assert svc.status()["windows"] == ["w1"]
+    svc.forget()  # it stops: the new path is looked for
+    assert svc.status()["label"] == "Edge 158"
+    svc.open("w2", "https://public.example/", 800, 600)
+    assert FakeBrowser.made[-1].path == "C:/Edge/msedge.exe"

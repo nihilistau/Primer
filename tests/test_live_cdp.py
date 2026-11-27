@@ -22,13 +22,26 @@ def _read_json(conn):
     return json.loads(data)
 
 
+def _requests(conn):
+    """Each JSON request until the client's close frame."""
+    while True:
+        op, _f, data = conn.read_frame()
+        if op == 8:
+            return
+        assert op == 1
+        yield json.loads(data)
+
+
 def _connect(s):
     return Cdp(WebSocket.connect(s.url, 2))
 
 
 def test_calls_match_ids_out_of_order(serve):
+    first_read = threading.Event()
+
     def handler(conn):
         a = _read_json(conn)
+        first_read.set()
         b = _read_json(conn)
         _send(conn, {"id": b["id"], "result": {"m": b["method"]}})
         _send(conn, {"id": a["id"], "result": {"m": a["method"]}})
@@ -43,7 +56,7 @@ def test_calls_match_ids_out_of_order(serve):
 
     t1 = threading.Thread(target=call, args=("A.one",))
     t1.start()
-    time.sleep(0.1)  # make A the first request the server sees
+    assert first_read.wait(3)  # A is the first request the server saw
     t2 = threading.Thread(target=call, args=("B.two",))
     t2.start()
     t1.join(3)
@@ -185,8 +198,7 @@ def test_large_event_payload(serve):
 
 def test_listener_may_call_and_gets_its_reply_quickly(serve):
     def handler(conn):
-        while True:
-            m = _read_json(conn)
+        for m in _requests(conn):
             if m["method"] == "A.b":
                 _send(conn, {"method": "E.x", "params": {}})
             _send(conn, {"id": m["id"], "result": {"m": m["method"]}})
@@ -233,8 +245,7 @@ def test_concurrent_calls_have_unique_ids_and_whole_frames(serve):
     ids = []
 
     def handler(conn):
-        while True:
-            m = _read_json(conn)  # a torn or interleaved frame would fail here
+        for m in _requests(conn):  # a torn or interleaved frame would fail here
             ids.append(m["id"])
             _send(conn, {"id": m["id"], "result": {"n": m["params"]["n"]}})
 

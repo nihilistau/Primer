@@ -292,18 +292,23 @@ def collect(graph, scope: dict, include: dict, title: str = "", by: str = "",
 
 
 def _maps(graph, node_id: str) -> list[MapData]:
-    """The page's finished maps with located places, oldest first."""
-    out = []
-    for row in reversed(graph.maps_for(node_id)):
+    """The page's finished maps with located places, oldest first: only the latest such map
+    for each phrase (a place mapped five times gets one plate, not five)."""
+    out, seen = [], set()
+    for row in graph.maps_for(node_id):  # newest first
         if row["status"] != "done":
+            continue
+        key = " ".join((row["phrase"] or "").split()).casefold()
+        if key in seen:
             continue
         full = graph.get_map(row["id"]) or {"places": []}
         located = [p for p in full["places"] if p["lat"] is not None and p["lon"] is not None]
         if located:
+            seen.add(key)
             out.append(MapData(row["id"], row["phrase"], [
                 {"n": n, "name": p["name"], "what": p["what"], "lat": p["lat"], "lon": p["lon"]}
                 for n, p in enumerate(located, start=1)]))
-    return out
+    return out[::-1]
 
 
 def _timeline(graph, node_id: str) -> list[dict] | None:
@@ -316,9 +321,9 @@ def _timeline(graph, node_id: str) -> list[dict] | None:
 
 
 def _diagram(graph, node_id: str, i: int) -> dict | None:
-    """The page's latest finished diagram, cleaned again with ids prefixed `dg{i}-` (i, the
-    chapter's number, is unique in the book, so ids never clash in the single HTML file);
-    None when it no longer cleans."""
+    """The page's latest finished diagram, cleaned again with ids prefixed `dg{i}-` in place of
+    its stored `dg<hex>-` (i, the chapter's number, is unique in the book, so ids never clash in
+    the single HTML file); None when it no longer cleans."""
     for row in graph.diagrams_for(node_id):  # newest first
         if row["status"] != "done":
             continue
@@ -326,7 +331,7 @@ def _diagram(graph, node_id: str, i: int) -> dict | None:
         if full is None:
             return None
         try:
-            svg, _labels = clean_svg(full["svg"], prefix=f"dg{i}-")
+            svg, _labels = clean_svg(full["svg"], prefix=f"dg{i}-", again=True)
         except (DiagramError, ValueError):
             return None
         return {"svg": svg, "caption": full["caption"]}

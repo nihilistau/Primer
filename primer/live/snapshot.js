@@ -34,24 +34,176 @@
     return st.visibility !== "hidden" && st.display !== "none" && st.opacity !== "0";
   }
 
-  // Shown all the way up: no element around it hides it, the opacities multiplied stay above
-  // 0.1, and it has a size. A transparent control can't be what an OK was given for.
+  // Shown all the way up: no element around it hides it, the opacities multiplied (opacity
+  // and filter: opacity()) stay above 0.1, no clip-path, clip or mask hides all of it, the
+  // scales multiplied stay at 0.05 or more on each axis, and it has a size. A transparent,
+  // clipped-away or shrunk-to-nothing control can't be what an OK was given for.
   function shown(el) {
     var r = el.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) return false;
     if (typeof el.checkVisibility === "function" &&
         !el.checkVisibility({opacityProperty: true, visibilityProperty: true})) return false;
-    var alpha = 1;
+    var alpha = 1, sx = 1, sy = 1;
     for (var e = el; e && e.nodeType === 1; e = e.parentElement || hostOf(e)) {
       var st = window.getComputedStyle(e);
       if (st.display === "none" || st.visibility === "hidden" || st.visibility === "collapse") {
         return false;
       }
       var o = parseFloat(st.opacity);
-      alpha *= isNaN(o) ? 1 : o;
+      alpha *= (isNaN(o) ? 1 : o) * filterAlpha(st.filter);
       if (!(alpha > 0.1)) return false;
+      if (clipsAll(e, st) || masksAll(st)) return false;
+      var s = scaleOf(st);
+      sx *= s[0];
+      sy *= s[1];
+      if (!(sx >= 0.05 && sy >= 0.05)) return false;
     }
     return true;
+  }
+
+  function fraction(v) {  // "0.3" or "30%" -> 0.3; NaN when it isn't a number
+    v = String(v).trim();
+    return v.slice(-1) === "%" ? parseFloat(v) / 100 : parseFloat(v);
+  }
+
+  // what the filter's opacity() functions leave: their amounts multiplied
+  function filterAlpha(f) {
+    if (!f || f === "none") return 1;
+    var a = 1, m, re = /opacity\(\s*([^)\s]*)\s*\)/g;
+    while ((m = re.exec(f)) !== null) {
+      var v = m[1] === "" ? 1 : fraction(m[1]);
+      if (!isNaN(v)) a *= Math.max(0, Math.min(1, v));
+    }
+    return a;
+  }
+
+  function px(v, whole) {  // a computed length or percentage in pixels; NaN for calc() and the like
+    v = String(v).trim();
+    if (v.slice(-1) === "%") return parseFloat(v) / 100 * whole;
+    if (v === "0" || /^-?[\d.]+(e-?\d+)?px$/.test(v)) return parseFloat(v);
+    return NaN;
+  }
+
+  // a clip-path (inset, circle, ellipse, polygon, xywh) or a legacy clip that leaves no area
+  function clipsAll(e, st) {
+    var w = e.offsetWidth, h = e.offsetHeight;
+    if (typeof w !== "number") {
+      var b = e.getBoundingClientRect();
+      w = b.width;
+      h = b.height;
+    }
+    var clip = st.clip;
+    if (clip && clip !== "auto" && (st.position === "absolute" || st.position === "fixed")) {
+      var c = /rect\(([^)]*)\)/.exec(clip);
+      if (c) {
+        var q = c[1].split(/[\s,]+/).filter(Boolean);
+        if (q.length === 4) {
+          var top = q[0] === "auto" ? 0 : px(q[0], h), right = q[1] === "auto" ? w : px(q[1], w);
+          var bottom = q[2] === "auto" ? h : px(q[2], h), left = q[3] === "auto" ? 0 : px(q[3], w);
+          if (bottom <= top || right <= left) return true;
+        }
+      }
+    }
+    var cp = st.clipPath;
+    if (!cp || cp === "none") return false;
+    var m = /^(inset|circle|ellipse|polygon|xywh)\((.*)\)/.exec(cp.trim());
+    if (!m) return false;
+    var args = m[2];
+    if (m[1] === "inset") {
+      var t = args.split(" round ")[0].trim().split(/\s+/);
+      var it = t[0], ir = t[1] || it, ib = t[2] || it, il = t[3] || ir;
+      return px(it, h) + px(ib, h) >= h || px(il, w) + px(ir, w) >= w;
+    }
+    if (m[1] === "circle" || m[1] === "ellipse") {
+      var radii = args.split(" at ")[0].trim().split(/\s+/);
+      for (var i = 0; i < (m[1] === "circle" ? 1 : 2) && i < radii.length; i++) {
+        if (px(radii[i], i ? h : w) === 0) return true;
+      }
+      return false;
+    }
+    if (m[1] === "xywh") {
+      var xy = args.split(" round ")[0].trim().split(/\s+/);
+      return px(xy[2], w) <= 0 || px(xy[3], h) <= 0;
+    }
+    // polygon: no area at all, because every point lies on one line (within half a pixel).
+    // Never the signed area: a self-crossing shape (a bowtie) sums to 0 and still shows.
+    var pts = args.replace(/^\s*(nonzero|evenodd)\s*,/, "").split(",");
+    var xs = [], ys = [];
+    for (var k = 0; k < pts.length; k++) {
+      var p = pts[k].trim().split(/\s+/);
+      var x = px(p[0], w), y = px(p[1], h);
+      if (isNaN(x) || isNaN(y)) return false;
+      xs.push(x);
+      ys.push(y);
+    }
+    var dx = 0, dy = 0, len = 0;
+    for (var j = 1; j < xs.length && len < 0.5; j++) {  // the first point apart from the first
+      dx = xs[j] - xs[0];
+      dy = ys[j] - ys[0];
+      len = Math.hypot(dx, dy);
+    }
+    if (len < 0.5) return true;  // every point in one place
+    for (var i2 = 1; i2 < xs.length; i2++) {
+      // the point's distance from the line through the first two distinct points
+      if (Math.abs(dx * (ys[i2] - ys[0]) - dy * (xs[i2] - xs[0])) / len >= 0.5) return false;
+    }
+    return true;
+  }
+
+  // a mask that hides everything: every layer sized 0, or only gradients whose every colour
+  // is fully transparent. An image mask (an icon) is taken as showing the control.
+  function masksAll(st) {
+    var img = st.getPropertyValue("mask-image") || st.getPropertyValue("-webkit-mask-image");
+    if (!img || img === "none") return false;
+    var size = st.getPropertyValue("mask-size") || st.getPropertyValue("-webkit-mask-size");
+    if (size) {
+      var layers = size.split(","), zero = 0;
+      for (var i = 0; i < layers.length; i++) {
+        var d = layers[i].trim().split(/\s+/);
+        if (fraction(d[0]) === 0 || (d.length > 1 && fraction(d[1]) === 0)) zero += 1;
+      }
+      if (zero === layers.length) return true;
+    }
+    if (/url\(|image-set\(|element\(|paint\(|cross-fade\(/.test(img) || img.indexOf("gradient(") < 0) {
+      return false;
+    }
+    var colours = img.match(/rgba?\([^)]*\)|transparent/g) || [];
+    var rest = img.replace(/rgba?\([^)]*\)|transparent/g, "");
+    if (!colours.length || /(color|lab|lch|oklab|oklch|hsla?|hwb)\(/.test(rest)) return false;
+    for (var j = 0; j < colours.length; j++) {
+      if (colours[j] === "transparent") continue;
+      var parts = colours[j].replace(/^rgba?\(|\)$/g, "").split(/[\s,\/]+/).filter(Boolean);
+      if (parts.length < 4 || fraction(parts[3]) !== 0) return false;
+    }
+    return true;
+  }
+
+  // this element's own scale on each axis: its transform, its scale property and its zoom
+  function scaleOf(st) {
+    var sx = 1, sy = 1, t = st.transform;
+    var m = t && /^matrix(3d)?\(([^)]*)\)$/.exec(t);
+    if (m) {
+      var v = m[2].split(",").map(parseFloat);
+      if (m[1]) {
+        sx = Math.hypot(v[0], v[1], v[2]);
+        sy = Math.hypot(v[4], v[5], v[6]);
+      } else {
+        sx = Math.hypot(v[0], v[1]);
+        sy = Math.hypot(v[2], v[3]);
+      }
+    }
+    var s = st.scale;
+    if (s && s !== "none") {
+      var p = s.trim().split(/\s+/).map(fraction);
+      sx *= Math.abs(p[0]);
+      sy *= Math.abs(p.length > 1 ? p[1] : p[0]);
+    }
+    var z = parseFloat(st.zoom);
+    if (z > 0) {
+      sx *= z;
+      sy *= z;
+    }
+    return [isNaN(sx) ? 1 : sx, isNaN(sy) ? 1 : sy];
   }
 
   function hostOf(e) {

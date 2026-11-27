@@ -133,6 +133,10 @@ def serve():
     yield make
     for s in servers:
         s.stop()
+    for s in servers:  # a handler that failed (an assert in it, say) fails the test
+        s.thread.join(10)
+        assert not s.thread.is_alive(), "the test server's handler never finished"
+        assert s.error is None, f"the test server failed: {s.error!r}"
 
 
 def _echo(conn):

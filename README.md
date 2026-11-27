@@ -258,9 +258,11 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 - **Live pages:**
   - They run in a separate browser profile that Primer keeps in its own folder; **Forget
     everything** wipes it.
-  - Every request a live page makes is checked, and requests to this computer or your local
-    network are refused.
-  - Downloads, pop-up windows, WebSockets, camera, microphone and location are all refused.
+  - Everything a live page sends goes through a small guard Primer runs. It looks each name up
+    once and connects only to the address it checked, so requests to this computer or your
+    local network are refused, even from a site that answers differently the second time.
+  - WebSockets to public sites work (live chat widgets and tickers). Downloads, pop-up windows,
+    service workers, WebRTC, camera, microphone and location are all refused.
   - The model can't press, type or choose without your OK each time.
   - Primer only ever stops the browser it started itself.
 - **Setup** downloads only from Hugging Face, Kiwix, GitHub and Protomaps (and the mirrors and
@@ -271,7 +273,7 @@ The full guide, including tips, settings and troubleshooting, is in [docs/USING.
 
 ## Status
 
-This is **v0.16**. All of these work:
+This is **v0.17**. All of these work:
 - pages, branching and thinking ahead;
 - pictures and video;
 - grounding in an offline encyclopedia or the web;

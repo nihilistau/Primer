@@ -396,6 +396,7 @@
 .tmw-ev { --tmw-c: var(--accent); cursor: pointer; outline: none; }
 .tmw-pin { fill: var(--surface-1); stroke: var(--tmw-c); stroke-width: 2; }
 .tmw-approx { fill: var(--tmw-c); fill-opacity: .14; stroke: none; }
+.tmw-edge .tmw-pin { stroke-dasharray: 2 2; } /* a millennium-only date beyond the fitted view */
 .tmw-range { fill: var(--tmw-c); fill-opacity: .55; stroke: none; }
 .tmw-ev-label { fill: var(--text-1); font: 400 var(--fs-12)/1 var(--font-ui); }
 .tmw-ev:hover .tmw-pin, .tmw-ev:focus-visible .tmw-pin { fill: var(--tmw-c); }

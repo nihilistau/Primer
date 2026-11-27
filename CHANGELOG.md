@@ -1,5 +1,68 @@
 # Changelog
 
+## v0.17.0: The leftovers (2026-11-27)
+
+Every small item parked since v0.10, cleared, and the live browser's one known gap closed.
+
+### Live pages
+
+- **WebSockets work.** Live chat widgets, live tickers and other pages that keep a connection
+  open now work live, as long as they connect to a public address.
+- **DNS rebinding is closed.** Everything Primer's browser sends goes through a small guarding
+  proxy on this computer. It looks each name up once, checks it, and connects only to the
+  address it checked, so a site can't answer one way to the check and another to the browser.
+  QUIC is off so nothing goes around it. Primer proves the proxy is really in the path at each
+  start, before each new live window and about once a minute while windows are open, and stops
+  live pages if a browser policy overrides it.
+- **Service workers** are blocked in live pages; sites that use them load from the network.
+- **Steadier:** the press's visibility check also catches `filter: opacity(0)`, a fully clipping
+  `clip-path` or `mask`, and a near-zero scale; resize takes the window's lock, and the orphan
+  sweep checks again under the lock before closing; worker set-up and name lookups have their
+  own pools and can't hold up Primer's stop; a Make-a-page retry after its live window has
+  closed uses the page's address; Ask's live address is cleaned like Make a page's; an
+  oversize post gets its 413 at once; a changed `[browser] path` applies at the browser's next
+  start, with no restart of Primer; an address on a port the proxy won't use gets "That address
+  can't be opened live", not a tunnel error.
+
+### The bound book
+
+- The arrow keys move between the bar's buttons when focus is in it; page-turn keys work on the
+  book.
+- The exact page count is announced once it settles.
+- A key pressed while a long book is laid out again is applied from the page you land on.
+- A quick second click in a page's outer third selects a word instead of turning.
+- After a lost pointer capture, only a real drag swallows the click.
+- Focus never drops to nowhere when Next or Previous is switched off, and a click or drag that
+  turns a leaf keeps focus in the book, so the page keys go on working.
+
+### Your book, timelines and diagrams
+
+- A chapter shows only the latest map for each phrase (Warwick Castle gets one plate, not four).
+- A failed status read leaves a book's files alone and marks it failed with a reason.
+- A line indented four spaces or more is code, blank lines inside it included.
+- Dates known only to their millennium no longer squash the timeline, so the 1st millennium AD
+  is readable.
+- The final date list is the model's last one, unless it is a strict subset of an earlier,
+  fuller list.
+- "Unclear I think" no longer counts as a king's number; "Henry I" still does.
+- Diagrams keep arrowheads and re-used shapes when they point inside the same drawing; ids are
+  unique per drawing, so two open books never share one. EPUB diagrams carry `xlink:href` too.
+  Long ids (up to 31 characters) keep their arrowheads and re-used shapes in the book as well.
+
+### The continuing story
+
+- Chapter 1 skips pages another tale used that day.
+- A near-repeat of a character's look is removed from picture prompts, not only an exact one.
+- A chapter's story and its row are written together; a startup sweep removes rows left pointing
+  at nothing. No story is ever deleted by it.
+
+### Under the hood
+
+- New tests for every item, including component tests for the bound book, Timeline and Diagram
+  windows on a small test-only DOM (no new dependencies), and an opt-in real-Chrome test of the
+  proxy.
+- The image-service test of a server dying mid-job waits on state, not time.
+
 ## v0.16.0: Live pages (2026-11-27)
 
 Pages that need scripts or a sign-in can be opened live, in a real browser Primer drives.

@@ -148,6 +148,30 @@ export function clickZone(x, rect, wide) {
   return 0
 }
 
+/* ------------------------------------------------------------------ the toolbar */
+
+/* The toolbar's roving tabindex. `items` are its buttons in order, as [name, disabled]. The one in
+ * the tab order is `at` while it is enabled, else the first enabled one (null when none is). */
+export function roveCurrent(items, at) {
+  const on = (items || []).filter(([, off]) => !off).map(([n]) => n)
+  return on.includes(at) ? at : on.length ? on[0] : null
+}
+
+/* Where a key moves focus in the toolbar from the button `from`: the arrows to the previous or
+ * next enabled button, wrapping round; Home and End to the first and last. null for any other key. */
+export function roveNext(items, from, key) {
+  const on = (items || []).filter(([, off]) => !off).map(([n]) => n)
+  if (!on.length) return null
+  const k = on.indexOf(from)
+  switch (key) {
+    case 'ArrowRight': return on[(k + 1) % on.length]
+    case 'ArrowLeft': return on[k < 0 ? on.length - 1 : (k - 1 + on.length) % on.length]
+    case 'Home': return on[0]
+    case 'End': return on[on.length - 1]
+    default: return null
+  }
+}
+
 /* the first picture on a page, for its thumbnail (only Primer's own media URLs) */
 export function pagePicture(page) {
   for (const it of (page && page.items) || []) {

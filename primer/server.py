@@ -98,6 +98,10 @@ LIVE_PATH = re.compile(r"/v1/live/([^/]+)/(frames|input|nav|resize|close|agent|a
 LIVE_MIN_SIZE, LIVE_MAX_SIZE = 200, 4000
 LIVE_GOAL_CHARS = 1000
 LIVE_INPUT_BYTES = 4096  # an input post, checked on Content-Length before the body is read
+# after an oversize live post's 413 is sent: at most this much of its body is read and dropped,
+# for at most this long, so a client still sending reads the 413 rather than an RST
+LIVE_DRAIN_BYTES = 2 * 1024 * 1024
+LIVE_DRAIN_S = 1.0
 LIVE_TOO_LARGE = "That input is too large"
 MEDIA_NAME = re.compile(r"[0-9a-f]{64}\.(png|webm|wav)")
 MEDIA_TYPES = {".png": "image/png", ".webm": "video/webm", ".wav": "audio/wav"}
@@ -1116,9 +1120,36 @@ def _make_handler(app: App):
                 log.exception("GET %s failed", path)
                 self._json({"error": "internal error"}, 500)
 
+        def _drop_body(self, length: int) -> None:
+            """After a refusal is sent (with Connection: close): end our side (FIN), then read
+            and drop the body briefly, at most LIVE_DRAIN_BYTES for LIVE_DRAIN_S, so a client
+            still sending gets to read the response instead of an RST (closing with unread
+            data makes Windows send one). The client has its answer already; a stalled body
+            holds the thread for LIVE_DRAIN_S at most, never for the whole body."""
+            try:
+                self.wfile.flush()
+                self.connection.shutdown(socket.SHUT_WR)
+            except OSError:
+                return
+            left = min(max(length, 0), LIVE_DRAIN_BYTES)
+            deadline = time.monotonic() + LIVE_DRAIN_S
+            try:
+                while left > 0:
+                    wait = deadline - time.monotonic()
+                    if wait <= 0:
+                        break
+                    self.connection.settimeout(wait)
+                    chunk = self.rfile.read1(min(left, 65536))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
+            except (OSError, ValueError):  # the time is up, or the client closed
+                pass
+
         def _live_too_large(self, path: str) -> bool:
             """Refuse an oversized live post (413) from its Content-Length, before reading it:
-            4 KB for input, MAX_BODY for the rest. The body is drained, not parsed."""
+            4 KB for input, MAX_BODY for the rest. The refusal goes at once, before any of
+            the body is read; then the body is dropped briefly (_drop_body)."""
             if not path.startswith("/v1/live/"):
                 return False
             m = LIVE_PATH.fullmatch(path)
@@ -1129,9 +1160,10 @@ def _make_handler(app: App):
                 return False  # _body() answers a bad Content-Length with 400
             if length <= limit:
                 return False
-            self._drain()  # read and dropped (at most MAX_BODY, 2 s), so Windows sends no RST
             self.close_connection = True
-            self._json({"error": LIVE_TOO_LARGE}, 413)
+            self._send(413, json.dumps({"error": LIVE_TOO_LARGE}).encode("utf-8"),
+                       "application/json", {"Connection": "close"})
+            self._drop_body(length)
             return True
 
         def do_POST(self) -> None:
@@ -1376,12 +1408,19 @@ def _make_handler(app: App):
                     raise _BadRequest(f"source_url: {exc}") from None
             source_page = None
             if body.get("source_live") is not None:  # Make a page from a live page's own text
-                lp = self._live_text(body.get("source_live"))
                 try:
-                    source_url = parse_address(lp["url"]).url
-                except ValueError as exc:
-                    raise _BadRequest(f"source_live: {exc}") from None
-                source_page = {"url": source_url, "title": lp["title"], "text": lp["text"]}
+                    lp = self._live_text(body.get("source_live"))
+                except _HttpError as e:
+                    # its live window has closed (a Retry, say): made from source_url instead
+                    if e.status != 404 or source_url is None:
+                        raise
+                    lp = None
+                if lp is not None:
+                    try:
+                        source_url = parse_address(lp["url"]).url
+                    except ValueError as exc:
+                        raise _BadRequest(f"source_live: {exc}") from None
+                    source_page = {"url": source_url, "title": lp["title"], "text": lp["text"]}
             return OpenRequest(concept=concept, via=via, from_id=from_id, phrase=phrase,
                                depth=depth, regenerate=bool(body.get("regenerate", False)),
                                node_id=node_id, source=source, source_url=source_url,
@@ -1745,7 +1784,11 @@ def _make_handler(app: App):
             text = text.strip()
             if live is not None:  # the live page's text, as the reader's page (same Ask caps)
                 lp = self._live_text(live)
-                page = {"u": lp["url"], "final_url": lp["url"], "title": lp["title"] or lp["url"],
+                try:  # cleaned like Make a page's: absolute, no fragment, nothing to bend a link
+                    url = parse_address(lp["url"]).url
+                except ValueError as exc:
+                    raise _BadRequest(f"live: {exc}") from None
+                page = {"u": url, "final_url": url, "title": lp["title"] or url,
                         "markdown": lp["text"]}
             else:
                 try:

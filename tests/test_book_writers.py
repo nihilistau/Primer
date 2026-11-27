@@ -451,3 +451,22 @@ def test_a_shared_plate_cache_draws_each_map_once(tmp_path):
     with zipfile.ZipFile(tmp_path / "b.epub") as z:
         assert b"Drawn without the world map" in z.read("OEBPS/chapter-0001.xhtml")
     assert b"Drawn without the world map" in (tmp_path / "b.html").read_bytes()
+
+
+def test_epub_uses_carry_xlink_href_for_older_readers(tmp_path):
+    """The EPUB's re-used parts also say xlink:href (with xlink declared), which older reading
+    systems need; the HTML file keeps plain SVG2 href."""
+    plan = make_plan(tmp_path / "media")
+    raw = DRAWING.replace('<text x="100"', '<use href="#arm" x="5"/><text x="100"')
+    plan.chapters[0].diagram["svg"] = clean_svg(raw, prefix="dg1-")[0]
+    write_epub(plan, tmp_path / "media", tmp_path / "book.epub")
+    with zipfile.ZipFile(tmp_path / "book.epub") as z:
+        data = z.read("OEBPS/chapter-0001.xhtml")
+    root = _xml(data)  # still well-formed, with xlink declared
+    uses = list(root.iter("{http://www.w3.org/2000/svg}use"))
+    assert len(uses) == 1
+    assert uses[0].get("href") == "#dg1-arm"
+    assert uses[0].get("{http://www.w3.org/1999/xlink}href") == "#dg1-arm"
+    write_html(plan, tmp_path / "media", tmp_path / "book.html")
+    html = (tmp_path / "book.html").read_text("utf-8")
+    assert '<use href="#dg1-arm"' in html and "xlink" not in html

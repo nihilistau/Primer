@@ -205,15 +205,21 @@ class Browser:
         self._ident: tuple[str, str] | None = None
         self._launched_at: int | None = None
 
-    def command(self) -> list[str]:
+    def command(self, proxy_port: int) -> list[str]:
         return [self.path, "--headless=new", "--remote-debugging-port=0",
                 f"--user-data-dir={self.profile_dir}", "--no-first-run",
                 "--no-default-browser-check",
                 # safety only (Ruling F): requestWindow() would hand the page a scriptable
                 # window, like a pop-up's first document; this is the Chrome 158 feature name
-                "--disable-features=DocumentPictureInPictureAPI"]
+                "--disable-features=DocumentPictureInPictureAPI",
+                # safety only (Ruling F): every connection goes through Primer's guarding proxy
+                # (proxy.py), loopback names included, and nothing goes around it over UDP
+                f"--proxy-server=http://127.0.0.1:{int(proxy_port)}",
+                "--proxy-bypass-list=<-loopback>", "--disable-quic"]
 
-    def start(self) -> Cdp:
+    def start(self, proxy_port: int) -> Cdp:
+        if not isinstance(proxy_port, int) or not 0 < proxy_port < 65536:
+            raise BrowserError("the browser needs the guarding proxy's port")
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         port_file = self.profile_dir / PORT_FILE
         try:
@@ -233,7 +239,7 @@ class Browser:
         self._launched_at = stamp - 2 * (10_000_000 if sys.platform == "win32" else 100) \
             if stamp is not None else None  # a little slack for clock granularity
         try:
-            self.proc = self._popen(self.command(), **kwargs)
+            self.proc = self._popen(self.command(proxy_port), **kwargs)
         except OSError as e:
             raise BrowserError(f"cannot start the browser: {e}") from e
         children.adopt(self.proc, "browser")  # dies with Primer, however Primer ends

@@ -358,6 +358,29 @@ def test_guard_allowlists_elements_and_attributes():
     assert '<rect width="1" height="1"></rect>' in out and '<rect width="2" height="2"></rect>' in out
     assert '<text x="1">ok</text>' in out and out.startswith('<svg xmlns="http://www.w3.org/2000/svg"')
     assert g('<p style="background:url(https://example.org/x)">a</p>') == "<p>a</p>"
+    # a diagram's use is kept only when it names an element of the same svg
+    uses = ('<svg xmlns="http://www.w3.org/2000/svg"><g id="dg1-a"/><use href="#dg1-a" x="2"/>'
+            '<use href="https://example.org/s.svg#dg1-a"/><use href="#dg1-gone"/><use/>'
+            '<use xmlns:xl="http://www.w3.org/1999/xlink" xl:href="#dg1-a"/></svg>')
+    assert g(uses) == ('<svg xmlns="http://www.w3.org/2000/svg"><g id="dg1-a"></g>'
+                       '<use href="#dg1-a" x="2"></use></svg>')
+    assert guard(g(uses))
+    # ids count only on elements the guard keeps, and a use never names a use or holds one
+    dropped = ('<svg xmlns="http://www.w3.org/2000/svg"><foreignObject id="dg1-f"><p>x</p></foreignObject>'
+               '<script id="dg1-s">1</script><g id="dg1-ok"/><use href="#dg1-f"/><use href="#dg1-s"/>'
+               '<use href="#dg1-ok"/></svg>')
+    assert g(dropped) == ('<svg xmlns="http://www.w3.org/2000/svg"><g id="dg1-ok"></g>'
+                          '<use href="#dg1-ok"></use></svg>')
+    chains = ('<svg xmlns="http://www.w3.org/2000/svg"><g id="dg1-a"><rect width="1" height="1"/></g>'
+              '<use id="dg1-u" href="#dg1-a"/><g id="dg1-b"><use href="#dg1-a"/></g>'
+              '<use href="#dg1-u"/><use href="#dg1-b"/><g id="dg1-c"><use href="#dg1-c"/></g></svg>')
+    out = g(chains)
+    assert re.findall(r'<use[^>]*href="([^"]+)"', out) == ["#dg1-a", "#dg1-a"]
+    assert guard(out)
+    # deeper than the guard goes: the element and its id are gone, so a use can't name it
+    deep = ('<svg xmlns="http://www.w3.org/2000/svg">' + "<g>" * 70 + '<rect id="dg1-deep" width="1" height="1"/>'
+            + "</g>" * 70 + '<use href="#dg1-deep"/></svg>')
+    assert "<use" not in g(deep)
     assert g('<P CLASS="x">a</P>') == '<p CLASS="x">a</p>'
     # http(s) only on a@href; img@src only our media
     assert g('<a href="https://example.org/a">a</a>') == '<a href="https://example.org/a">a</a>'

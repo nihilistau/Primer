@@ -215,6 +215,279 @@ def test_books_fail_on_restart(g, tmp_path):
     assert list(books.iterdir()) == []  # ...and left nothing behind
 
 
+def test_a_failed_status_read_keeps_the_files_and_fails_the_book(g, tmp_path, monkeypatch):
+    """The job's last read of the book's status fails: the files are left alone (not taken as
+    "not done" and removed), and a book that isn't done is marked failed with a reason."""
+    import primer.book.service as service
+    from primer.book.service import FAILED, STATUS_UNREAD, BookService
+
+    class Flaky:
+        broken = False
+
+        def __getattr__(self, name):
+            return getattr(g, name)
+
+        def update_book(self, book_id, **kw):
+            g.update_book(book_id, **kw)
+            if kw.get("status") == "done":
+                Flaky.broken = True  # the job's final read fails from here on
+
+        def get_book(self, book_id):
+            if Flaky.broken:
+                raise RuntimeError("database is locked")
+            return g.get_book(book_id)
+
+    def run(svc):
+        bid = svc.create({"kind": "all"}, {}, "", "")
+        end = time.time() + 10
+        while svc._busy is not None and time.time() < end:
+            time.sleep(0.05)
+        assert svc._busy is None
+        return bid, g.get_book(bid)
+
+    page(g, "Trebuchet")
+    # a finished book whose status can't be read afterwards keeps its files and stays done
+    svc = BookService(Flaky(), tmp_path / "v3", lambda: None)
+    books = tmp_path / "v3" / "books"
+    try:
+        bid, b = run(svc)
+        assert (books / f"{bid}.epub").is_file() and (books / f"{bid}.html").is_file()
+        assert b["status"] == "done"
+        # a job that fails, and whose status then can't be read: its file stays, the book fails
+        Flaky.broken = False
+
+        def broken_html(*a, **kw):
+            Flaky.broken = True
+            raise RuntimeError("no")
+
+        monkeypatch.setattr(service, "write_html", broken_html)
+        bid, b = run(svc)
+        assert (books / f"{bid}.epub").is_file()
+        assert b["status"] == "failed" and b["error"] == FAILED
+        # a job that ends without finishing or failing, then can't be read: failed, saying why
+        Flaky.broken = False
+        monkeypatch.setattr(svc, "_job", lambda book_id: setattr(Flaky, "broken", True))
+        bid, b = run(svc)
+        assert b["status"] == "failed" and b["error"] == STATUS_UNREAD
+    finally:
+        svc.shutdown()
+
+
+def test_files_left_by_a_failed_status_read_are_tidied_without_a_restart(g, tmp_path, monkeypatch):
+    """A book whose delete went through has its files go at once, whatever the read says.
+    Otherwise (a delete that failed included) the clean-up waits for the next read that works:
+    a book that isn't done then loses its files and, if it still reads as unfinished, is marked
+    failed with a reason; a done book's files stay."""
+    import primer.book.service as service
+    from primer.book.service import STATUS_UNREAD, BookService
+
+    monkeypatch.setattr(service, "RETRY_UNREAD", 0.05)
+
+    class Flaky:
+        broken = False  # status reads fail
+        locked = False  # writes (update, delete) fail too: a sustained lock
+
+        def __getattr__(self, name):
+            return getattr(g, name)
+
+        def get_book(self, book_id):
+            if Flaky.broken:
+                raise RuntimeError("database is locked")
+            return g.get_book(book_id)
+
+        def update_book(self, book_id, **kw):
+            if Flaky.locked:
+                raise RuntimeError("database is locked")
+            return g.update_book(book_id, **kw)
+
+        def delete_book(self, book_id):
+            if Flaky.locked:
+                raise RuntimeError("database is locked")
+            return g.delete_book(book_id)
+
+    svc = BookService(Flaky(), tmp_path / "v4", lambda: None)
+    books = tmp_path / "v4" / "books"
+    files = lambda bid: [books / f"{bid}.{fmt}" for fmt in ("epub", "html")]  # noqa: E731
+
+    def wait_idle():
+        end = time.time() + 10
+        while svc._busy is not None and time.time() < end:
+            time.sleep(0.02)
+
+    def until(cond, timeout=5.0):
+        end = time.time() + timeout
+        while not cond() and time.time() < end:
+            time.sleep(0.02)
+        return cond()
+
+    try:
+        page(g, "Trebuchet")
+
+        def write(book_id):
+            books.mkdir(parents=True, exist_ok=True)
+            for f in files(book_id):
+                f.write_bytes(b"x")
+
+        # deleted while being made, and then the read fails: its files go now
+        def deleted(book_id):
+            assert svc.delete(book_id) is True
+            write(book_id)
+            Flaky.broken = True
+
+        monkeypatch.setattr(svc, "_job", deleted)
+        bid = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        assert not any(f.exists() for f in files(bid))
+        # a delete that fails under a lock, which also stops the job's read and its marking failed:
+        # the book isn't taken as deleted, so its files wait for a read that works
+        Flaky.broken = False
+
+        def delete_fails(book_id):
+            Flaky.locked = True
+            with pytest.raises(RuntimeError):
+                svc.delete(book_id)
+            write(book_id)
+            Flaky.broken = True
+
+        monkeypatch.setattr(svc, "_job", delete_fails)
+        stuck = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        time.sleep(0.2)
+        assert all(f.exists() for f in files(stuck))
+        assert g.get_book(stuck)["status"] == "queued"  # couldn't be marked failed
+        # the lock lifts: the files go, and the book (still unfinished) is failed, saying why
+        Flaky.broken = Flaky.locked = False
+        assert until(lambda: not any(f.exists() for f in files(stuck)))
+        assert until(lambda: g.get_book(stuck)["status"] == "failed")
+        assert g.get_book(stuck)["error"] == STATUS_UNREAD
+        # a job that ends unfinished and can't be read: its files stay while reads fail...
+        Flaky.broken = False
+
+        def unread(book_id):
+            write(book_id)
+            Flaky.broken = True
+
+        monkeypatch.setattr(svc, "_job", unread)
+        failed = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        time.sleep(0.2)
+        assert all(f.exists() for f in files(failed))
+        # ...and go once a read works again (it reads as failed), with no restart
+        Flaky.broken = False
+        assert until(lambda: not any(f.exists() for f in files(failed)))
+        assert g.get_book(failed)["status"] == "failed"
+        # a book that finished, then couldn't be read: once read again it is done, so it stays
+        def done(book_id):
+            write(book_id)
+            g.update_book(book_id, status="done", epub_size=1, html_size=1)
+            Flaky.broken = True
+
+        monkeypatch.setattr(svc, "_job", done)
+        kept = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        Flaky.broken = False
+        assert until(lambda: not svc._unread)
+        assert all(f.exists() for f in files(kept))
+    finally:
+        Flaky.broken = Flaky.locked = False
+        svc.shutdown()
+
+
+def test_a_stopped_book_never_stays_making_with_no_files(g, tmp_path, monkeypatch):
+    """A delete that fails while the job runs still stops the job: with reads working, the book
+    ends failed with a reason and no files. When marking a book failed fails, the clean-up keeps
+    it and tries again later."""
+    import primer.book.service as service
+    from primer.book.service import STATUS_UNREAD, STOPPED, BookService
+
+    monkeypatch.setattr(service, "RETRY_UNREAD", 0.05)
+
+    class Flaky:
+        reads = True
+        updates = True
+        deletes = True
+
+        def __getattr__(self, name):
+            return getattr(g, name)
+
+        def get_book(self, book_id):
+            if not Flaky.reads:
+                raise RuntimeError("database is locked")
+            return g.get_book(book_id)
+
+        def update_book(self, book_id, **kw):
+            if not Flaky.updates:
+                raise RuntimeError("database is locked")
+            return g.update_book(book_id, **kw)
+
+        def delete_book(self, book_id):
+            if not Flaky.deletes:
+                raise RuntimeError("database is locked")
+            return g.delete_book(book_id)
+
+    svc = BookService(Flaky(), tmp_path / "v5", lambda: None)
+    books = tmp_path / "v5" / "books"
+    files = lambda bid: [books / f"{bid}.{fmt}" for fmt in ("epub", "html")]  # noqa: E731
+
+    def write(book_id):
+        books.mkdir(parents=True, exist_ok=True)
+        for f in files(book_id):
+            f.write_bytes(b"x")
+
+    def wait_idle():
+        end = time.time() + 10
+        while svc._busy is not None and time.time() < end:
+            time.sleep(0.02)
+
+    def until(cond, timeout=5.0):
+        end = time.time() + timeout
+        while not cond() and time.time() < end:
+            time.sleep(0.02)
+        return cond()
+
+    try:
+        page(g, "Trebuchet")
+
+        # M1: the user's delete fails mid-job (reads work); the job stops as asked
+        def delete_fails(book_id):
+            Flaky.deletes = False
+            with pytest.raises(RuntimeError):
+                svc.delete(book_id)
+            Flaky.deletes = True
+            write(book_id)
+            if svc._stopped(book_id):
+                raise service._Stopped()
+
+        monkeypatch.setattr(svc, "_job", delete_fails)
+        bid = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        b = g.get_book(bid)
+        assert b["status"] == "failed" and b["error"] == STOPPED
+        assert not any(f.exists() for f in files(bid))
+
+        # M2: reads fail at the end of the job; when they work again, writes still fail, so the
+        # book can't be marked failed yet: it stays waiting, and is failed once writes work
+        def unread(book_id):
+            write(book_id)
+            Flaky.reads = Flaky.updates = False
+
+        monkeypatch.setattr(svc, "_job", unread)
+        stuck = svc.create({"kind": "all"}, {}, "", "")
+        wait_idle()
+        Flaky.reads = True
+        assert until(lambda: not any(f.exists() for f in files(stuck)))
+        time.sleep(0.2)  # several more tries while writes still fail
+        assert stuck in svc._unread
+        assert g.get_book(stuck)["status"] == "queued"
+        Flaky.updates = True
+        assert until(lambda: g.get_book(stuck)["status"] == "failed")
+        assert g.get_book(stuck)["error"] == STATUS_UNREAD
+        assert until(lambda: stuck not in svc._unread)
+    finally:
+        Flaky.reads = Flaky.updates = Flaky.deletes = True
+        svc.shutdown()
+
+
 def test_deleting_a_book_being_made_stops_it(client, app_parts, g, monkeypatch):
     import primer.book.service as service
 

@@ -102,6 +102,28 @@ def _inline(text: str, anchor: str, numbers: Container[int]) -> str:
     return "".join(out)
 
 
+def _indent(line: str) -> int:
+    """The line's leading whitespace in columns, a tab reaching the next multiple of 4."""
+    width = 0
+    for ch in line:
+        if ch == " ":
+            width += 1
+        elif ch == "\t":
+            width += 4 - width % 4
+        else:
+            break
+    return width
+
+
+def _dedent4(line: str) -> str:
+    """The line without its first 4 columns of indent (a code line as written)."""
+    width, i = 0, 0
+    while i < len(line) and width < 4 and line[i] in " \t":
+        width += 1 if line[i] == " " else 4 - width % 4
+        i += 1
+    return line[i:]
+
+
 def _clip(line: str) -> str:
     return line if len(line) <= MAX_LINE else line[:MAX_LINE] + "…"
 
@@ -117,7 +139,7 @@ def render(md: str, *, anchor: str, n_sources: int, numbers: Iterable[int] | Non
         cited = range(1, max(0, min(int(n_sources), MAX_SOURCES_N)) + 1)
     lines = _BAD_XML.sub("", str(md or "")).replace("\r\n", "\n").replace("\r", "\n").split("\n")
     first = next((i for i, line in enumerate(lines) if line.strip()), None)
-    if first is not None and re.match(r"#[ \t]", lines[first].lstrip()):
+    if first is not None and _indent(lines[first]) < 4 and re.match(r"#[ \t]", lines[first].lstrip()):
         lines = lines[first + 1:]
 
     blocks: list[str] = []
@@ -125,6 +147,14 @@ def render(md: str, *, anchor: str, n_sources: int, numbers: Iterable[int] | Non
     items: list[str] = []
     list_tag = ""
     fenced: list[str] | None = None
+    code: list[str] | None = None  # lines indented 4 or more spaces, after a blank or a block
+    code_blanks = 0  # blank lines met inside a code block, kept if more code follows
+
+    def end_code():
+        nonlocal code, code_blanks
+        if code:
+            blocks.append("<p>" + "<br/>".join(escape(x) for x in code) + "</p>")
+        code, code_blanks = None, 0
 
     def end_para():
         if para:
@@ -148,6 +178,22 @@ def render(md: str, *, anchor: str, n_sources: int, numbers: Iterable[int] | Non
             else:
                 fenced.append(line)
             continue
+        # indented 4 or more spaces: code, never a heading, list or fence (inside a list it is
+        # the list's own: a nested item or a continued one, as before)
+        if code is not None and not line.strip():  # a blank inside code: held, not an end
+            code_blanks += 1
+            continue
+        if line.strip() and _indent(line) >= 4 and not items:
+            if code is not None:
+                code.extend([""] * code_blanks)
+                code_blanks = 0
+                code.append(_dedent4(line))
+            elif para:  # a continued paragraph
+                para.append(line.strip())
+            else:
+                code = [_dedent4(line)]
+            continue
+        end_code()
         if _FENCE.match(line):
             end_para()
             end_list()
@@ -183,6 +229,7 @@ def render(md: str, *, anchor: str, n_sources: int, numbers: Iterable[int] | Non
         para.append((q.group(1) if q else line).strip())
     if fenced:
         blocks.append("<p>" + "<br/>".join(escape(x) for x in fenced) + "</p>")
+    end_code()
     end_para()
     end_list()
     return "\n".join(blocks)

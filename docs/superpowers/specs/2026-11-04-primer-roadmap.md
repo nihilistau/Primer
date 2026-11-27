@@ -115,6 +115,12 @@ real text, flowed into fixed page sizes in the browser from Phase 13's safe book
 Every small item parked in Phases 11 to 16, gathered into one phase as the user asked
 (2026-11-27). Each comes from that phase's notes.
 
+**Done in v0.17.0 (2026-11-27).** Design:
+[2026-11-27-primer-phase17-leftovers-design.md](2026-11-27-primer-phase17-leftovers-design.md);
+rulings and live run: [../notes/2026-11-27-phase17-rulings.md](../notes/2026-11-27-phase17-rulings.md).
+The DNS-rebinding gap is closed by a guarding proxy, and WebSockets work in live pages. The few
+minor items still open after this phase are listed in those notes.
+
 - **The bound book (Phase 16):**
   - The live announcement can still say "of about N" after the count is exact.
   - The bar's toolbar has no arrow-key movement between its buttons.

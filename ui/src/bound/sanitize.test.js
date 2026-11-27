@@ -40,6 +40,24 @@ describe('sanitize keeps the builders\' HTML', () => {
   })
 })
 
+describe('a book diagram keeps long ids', () => {
+  it('keeps an id of 31 characters with its marker and its use (the server writes dg{i}-<id>)', () => {
+    const id = 'a_very_long_marker_name_of_31ch'
+    const target = 'a_very_long_marker_name_of_31gg'
+    const svg = '<figure class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700">' +
+      `<defs><marker id="dg12-${id}"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>` +
+      `<line x1="0" y1="0" x2="1" y2="1" marker-end="url(#dg12-${id})"/>` +
+      `<g id="dg12-${target}"><rect width="1" height="1"/></g><use href="#dg12-${target}"/>` +
+      '<text>a</text></svg></figure>'
+    const out = sanitize(svg)
+    const prefix = out.match(/id="(u\d+-)dg12-/)[1]
+    expect(out).toContain(`<marker id="${prefix}dg12-${id}">`)
+    expect(out).toContain(`marker-end="url(#${prefix}dg12-${id})"`)
+    expect(out).toContain(`<g id="${prefix}dg12-${target}">`)
+    expect(out).toContain(`href="#${prefix}dg12-${target}"`)
+  })
+})
+
 describe('a map plate keeps its pins', () => {
   // path data of about `kb` kilobytes, as plate.py writes land and borders
   const pathData = (kb, seed) => {

@@ -59,6 +59,7 @@ def build_app(tier: Tier, var_dir: Path, ui_dir: Path, tiers_dir: Path,
     graph.fail_unfinished_maps("Primer restarted")
     graph.fail_unfinished_timelines("Primer restarted")
     graph.fail_unfinished_stories("Primer restarted")
+    graph.sweep_orphan_chapters()  # story/row halves an older version's crash left behind
     graph.fail_unfinished_diagrams("Primer restarted")
     graph.fail_unfinished_books("Primer restarted")
     graph.clear_unfinished_drafts()

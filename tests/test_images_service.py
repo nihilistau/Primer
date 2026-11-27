@@ -316,7 +316,10 @@ def test_server_dies_midjob_fails_and_next_job_relaunches(env):
     first.proc.kill()
     job = _wait_status(svc, m.id, "failed", "done", "cancelled")
     assert job["status"] == "failed" and "sd-server stopped while generating" in job["error"]
-    assert env.gate.state()["holder"] is None
+    # the job is marked failed before its GPU turn is given up and the dead server is
+    # stopped: wait on that state, never on time
+    assert _until(lambda: env.gate.state()["holder"] is None), env.gate.state()
+    assert _until(lambda: first.proc is None or first.proc.poll() is not None)
     m2 = svc.create(env.node.id, "trebuchet", "again", prompt="again", overrides={"steps": 1})
     assert _wait_status(svc, m2.id, "done", "failed")["status"] == "done"
     assert len(env.launcher.launches) == 2
@@ -1016,3 +1019,58 @@ def test_scene_pictures_are_storybook_and_the_look_is_not_repeated(env):
     assert "Excerpt from the page" in page_user
     for mid in (m.id, page.id):
         _wait_status(svc, mid, "done", "failed")
+
+
+def test_near_repeats_of_the_look_are_removed():
+    """A look repeated in another word order or lightly reworded is dropped (word-set Jaccard
+    of 0.8 or more); a different look, or a short phrase inside the look, stays."""
+    from primer.images.service import _without_look, look_overlap
+    look = "a tall girl of sixteen with a long brown braid, a leather apron and a brass notebook"
+    prefix = f"Wren, female: {look}; Pip: a small grey mouse in a blue waistcoat"
+    assert look_overlap(look, look) == 1.0
+    reordered = "a brass notebook, a leather apron and a long brown braid, a tall girl of sixteen with"
+    assert look_overlap(look, reordered) == 1.0
+    reworded = "a tall girl of sixteen with a long brown braid, a leather smock and a brass notebook"
+    assert look_overlap(look, reworded) >= 0.8
+    other = "a short boy of nine with a red cap, a woollen coat and a tin whistle"
+    assert look_overlap(look, other) < 0.8
+    for repeat in (reordered, reworded):
+        assert _without_look(prefix, f"{repeat}, climbing a clock tower at dusk") \
+            == "climbing a clock tower at dusk"
+        assert _without_look(prefix, f"climbing a clock tower at dusk, {repeat}") \
+            == "climbing a clock tower at dusk"
+    keep = f"{other}, climbing a clock tower at dusk"
+    assert _without_look(prefix, keep) == keep
+    scene = "a girl with a braid climbing a clock tower at dusk"
+    assert _without_look(prefix, scene) == scene
+
+
+def test_the_strip_removes_only_the_repeat():
+    """The near-repeat strip takes the repeat and nothing beside it: words next to it stay, even
+    ones that are in the look's word set; an edge word that is the look reworded goes."""
+    from primer.images.service import _without_look
+    pip = "Pip: small grey mouse in a blue coat"
+    assert _without_look(pip, "Pip the small grey mouse in a blue coat nibbles cheese")         == "Pip the nibbles cheese"
+    assert _without_look(pip, "Pip the small grey mouse in a blue coat nibbles") == "Pip the nibbles"
+    wren = "Wren, female: tall girl of sixteen with a long brown braid and a leather apron"
+    look = "tall girl of sixteen with a long brown braid and a leather apron"
+    reordered = "a leather apron and a long brown braid with sixteen of girl tall"
+    # a reordered repeat, with look words next to it kept
+    assert _without_look(wren, f"{reordered} and long brown boots, climbing")         == "and long brown boots, climbing"
+    assert _without_look(wren, f"climbing, {reordered} a lantern in hand")         == "climbing, a lantern in hand"
+    # an interior word reworded
+    assert _without_look(wren, "tall girl of sixteen with a long brown braid and a leather smock, "
+                         "climbing a tower") == "climbing a tower"
+    # an edge word reworded, at each end
+    assert _without_look(wren, "tall girl of sixteen with a long brown braid and a leather "
+                         "smock, climbing a tower") == "climbing a tower"
+    assert _without_look(wren, "climbing a tower, slender girl of sixteen with a long brown braid "
+                         "and a leather apron") == "climbing a tower"
+    assert _without_look(wren, "tall girl of sixteen with a long brown braid and a leather apron "
+                         "pedlar, climbing") == "pedlar, climbing"  # the repeat is whole: nothing beside it goes
+    # scene words that share look words but are not a repeat stay whole
+    for scene in ("a girl with a long braid climbing a tall tower of brown brick",
+                  "a leather apron hangs on the wall beside a brown braid of rope",
+                  "a tall girl of sixteen climbs"):
+        assert _without_look(wren, scene) == scene
+    assert look in wren

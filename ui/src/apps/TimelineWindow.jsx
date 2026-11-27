@@ -76,7 +76,8 @@ export default function TimelineWindow({ windowId, timelineId = '', subject = ''
 
   const fitted = useMemo(() => (width ? axis(events, width) : null), [events, width])
   const ax = fitted && range ? zoom({ ...range, width }, 1) : fitted
-  const rows = useMemo(() => layout(events, ax), [events, ax && ax.min, ax && ax.max, ax && ax.width])  // eslint-disable-line react-hooks/exhaustive-deps
+  // as fitted, a millennium-only date outside the finer events sits at the edge of the view
+  const rows = useMemo(() => layout(events, ax, { edge: !range }), [events, ax && ax.min, ax && ax.max, ax && ax.width, !range])  // eslint-disable-line react-hooks/exhaustive-deps
   const colours = useMemo(() => (showAll ? pageColours(events) : null), [showAll, events])
   const key = useMemo(() => (showAll ? legend(events) : []), [showAll, events])
 
@@ -212,9 +213,10 @@ export default function TimelineWindow({ windowId, timelineId = '', subject = ''
               const c = colours ? ` tmw-c${colours.get(ev.node_id) || 0}` : ''
               const x0 = p.span ? Math.max(0, p.span.x0) : 0, x1 = p.span ? Math.min(ax.width, p.span.x1) : 0
               const where = showAll && ev.page_title ? ` · ${ev.page_title}` : ''
+              const off = p.edge === 'left' ? ', before this view' : p.edge === 'right' ? ', after this view' : ''
               return (
-                <g key={p.index} className={'tmw-ev' + c} role="button" tabIndex={0}
-                   aria-label={`${ev.label}, ${date}${where}. Open a page about it`}
+                <g key={p.index} className={'tmw-ev' + c + (p.edge ? ' tmw-edge' : '')} role="button" tabIndex={0}
+                   aria-label={`${ev.label}, ${date}${off}${where}. Open a page about it`}
                    onClick={(e) => openEvent(ev, e.shiftKey || e.ctrlKey || e.metaKey)}
                    onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); openEvent(ev, true) } }}
                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEvent(ev, e.shiftKey || e.ctrlKey || e.metaKey) } }}>

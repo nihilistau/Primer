@@ -11,7 +11,7 @@
  *   backface-visibility hidden, drawn as STRIPS strips that bend more toward the free edge, with a
  *   fold gradient and a cast shadow (turn.js). With reduced motion, spreads cross-fade instead.
  * - Only the open spread (and, mid-turn, the leaf and the spread beneath) is in the DOM. */
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../api.js'
 import * as wm from '../windowManager.js'
 import { openBrowser } from '../openBrowser.js'
@@ -24,7 +24,8 @@ import * as T from './turn.js'
 import { createTurnSound } from './sound.js'
 import {
   PAPER_KEY, SOUND_KEY, aboutTotal, anchorPage, clickZone, linkEvent, announcement, chapterList, chapterSpread, isWide, pageLabel, pageMetrics,
-  pagePicture, placeKey, readPaper, readPlace, readSound, routeLink, sides, spreadChapter, storage, writePlace, writePref,
+  pagePicture, placeKey, readPaper, readPlace, readSound, roveCurrent, roveNext, routeLink, sides, spreadChapter, storage,
+  writePlace, writePref,
 } from './view.js'
 import './bound.css'
 
@@ -34,6 +35,8 @@ export const OPEN_IN_PRIMER = 'Open this page in Primer'
 
 const CLOSED_TILT = { x: 24, z: -6, scale: 0.12 } // the closed book lies angled on the desk
 const BAR_H = 52
+const PAGE_KEYS = new Set(['ArrowRight', 'ArrowLeft', 'Home', 'End', 'PageDown', 'PageUp'])
+const SELECT_MS = 400 // a second click this soon after a click turned a leaf selects a word instead
 
 const reducedMotion = () => {
   try { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) } catch { return false }
@@ -181,7 +184,14 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
   tsRef.current = ts
   const pending = useRef(null)                  // a pointer down on a page edge
   const dragged = useRef(0)                     // when the last drag ended: its click is not a click
+  const dragGone = useRef(null)                 // {id, t}: a drag let go by a lost capture, its pointerup still to come
+  const queued = useRef([])                     // page keys pressed while a goal is landing, applied from where it lands
+  const turnedAt = useRef(0)                    // when the last click turned a leaf
+  const selAt = useRef(null)                    // {t, x, y}: the last click that turned, or that a double-click kept as selection
+  const selecting = useRef(false)               // this double-click selects a word, it is not a turn
+  const [barAt, setBarAt] = useState('label')   // the toolbar button in the tab order (a roving tabindex)
   const focusAfter = useRef(false)
+  const focusIn = useRef(null)                  // what in the book last took focus, until focus leaves the book
   const sound = useRef(null)
   if (!sound.current) sound.current = createTurnSound({ enabled: soundOn })
 
@@ -202,6 +212,7 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
       goal.current = at ? { block: at.blockIndex } : saved && saved.block < blocks.length ? { block: saved.block } : null
       place.current = null
       landing.current = null
+      queued.current = []
       setTs(T.idle(0))
       setData({ blocks, chapters, title: (d && d.title) || title || 'Untitled', rebuilt: !!(d && d.rebuilt) })
     }).catch((e) => { if (alive && !(e && e.name === 'AbortError')) setErr(bookErrorText(e)) })
@@ -219,6 +230,29 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     return () => mq.removeEventListener('change', on)
   }, [])
   useEffect(() => { try { rootRef.current && rootRef.current.focus({ preventScroll: true }) } catch { /* not focusable yet */ } }, [])
+
+  // A turn (or a cross-fade) can remount the page that holds focus, which drops focus to the body,
+  // and the page keys live on the book. After each commit, if the element focused in the book was
+  // removed and nothing else took focus, focus goes to the new page on the same side (when a page
+  // held it) or to the book itself.
+  const onFocusIn = (e) => { focusIn.current = e.target }
+  const onFocusOut = (e) => {
+    const el = e.target, root = rootRef.current
+    if (root && e.relatedTarget && root.contains(e.relatedTarget)) return
+    // still in the document a moment later: the reader moved focus out of the book, so let it go
+    // (a removed element is put back by the effect below)
+    Promise.resolve().then(() => { if (focusIn.current === el && el.isConnected) focusIn.current = null })
+  }
+  useLayoutEffect(() => {
+    const was = focusIn.current, root = rootRef.current
+    if (!was || !root || was.isConnected || typeof document === 'undefined') return
+    const ae = document.activeElement
+    if (ae && ae !== document.body && ae !== document.documentElement) return // focus went somewhere on purpose
+    focusIn.current = null
+    const side = was.getAttribute && was.getAttribute('role') === 'region' ? (was.classList.contains('bb-left') ? 'left' : 'right') : ''
+    const pg = side ? (root.querySelector(`.bb-static .bb-${side}[role=region]`) || root.querySelector('.bb-static [role=region]')) : null
+    try { (pg || root).focus({ preventScroll: true }) } catch { /* fine */ }
+  })
 
   // the stage's size: at once, then debounced
   useEffect(() => {
@@ -311,18 +345,26 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
   // open at the goal once it is laid out
   useEffect(() => {
     const g = goal.current
-    if (!g || !lay.pages.length) return
+    if (!g) { flushKeys(); return } // keys still waiting for pages not laid out yet
+    if (!lay.pages.length) return
     const page = g.anchor ? anchorPage(lay.pages, g.anchor) : locate(lay.pages, g.block)
     if (page >= 0) {
       goal.current = null
       // save the place once the jump has landed, not the spread before it. The target is captured
-      // here: the updater runs later, after the place effect may already have cleared `landing`
+      // here: the updater runs later, after the place effect may already have cleared `landing`.
+      // Page keys pressed while it was landing are applied from where it lands, so none is undone
       const to = spreadOf(list, page), n = list.length
-      landing.current = to
-      setTs((s) => T.jump(s, to, n))
+      const keys = queued.current
+      const on = { list, pages: lay.pages, done: lay.done }
+      const [fin, rest] = replay(T.jump(tsRef.current, to, n), keys, on)
+      const applied = keys.slice(0, keys.length - rest.length)
+      queued.current = rest
+      landing.current = T.finish(fin).at
+      if (applied.some((k) => k.startsWith('Arrow')) && landing.current !== to) sound.current.play()
+      setTs((s) => replay(T.jump(s, to, n), applied, on)[0])
       setFade((f) => f + 1)
-    } else if (lay.done) goal.current = null
-  }, [lay, list])
+    } else if (lay.done) { goal.current = null; flushKeys() }
+  }, [lay, list]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // remember the place, and say where we are
   const settled = !ts.turning
@@ -337,9 +379,17 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     const page = lay.pages[first]
     const block = page && page.items.length ? page.items[0].blockIndex : null
     if (block !== null) { place.current = block; writePlace(store, key, block) }
-  }, [settled, at, spread, lay.pages, store, key])
+  // ts.at too: a landing on the spread the clamped `at` already shows changes nothing else, and
+  // would otherwise never resolve (no place saved, nothing said until the reader moves)
+  }, [settled, at, ts.at, spread, lay.pages, store, key])
   const spoken = spread ? announcement(pageLabel(spread, total, lay.done), chapterOf(spread)) : ''
-  useEffect(() => { if (settled && spoken) setLive(spoken) }, [settled, at]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Nothing is said while a goal is landing (a re-layout, a remembered place): the spread on screen
+  // is the one before the jump, clamped to the pages laid out so far. The landed one is said when
+  // it settles.
+  const landingNow = () => !!goal.current || (landing.current !== null && ts.at !== landing.current)
+  useEffect(() => { if (settled && spoken && !landingNow()) setLive(spoken) }, [settled, at, ts.at]) // eslint-disable-line react-hooks/exhaustive-deps
+  // and once more when the count settles: "of about 40" becomes "of 42" (a turn in flight says it as it lands)
+  useEffect(() => { if (lay.done && settled && spoken && !landingNow()) setLive(spoken) }, [lay.done]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // keyboard turns move focus to the new page
   useEffect(() => {
@@ -379,6 +429,52 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     if (reduced) { setTs((s) => T.finish(T.step({ ...s, at: Math.min(s.at, n - 1) }, dir, n))); setFade((f) => f + 1) }
     else setTs((s) => T.step({ ...s, at: Math.min(s.at, n - 1) }, dir, n))
   }, [reduced])
+  // the state after a page key from state s, over the spreads and pages in `on`
+  const keyState = (s, k, on) => {
+    const n = on.list.length
+    if (!n) return s
+    const cur = { ...s, at: Math.min(s.at, n - 1) }
+    switch (k) {
+      case 'ArrowRight': case 'ArrowLeft': {
+        const next = T.step(cur, k === 'ArrowRight' ? 1 : -1, n)
+        return reduced ? T.finish(next) : next
+      }
+      case 'Home': return T.jump(cur, 0, n)
+      case 'End': return T.jump(cur, n - 1, n)
+      case 'PageDown': case 'PageUp': {
+        const to = chapterSpread(on.list, on.pages, T.finish(cur).at, k === 'PageDown' ? 1 : -1)
+        return to < 0 ? cur : T.jump(cur, to, n)
+      }
+      default: return s
+    }
+  }
+  // queued page keys applied in order: [state, the keys that wait]. While the layout runs, a key
+  // going forward past what is laid out (→ at its end, End, PgDn with no next chapter yet) waits
+  const replay = (s, keys, on) => {
+    let st = s
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i]
+      const next = keyState(st, k, on)
+      const forward = k === 'ArrowRight' || k === 'End' || k === 'PageDown'
+      if (!on.done && forward && (k === 'End' || T.finish(next).at === T.finish(st).at)) return [st, keys.slice(i)]
+      st = next
+    }
+    return [st, []]
+  }
+  // apply what can be applied of the queued keys, from where the book is now
+  const flushKeys = () => {
+    const keys = queued.current
+    if (!keys.length) return
+    const on = { list: listRef.current, pages: layRef.current.pages, done: layRef.current.done }
+    const [fin, rest] = replay(tsRef.current, keys, on)
+    if (rest.length === keys.length) return
+    const applied = keys.slice(0, keys.length - rest.length)
+    queued.current = rest
+    landing.current = T.finish(fin).at
+    if (applied.some((k) => k.startsWith('Arrow'))) sound.current.play()
+    setTs((s) => replay(s, applied, on)[0])
+    if (reduced || applied.some((k) => !k.startsWith('Arrow'))) setFade((f) => f + 1)
+  }
   const jumpTo = (spreadIndex) => {
     if (spreadIndex < 0) return
     landing.current = null
@@ -428,6 +524,16 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     if (e.altKey || e.ctrlKey || e.metaKey) return
     if (e.key === 'Escape') { if (pop || ask) { setPop(''); setAsk(''); e.preventDefault() } return }
     if (e.target.closest && e.target.closest('input, textarea, select, .bb-pop, .bb-ask')) return
+    // in the toolbar the arrows, Home and End move between its buttons; page keys work only on the book
+    if (e.target.closest && e.target.closest('.bb-bar')) { barKey(e); return }
+    // while the book is laid out again (or a goal is otherwise landing) a page key waits, and is
+    // applied from where the reader lands, so the landing never undoes it
+    if (PAGE_KEYS.has(e.key) && (goal.current || queued.current.length)) {
+      queued.current = [...queued.current, e.key]
+      e.preventDefault()
+      focusAfter.current = true
+      return
+    }
     const n = listRef.current.length
     switch (e.key) {
       case 'ArrowRight': turn(1); break
@@ -446,17 +552,62 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     focusAfter.current = true
   }
 
+  // the toolbar's buttons, in order, as [name, disabled], for its roving tabindex
+  const barItems = [['prev', !spread || at <= 0], ['label', !spread], ['next', !spread || at >= count - 1],
+    ['thumbs', !spread], ['night', false], ['day', false], ['sound', false]]
+  const rove = roveCurrent(barItems, barAt)
+  const roving = (name) => ({ 'data-rove': name, tabIndex: name === rove ? 0 : -1, onFocus: () => setBarAt(name) })
+  // A focused Next or Previous that becomes disabled (at the last spread or the cover) would drop
+  // focus to the page body: it moves to the other one, else to the bar's stop, else to the book.
+  const barOff = barItems.some(([n, off]) => n === barAt && off)
+  useEffect(() => {
+    if (!barOff || typeof document === 'undefined' || !rootRef.current) return
+    const was = rootRef.current.querySelector(`.bb-bar [data-rove="${barAt}"]`)
+    const ae = document.activeElement
+    if (ae && ae !== document.body && ae !== was) return // focus is somewhere else on purpose
+    const other = barAt === 'next' ? 'prev' : barAt === 'prev' ? 'next' : null
+    const to = other && barItems.some(([n, off]) => n === other && !off) ? other : rove
+    const el = to && rootRef.current.querySelector(`.bb-bar [data-rove="${to}"]`)
+    try { if (el) { setBarAt(to); el.focus() } else rootRef.current.focus({ preventScroll: true }) } catch { /* fine */ }
+  }, [barOff, barAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  const barKey = (e) => {
+    const from = e.target.closest('[data-rove]')
+    const to = roveNext(barItems, from ? from.getAttribute('data-rove') : rove, e.key)
+    if (!to) return
+    e.preventDefault()
+    setBarAt(to)
+    const el = rootRef.current && rootRef.current.querySelector(`.bb-bar [data-rove="${to}"]`)
+    try { if (el) el.focus() } catch { /* fine */ }
+  }
+
+  // A press soon after a click that turned a leaf, near where it was: the second click of a
+  // double-click. Each click kept as selection opens the window again, so a triple-click (or more)
+  // stays selection too.
+  const quickSecond = (e) => {
+    const c = selAt.current
+    return !!(c && Date.now() - c.t < SELECT_MS && Math.abs(e.clientX - c.x) <= 8 && Math.abs(e.clientY - c.y) <= 8)
+  }
   const onPointerDown = (e) => {
     dragged.current = 0
-    if (e.button !== 0 || reduced || closedNow || !bookRef.current) return
+    dragGone.current = null
+    if (e.button !== 0) return
+    // The second click of a double-click is decided here, from the pointer: in the drag band the
+    // pointerdown below is prevented, which suppresses the mousedown, so onMouseDown never sees it.
+    // It is left alone, so the browser selects the word, and its click does not turn.
+    selecting.current = quickSecond(e)
+    if (selecting.current || reduced || closedNow || !bookRef.current) return
     if (e.target.closest('a, button, input, .bb-pop')) return
     const r = bookRef.current.getBoundingClientRect()
     const pw = lay.wide ? r.width / 2 : r.width
     const band = pw * 0.16
     const dir = e.clientX > r.right - band ? 1 : e.clientX < r.left + band ? -1 : 0
     if (!dir) return
+    // preventing the press suppresses the mousedown that would focus the page: focus the book
+    // here instead, so its page keys work after the turn (the narrow spine is in this band)
+    const root = rootRef.current
+    if (root && !root.contains(document.activeElement)) { try { root.focus({ preventScroll: true }) } catch { /* fine */ } }
     e.preventDefault()
-    pending.current = { dir, x0: e.clientX, spine: lay.wide ? r.left + pw : r.left, pw, started: false, narrowBack: !lay.wide && dir < 0 }
+    pending.current = { dir, x0: e.clientX, spine: lay.wide ? r.left + pw : r.left, pw, started: false, narrowBack: !lay.wide && dir < 0, id: e.pointerId }
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* fine */ }
   }
   const onPointerMove = (e) => {
@@ -472,39 +623,70 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
     const p = d.narrowBack ? (e.clientX - d.x0) / (d.pw * 0.9) : T.dragProgress(e.clientX, d.spine, d.pw, d.dir)
     setTs((s) => T.drag(s, p))
   }
-  const onPointerUp = () => {
+  // The leaf is let go on a pointerup, or when the capture is lost, the pointer cancelled or the
+  // window blurred. Only a real drag's own pointerup suppresses the click after it: a drag let go
+  // any other way leaves the next click alone, unless that drag's pointerup still comes.
+  const letGo = (real, pointerId) => {
     const d = pending.current
+    if (!d) {
+      // a blur or lost capture after the drag was let go changes nothing: its pointerup may still come
+      if (!real) return
+      const g = dragGone.current
+      dragGone.current = null // a real pointerup ends it either way
+      if (g && pointerId === g.id && Date.now() - g.t < 1000) dragged.current = Date.now()
+      return
+    }
     pending.current = null
-    if (!d || !d.started) return
-    dragged.current = Date.now()
+    if (!d.started) return
+    if (real) dragged.current = Date.now()
+    else dragGone.current = d.id == null ? null : { id: d.id, t: Date.now() }
     const t = tsRef.current.turning
     if (t && t.target === null && t.progress > 0.5) sound.current.play()
     setTs((s) => T.release(s))
   }
+  const onPointerUp = (e) => letGo(true, e.pointerId)
+  const onPointerLost = (e) => letGo(false, e.pointerId)
   const zoneOf = (e) => (bookRef.current ? clickZone(e.clientX, bookRef.current.getBoundingClientRect(), lay.wide) : 0)
   const onClick = (e) => {
     if (dragged.current && Date.now() - dragged.current < 400) { dragged.current = 0; return }
+    dragged.current = 0
     if (linkEvent(e, follow)) return
     if (e.target.closest('button, input, .bb-pop, .bb-ask') || !bookRef.current) return
-    if (closedNow) { turn(at === 0 ? 1 : -1); return }
-    // a selection made by dragging over the text is not a turn; a fast second click is (see onMouseDown)
+    const prev = selAt.current
+    turnedAt.current = 0
+    selAt.current = null
+    const here = () => ({ t: Date.now(), x: e.clientX, y: e.clientY })
+    const turned = () => { turnedAt.current = Date.now(); selAt.current = here() }
+    // a double- or triple-click that selects is not a turn (see onPointerDown and onMouseDown), nor
+    // is any click after the first within SELECT_MS of the last turn or selection click
+    const select = e.detail > 1 && (selecting.current || (prev && Date.now() - prev.t < SELECT_MS))
+    selecting.current = false
+    if (select) { selAt.current = here(); return }
+    if (closedNow) { turned(); turn(at === 0 ? 1 : -1); return }
+    // a selection made by dragging over the text is not a turn; a slower second click is
     if (e.detail < 2) { try { if (String(window.getSelection && window.getSelection()).length) return } catch { /* none */ } }
     const dir = zoneOf(e)
-    if (dir) turn(dir) // a turn in flight finishes first, so each click is one leaf
+    if (dir) { turned(); turn(dir) } // a turn in flight finishes first, so each click is one leaf
   }
-  // a fast second click in the outer third turns again rather than selecting a word
+  // A second click in the outer third within SELECT_MS of a click that turned a leaf (or after a
+  // click that did not turn) selects a word, as a double-click does anywhere. A slower one, still
+  // counted as a double-click by the system, turns again: its word selection is prevented.
   const onMouseDown = (e) => {
     if (e.button === 1 && e.target.closest && e.target.closest('a')) { e.preventDefault(); return }
-    if (e.detail > 1 && e.button === 0 && !e.target.closest('a, button, input, .bb-pop, .bb-ask') && zoneOf(e)) e.preventDefault()
+    if (e.button !== 0) return
+    if (e.detail < 2 || selecting.current) return
+    if (e.target.closest('a, button, input, .bb-pop, .bb-ask') || !zoneOf(e)) return
+    if (turnedAt.current && Date.now() - turnedAt.current >= SELECT_MS) e.preventDefault()
+    else selecting.current = true
   }
   const onAuxClick = (e) => { linkEvent(e, follow) }
   // the window losing focus mid-drag lets the leaf go the normal way (release), never left hanging
   const releaseRef = useRef(null)
-  releaseRef.current = onPointerUp
+  releaseRef.current = () => letGo(false, null)
   useEffect(() => {
-    const letGo = () => releaseRef.current && releaseRef.current()
-    window.addEventListener('blur', letGo)
-    return () => window.removeEventListener('blur', letGo)
+    const blur = () => releaseRef.current && releaseRef.current()
+    window.addEventListener('blur', blur)
+    return () => window.removeEventListener('blur', blur)
   }, [])
   const onDragStart = (e) => { if (e.target.closest && e.target.closest('a')) e.preventDefault() }
 
@@ -632,12 +814,12 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
 
   const busy = !err && (!data || !book)
   return (
-    <div className={`bb bb-${paper}${reduced ? ' bb-reduced' : ''}`} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} role="group"
+    <div className={`bb bb-${paper}${reduced ? ' bb-reduced' : ''}`} ref={rootRef} tabIndex={0} onKeyDown={onKeyDown} onFocus={onFocusIn} onBlur={onFocusOut} role="group"
          style={dockClear ? { paddingBottom: dockClear } : undefined}
          aria-label={data ? `${data.title}, a book` : 'A book'}>
       {data && data.rebuilt ? <div className="bb-note" role="status">{REBUILT_NOTE}</div> : null}
       <div className="bb-stage" ref={stageRef} onClick={onClick} onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-           onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp}
+           onPointerUp={onPointerUp} onPointerCancel={onPointerLost} onLostPointerCapture={onPointerLost}
            onMouseDown={onMouseDown} onAuxClick={onAuxClick} onDragStart={onDragStart} style={{ '--bar-h': BAR_H + 'px' }}>
         {err ? (
           <div className="bb-msg" role="alert">
@@ -662,18 +844,18 @@ export default function BoundBook({ windowId, bookId, scope, include, title, by,
       {thumbs}
       {goto}
       <div className="bb-bar" role="toolbar" aria-label="Book">
-        <Button variant="ghost" size="sm" className="bb-arrow" aria-label="Previous page" disabled={!spread || at <= 0} onClick={() => { turn(-1) }}>‹</Button>
-        <button type="button" className="bb-label" aria-haspopup="dialog" aria-expanded={pop === 'goto'} disabled={!spread}
+        <Button variant="ghost" size="sm" className="bb-arrow" aria-label="Previous page" {...roving('prev')} disabled={!spread || at <= 0} onClick={() => { turn(-1) }}>‹</Button>
+        <button type="button" className="bb-label" {...roving('label')} aria-haspopup="dialog" aria-expanded={pop === 'goto'} disabled={!spread}
                 title="Go to a page or chapter" onClick={() => setPop((p) => (p === 'goto' ? '' : 'goto'))}>{label || '…'}</button>
-        <Button variant="ghost" size="sm" className="bb-arrow" aria-label="Next page" disabled={!spread || at >= count - 1} onClick={() => { turn(1) }}>›</Button>
+        <Button variant="ghost" size="sm" className="bb-arrow" aria-label="Next page" {...roving('next')} disabled={!spread || at >= count - 1} onClick={() => { turn(1) }}>›</Button>
         <span className="bb-sep" />
-        <Button variant="ghost" size="sm" aria-label="Thumbnails" title="Thumbnails" aria-pressed={pop === 'thumbs'} disabled={!spread}
+        <Button variant="ghost" size="sm" {...roving('thumbs')} aria-label="Thumbnails" title="Thumbnails" aria-pressed={pop === 'thumbs'} disabled={!spread}
                 onClick={() => setPop((p) => (p === 'thumbs' ? '' : 'thumbs'))}><Eye /></Button>
         <span className="bb-paper" role="group" aria-label="Paper">
-          <Button variant="ghost" size="sm" aria-pressed={paper === 'night'} onClick={() => setPaperTo('night')}>Night</Button>
-          <Button variant="ghost" size="sm" aria-pressed={paper === 'day'} onClick={() => setPaperTo('day')}>Day</Button>
+          <Button variant="ghost" size="sm" {...roving('night')} aria-pressed={paper === 'night'} onClick={() => setPaperTo('night')}>Night</Button>
+          <Button variant="ghost" size="sm" {...roving('day')} aria-pressed={paper === 'day'} onClick={() => setPaperTo('day')}>Day</Button>
         </span>
-        <Button variant="ghost" size="sm" aria-pressed={soundOn} title="A soft paper sound when a page turns" onClick={toggleSound}>Sound</Button>
+        <Button variant="ghost" size="sm" {...roving('sound')} aria-pressed={soundOn} title="A soft paper sound when a page turns" onClick={toggleSound}>Sound</Button>
       </div>
       <div className="bb-sr" aria-live="polite">{live}</div>
       {metrics ? (

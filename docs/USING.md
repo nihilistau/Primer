@@ -434,6 +434,12 @@ its sources again) for the events it dates, and a **Timeline window** shows them
 - Labels stack in rows so they never overlap. **Zoom** with the + and − buttons, the + and − keys
   or ctrl + wheel; **pan** with the arrow keys or by dragging; **Fit** (or 0) shows every event.
   A plain wheel scrolls a tall timeline.
+- **Dates known only to their millennium** don't stretch the axis when other events are dated
+  more finely. Their band is drawn behind the view, and one outside it shows as a dashed edge
+  marker, "before this view" or "after this view". So a page whose events fall in the 1st
+  millennium AD gets a readable century scale.
+
+  ![A timeline with events from the 4th century BC, the 6th century AD and the 13th century, on a century scale](screenshots/timeline-first-millennium.webp)
 - **Click an event** to open a page about it (shift-click or middle-click for a new reader).
 - **All my timelines** puts every page's latest timeline on one axis, coloured by page, with a
   legend. **Again** reads the dates afresh.
@@ -549,13 +555,26 @@ a narrow one shows one page at a time.
 **Sound** adds a soft paper sound to each turn; it is off until you switch it on. Primer
 remembers the paper, the sound, and the page you were on in each book.
 
+- **Keys:** the arrow keys, Page Up and Page Down, Home and End turn pages when the book has
+  focus. In the bar at the bottom, the arrow keys move between its buttons instead, and Tab
+  leaves the bar in one step.
+- **The page count** is announced once it settles ("Pages 2–3 of 40"), for screen readers.
+- **Resizing** lays a long book out again. A key pressed meanwhile is kept and applied from the
+  page you land on.
+- **Selecting text:** a quick second click (within 400 ms) in a page's outer third selects a word
+  instead of turning again.
+
 ![A spread of the bound book on night paper: text on the left page, two pictures on the right](screenshots/bound-spread.webp)
 
 ![The same book on day paper, with a diagram on the left and a chapter opening on the right](screenshots/bound-day.webp)
 
 Inside, the book is the same as the download. A contents entry turns to its chapter, and a
 citation turns to its sources. A web link asks "Open in the Browser?" and opens Primer's own
-Browser window, never a new tab. Each chapter has **Open this page in Primer**, which opens that
+Browser window, never a new tab.
+
+![Clicking a web source in the bound book asks "Open in the Browser?" with Open and Cancel](screenshots/bound-open-browser.webp)
+
+Each chapter has **Open this page in Primer**, which opens that
 page in a Reader.
 
 A book made before Primer 0.15 is rebuilt from your trail as it is now. A note above it says
@@ -650,12 +669,20 @@ empty, says it needs JavaScript, or the site refuses the reader.
   - **Pop-ups** and new windows open in the same view, so a site that signs you in through a
     pop-up opens its sign-in page in place.
   - **Camera, microphone, location and notifications** are always refused.
-  - **WebSockets** (live chat widgets, live tickers) are off, because Primer can't check where
-    they connect.
-- **Pages can't reach your own computer or network.** Every request a live page makes is checked
-  first. Requests to this computer (Primer, Kairos, LM Studio) or your local network (your
-  router, other machines) are refused, and so are local-sounding names such as `localhost` or
-  `router`.
+  - **Service workers** (offline copies, push messages) are off; sites that use them load from
+    the network instead.
+  - **WebRTC and WebTransport** (some video calls) are off.
+- **WebSockets work.** Live chat widgets, live tickers and other pages that keep a connection
+  open work live, as long as they connect to a public address.
+
+  ![A WebSocket echo page open live: connected, sending and receiving messages](screenshots/live-websocket.webp)
+
+- **Pages can't reach your own computer or network.** Everything a live page sends goes through
+  a small guard that Primer runs. It looks each name up once, checks the address, and connects
+  only to the address it checked. Requests to this computer (Primer, Kairos, LM Studio) or your
+  local network (your router, other machines) are refused, and so are local-sounding names such
+  as `localhost` or `router`. A site can't get round it by giving one answer to the check and
+  another to the browser.
 - **Limits:** up to 4 live pages at a time. The browser closes after 10 minutes with no live page,
   and when Primer stops.
 - **Web search off:** turning web search off (`[web] search = "off"`) turns live pages off too.

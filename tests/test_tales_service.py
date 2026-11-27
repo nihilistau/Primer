@@ -387,15 +387,15 @@ def test_restart_mid_chapter(g, world, monkeypatch):
     _read(g, _page(g, "Trebuchet"), 110.0)
 
     # dying between the scenes and the chapter row: no half chapter, and Next works again
-    real = g.add_tale_chapter
+    real = g.add_chapter_story
 
     def die(*a, **k):
         raise RuntimeError("power cut")
-    monkeypatch.setattr(g, "add_tale_chapter", die)
+    monkeypatch.setattr(g, "add_chapter_story", die)
     with pytest.raises(RuntimeError):
         tales.next_chapter()
     assert g.tale_chapters(tale["id"]) == [] and tales.current()["writing"] is False
-    monkeypatch.setattr(g, "add_tale_chapter", real)
+    monkeypatch.setattr(g, "add_chapter_story", real)
 
     # dying during the bible update: after a restart the chapter says its update failed
     hold = threading.Event()
@@ -574,21 +574,22 @@ def test_chapter_edges(g, world, monkeypatch):
         tales.next_chapter(["x"] * 21)
     # 1: the chapter just added is never shown as a failed update
     seen = []
-    real_add = g.add_tale_chapter
+    real_add = g.add_chapter_story
 
     def add(*a, **k):
-        n = real_add(*a, **k)
+        seen.append((tid, 1) in tales._updating)  # flagged as running before the row exists
+        out = real_add(*a, **k)
         seen.append(tales.current()["chapters"][-1]["update_failed"])
-        return n
-    monkeypatch.setattr(g, "add_tale_chapter", add)
+        return out
+    monkeypatch.setattr(g, "add_chapter_story", add)
     hold = threading.Event()
     model.update = lambda m: (hold.wait(5), UPDATE)[1]
     out = tales.next_chapter([])
-    assert out["n"] == 1 and seen == [False]
+    assert out["n"] == 1 and seen == [True, False]
     assert tales.current()["chapters"][0]["update_failed"] is False
     hold.set()
     assert tales.wait(5)
-    monkeypatch.setattr(g, "add_tale_chapter", real_add)
+    monkeypatch.setattr(g, "add_chapter_story", real_add)
 
     # 2: finished update threads are pruned as new ones start
     model.update = UPDATE
@@ -689,3 +690,94 @@ def test_next_chapter_needs_the_voice(g, world):
     assert tales.current()["chapters"] == []
     tales.voice = lambda: {"ok": True, "reason": ""}
     assert tales.next_chapter()["n"] == 1 and tales.wait(5)
+
+
+def _chapter_story_ids(g):
+    with g._lock:
+        return [r[0] for r in g._db.execute("SELECT id FROM stories WHERE kind='chapter'")]
+
+
+def test_a_crash_never_leaves_a_story_without_its_row(g, world):
+    """The chapter's story and its row are one transaction: a failure writing the row (here a
+    trigger that aborts it, as a power cut would) leaves no story behind either."""
+    tales, model, stories, _ = world()
+    tale = _started(tales, g, at=100.0)
+    _read(g, _page(g, "Trebuchet"), 110.0)
+    with g._lock, g._db:
+        g._db.execute("CREATE TEMP TRIGGER power_cut BEFORE INSERT ON tale_chapters "
+                      "BEGIN SELECT RAISE(ABORT, 'power cut'); END")
+    with pytest.raises(Exception, match="power cut"):
+        tales.next_chapter()
+    assert _chapter_story_ids(g) == [] and g.tale_chapters(tale["id"]) == []
+    assert tales.current()["writing"] is False and tales.current()["updating"] is False
+    with g._lock, g._db:
+        g._db.execute("DROP TRIGGER power_cut")
+    out = tales.next_chapter()  # and Next works again
+    assert g.chapter_for_story(out["story_id"]) == {"tale_id": tale["id"], "n": 1}
+    assert tales.wait(5)
+
+
+def test_startup_sweep_removes_only_ghost_rows(g, world):
+    """The sweep removes chapter rows whose story is gone and never a story: a chapter story with
+    no row (here a finished one) is still on its page. A complete chapter is untouched, and the
+    next chapter is numbered after the last row even with a gap in the middle."""
+    tales, model, stories, _ = world()
+    tale = _started(tales, g, at=100.0)
+    tid = tale["id"]
+    page = _page(g, "Trebuchet")
+    _read(g, page, 110.0)
+    done = tales.next_chapter()  # a complete chapter (story and row)
+    assert tales.wait(5)
+    _wait_story(stories, done["story_id"])
+    again = stories.again(done["story_id"])  # told again: the old story has no row now
+    _wait_story(stories, again)
+    # an older version's crash left a finished chapter story with no row ...
+    lost = g.add_story(page, 1, "chapter", "")
+    g.set_scenes(lost, [{"title": "Lost", "text": "Nell was lost."}])
+    g.update_story(lost, status="done", title="Chapter 9: Lost")
+    # ... a row whose story is gone (a middle chapter) ...
+    ghost = g.add_tale_chapter(tid, "no-such-story", [page], "")
+    # ... and a complete chapter after it
+    last = g.add_story(page, 1, "chapter", "")
+    g.update_story(last, status="done", title="Chapter 3: Last")
+    assert g.add_tale_chapter(tid, last, [page], "") == 3 and ghost == 2
+    plain = g.add_story(page, 1, "story", "")
+    assert g.sweep_orphan_chapters() == {"chapters": 1}
+    assert {c["n"]: c["story_id"] for c in g.tale_chapters(tid)} == {1: again, 3: last}
+    assert g.chapter_page_titles(tid).get(2) is None and g.used_pages(tid) == {page}
+    for sid in (done["story_id"], again, lost, last, plain):  # no story is ever deleted
+        assert g.get_story(sid) is not None
+    assert g.get_story(lost)["scenes"] and g.get_story(lost)["status"] == "done"
+    assert g.sweep_orphan_chapters() == {"chapters": 0}  # nothing more to do
+    # the gap: the next chapter is 4 (last row + 1), and its title says so
+    _read(g, _page(g, "Siege"), g.tale_chapters(tid)[-1]["created_at"] + 1)
+    out = tales.next_chapter()
+    assert out["n"] == 4 and g.get_story(out["story_id"])["title"].startswith("Chapter 4:")
+    assert [c["n"] for c in g.tale_chapters(tid)] == [1, 3, 4]
+    assert tales.wait(5)
+
+
+def test_create_chapter_with_a_tale_returns_its_number(g, tmp_path):
+    from primer.stories.service import StoryService
+    node = g.node_for("Trebuchet", "concept")
+    g.add_version(node.id, "# Trebuchet\n\nA siege engine.", "storyteller", "normal")
+    tid = g.add_tale("a fox", "The Fox", Bible().to_json(), at=1.0)
+    svc = StoryService(g, FakeEngine(["unused"]), FakeEngine(['["x"]']), lambda: FakeVoice(), None,
+                       Gate(), tmp_path / "media")
+    try:
+        scenes = [{"title": "One", "text": "Nell sets out."}]
+        tale = {"tale_id": tid, "pages": [node.id], "at": 5.0}
+        sid, n = svc.create_chapter(node.id, 1, "Chapter 1: One", scenes, "", tale=tale)
+        assert n == 1 and g.chapter_for_story(sid) == {"tale_id": tid, "n": 1}
+        sid2, n2 = svc.create_chapter(node.id, 1, "Chapter 2: One", scenes, "", tale=tale)
+        assert n2 == 2 and sid2 != sid
+        assert isinstance(svc.create_chapter(node.id, 1, "Chapter x", scenes, ""), str)  # no tale
+        # a tale with no scenes is refused, and writes neither a story nor a row
+        before = (len(_chapter_story_ids(g)), len(g.tale_chapters(tid)))
+        with pytest.raises(ValueError, match="needs scenes"):
+            svc.create_chapter(node.id, 1, "Chapter 3", [], "", tale=tale)
+        with pytest.raises(ValueError, match="needs scenes"):
+            svc._enqueue(node.id, 1, "chapter", scenes=None, title="x", tale=tale)
+        assert (len(_chapter_story_ids(g)), len(g.tale_chapters(tid))) == before
+    finally:
+        svc.shutdown()

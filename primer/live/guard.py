@@ -1,5 +1,5 @@
-"""Which requests the live browser may make: public http(s) hosts, plus data:, blob: and
-about:blank. The host rules are primer.grounding.web._check_host's (non-global addresses,
+"""Which requests the live browser may make: public http(s) hosts on the guarding proxy's
+ports, plus data:, blob: and about:blank. The host rules are primer.grounding.web._check_host's (non-global addresses,
 IPv4 embedded in IPv6, names resolving to either), so there is one copy of them."""
 from __future__ import annotations
 
@@ -11,6 +11,10 @@ from primer.grounding.web import WebError, _check_host
 
 _INERT = ("data", "blob")  # content the page already holds; no network request is made
 _HOSTED = ("http", "https", "ws", "wss")
+_DEFAULT_PORT = {"http": 80, "ws": 80, "https": 443, "wss": 443}
+# The ports the guarding proxy connects to (proxy.py uses this same set). Checking them here
+# too gives an off-list port the clear "can't be opened live" refusal, not a tunnel failure.
+ALLOWED_PORTS = frozenset({80, 443, *range(8080, 8444)})
 
 
 def _local_name(host: str) -> bool:
@@ -42,8 +46,10 @@ def allowed(url: str, resolve=socket.getaddrinfo) -> bool:
         if scheme not in _HOSTED:
             return False  # file:, chrome:, edge:, javascript:, ftp: ...
         host = u.hostname or ""
-        u.port  # noqa: B018  (raises ValueError on a bad port)
+        port = u.port  # raises ValueError on a bad port
     except ValueError:
+        return False
+    if (_DEFAULT_PORT[scheme] if port is None else port) not in ALLOWED_PORTS:
         return False
     if _local_name(host):
         return False

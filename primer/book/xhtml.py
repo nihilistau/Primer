@@ -146,10 +146,26 @@ def map_svg(mp: MapData, plate, archive, plates: dict | None) -> str:
     return svg
 
 
+# a kept use as clean_svg writes it: its href (always `#id`) is its first attribute
+_USE_HREF = re.compile(r'<use href="(#[A-Za-z][\w-]*)"')
+_SVG_ROOT = '<svg xmlns="http://www.w3.org/2000/svg"'
+
+
+def with_xlink(svg: str) -> str:
+    """A cleaned diagram (clean_svg's own output) whose uses also say `xlink:href`, with the
+    xlink namespace declared on the root: older EPUB reading systems know only SVG 1.1's
+    xlink:href. The values are the same `#id` fragments clean_svg checked."""
+    if "<use " not in svg or not svg.startswith(_SVG_ROOT):
+        return svg
+    svg = _USE_HREF.sub(r'<use href="\1" xlink:href="\1"', svg)
+    return _SVG_ROOT + ' xmlns:xlink="http://www.w3.org/1999/xlink"' + svg[len(_SVG_ROOT):]
+
+
 def chapter(i: int, ch: Chapter, index: dict[str, int], links: Links, plate, archive,
-            plates: dict | None = None) -> str:
+            plates: dict | None = None, xlink: bool = False) -> str:
     """Chapter i (from 1) as a section anchored `c{i}`. `index` maps a node id to its chapter
-    number, for the "From ... in ..." link; `plates` is the job's plate cache (`map_svg`)."""
+    number, for the "From ... in ..." link; `plates` is the job's plate cache (`map_svg`).
+    `xlink` (the EPUB): the diagram's uses also carry xlink:href (`with_xlink`)."""
     anchor = f"c{i}"
     out = [f'<section class="chapter" id="{anchor}">', f"<h1>{escape(ch.title)}</h1>"]
     phrase = " ".join(str(ch.via_phrase or "").split())
@@ -186,7 +202,8 @@ def chapter(i: int, ch: Chapter, index: dict[str, int], links: Links, plate, arc
     if ch.diagram:
         caption = str(ch.diagram.get("caption") or "")
         cap = f"<figcaption>{escape(caption)}</figcaption>" if caption.strip() else ""
-        out.append(f'<figure class="diagram">{ch.diagram["svg"]}{cap}</figure>')
+        svg = with_xlink(ch.diagram["svg"]) if xlink else ch.diagram["svg"]
+        out.append(f'<figure class="diagram">{svg}{cap}</figure>')
     if ch.has_video:
         out.append(f'<p class="video">{VIDEO_NOTE}</p>')
     if ch.sources:

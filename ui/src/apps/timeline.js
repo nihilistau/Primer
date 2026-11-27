@@ -114,13 +114,23 @@ function within(min, range) {
   return [min, min + range]
 }
 
+/* a date known only to its millennium (the 1st millennium CE runs 0..1000), not a range */
+export const coarseDate = (e) => !!e && e.precision === 'millennium' && !(num(e.end_year) && e.end_year > e.year)
+
 /* {min, max, width, ticks: [{year, label, x}]} fitted to the events (their spans included), with
- * a little room at each end; at least ten years wide; null with no dated events */
+ * a little room at each end; at least ten years wide; null with no dated events. A date known
+ * only to its millennium doesn't stretch the axis when other events are dated more finely, so
+ * they keep a readable, century-scale axis of their own: neither its band nor its point is
+ * fitted. Inside the view its band is drawn clipped to the stage; outside it, layout's `edge`
+ * option puts it at the stage's edge. On its own (or with only other millennia), the whole
+ * millennium is shown. */
 export function axis(events, width) {
   const list = dated(events)
   if (!list.length) return null
+  const fine = list.some(e => !coarseDate(e))
   let lo = Infinity, hi = -Infinity
   for (const e of list) {
+    if (fine && coarseDate(e)) continue
     const s = eventSpan(e), p = datePos(e)
     lo = Math.min(lo, s ? s.start : p)
     hi = Math.max(hi, s ? s.end : p)
@@ -159,17 +169,25 @@ export function shortLabel(s, max = 40) {
  * occL, occR}]]. A label is drawn rightward from lx (the pin, or a range's bar end), or, near the
  * right edge, leftward from lx (flip) when it fits there; [left, right] is the label's box as
  * drawn and [occL, occR] that box plus the span. A span is {x0, x1, kind}. A row never holds
- * two items whose boxes overlap. */
-export function layout(events, ax, { charW = 6.6, pad = 16, gap = 8 } = {}) {
+ * two items whose boxes overlap. With `edge` (the axis as fitted, not zoomed or panned), a
+ * millennium-only date whose point is outside the view sits at the nearer edge (x 0 or the
+ * width, `edge` 'left' or 'right'), keeping its band only if that reaches into the view;
+ * otherwise, as every event, it is left out when nothing of it is in view. */
+export function layout(events, ax, { charW = 6.6, pad = 16, gap = 8, edge: atEdge = false } = {}) {
   if (!ax) return []
   const W = ax.width
   const items = []
   ;(Array.isArray(events) ? events : []).forEach((event, index) => {
     if (!event || !num(event.year)) return
-    const x = xOf(ax, datePos(event))
+    let x = xOf(ax, datePos(event))
     const s = eventSpan(event)
-    const span = s ? { x0: xOf(ax, s.start), x1: xOf(ax, s.end), kind: s.kind } : null
-    if (span ? span.x1 < 0 || span.x0 > W : x < 0 || x > W) return
+    let span = s ? { x0: xOf(ax, s.start), x1: xOf(ax, s.end), kind: s.kind } : null
+    let edge = null
+    if (atEdge && coarseDate(event) && (x < 0 || x > W)) {
+      edge = x < 0 ? 'left' : 'right'
+      x = x < 0 ? 0 : W
+      if (span && (span.x1 < 0 || span.x0 > W)) span = null
+    } else if (span ? span.x1 < 0 || span.x0 > W : x < 0 || x > W) return
     const text = shortLabel(event.label)
     const w = Math.min(text.length * charW + pad, W)
     const xc = Math.min(Math.max(x, 0), W)
@@ -184,7 +202,7 @@ export function layout(events, ax, { charW = 6.6, pad = 16, gap = 8 } = {}) {
     left = Math.max(0, left)
     const occL = Math.min(left, span ? Math.max(0, span.x0) : left)
     const occR = Math.max(right, span ? Math.min(W, span.x1) : right)
-    items.push({ index, event, x, lx, text, left, right, flip, span, occL, occR })
+    items.push({ index, event, x, lx, text, left, right, flip, span, occL, occR, edge })
   })
   items.sort((a, b) => a.occL - b.occL || a.index - b.index)
   const rows = [], ends = []

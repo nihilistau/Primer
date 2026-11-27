@@ -1,6 +1,8 @@
 """The diagram SVG allowlist: hostile drawings are rebuilt clean or refused (Review Focus 1)."""
+import json
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
@@ -52,7 +54,7 @@ def assert_clean(svg: str) -> None:
         for k, v in el.attrib.items():
             assert re.fullmatch(r"[a-zA-Z][a-zA-Z0-9-]*", k), k
             assert not k.lower().startswith("on") and k not in ("style", "class")
-            assert k != "href"
+            assert k != "href" or (el.tag == NS + "use" and re.fullmatch(r"#dg-[A-Za-z][\w-]*", v)), v
             assert "javascript" not in v.lower() and "http" not in v.lower() and "(" not in v or \
                 k in ("transform", "marker-start", "marker-mid", "marker-end")
     low = svg.lower()
@@ -70,7 +72,7 @@ def test_svg_keeps_a_good_drawing():
     for t in ("title", "defs", "marker", "g", "rect", "line", "circle", "polygon", "ellipse",
               "polyline", "path", "text", "tspan"):
         assert t in kept, t
-    assert "use" not in kept  # never kept: the prompt doesn't ask for it
+    assert [u.get("href") for u in ET.fromstring(svg).iter(NS + "use")] == ["#dg-arrow"]  # same drawing
     root = ET.fromstring(svg)
     line = root.find(f".//{NS}line")
     assert line.attrib == {"x1": "300", "y1": "500", "x2": "600", "y2": "150",
@@ -197,15 +199,32 @@ def test_svg_limits():
                                          {"fill": "none", "stroke": "#a1b2c3"}]
 
 
-def test_svg_drops_use():
-    """<use> is never kept (no re-use, so no exponential renders or reference tricks)."""
+def test_svg_use_never_chains():
+    """A use may not name a use or an element holding one: no exponential re-use."""
     raw = ('<svg><g id="a"><rect width="1" height="1"/></g>'
            '<g id="b"><use href="#a"/><use href="#a"/></g>'
            '<g id="c"><use href="#b"/><use href="#b"/></g>'
            "<text>a</text><text>b</text><text>c</text></svg>")
     root = ET.fromstring(clean_svg(raw)[0])
     hrefs = [u.get("href") for u in root.iter(NS + "use")]
-    assert hrefs == []
+    assert hrefs == ["#dg-a", "#dg-a"]
+
+
+REFERENCES = json.loads((Path(__file__).parent / "fixtures" / "svg_references.json").read_text("utf-8"))["cases"]
+
+
+@pytest.mark.parametrize("case", REFERENCES, ids=[c["name"] for c in REFERENCES])
+def test_svg_references_stay_inside_the_drawing(case):
+    """The same cases as the client's cleaner (ui/src/apps/diagram.test.js)."""
+    raw = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
+           + case["svg"].replace("{p}", "") + "<text>a</text><text>b</text><text>c</text></svg>")
+    svg = clean_svg(raw)[0]
+    assert_clean(svg)
+    root = ET.fromstring(svg)
+    assert [u.get("href") for u in root.iter(NS + "use")] == ["#dg-" + i for i in case["uses"]]
+    markers = [f"{k}={v[len('url(#dg-'):-1]}" for el in root.iter() for k, v in el.attrib.items()
+               if k.startswith("marker-")]
+    assert markers == case["markers"]
 
 
 def test_diagram_refuses_without_labels():
@@ -345,3 +364,26 @@ def test_parse_diagram_is_linear():
     parse_diagram("<svg></svg>" + "<caption>" * 4000)
     parse_diagram("<svg></svg>" + "<caption>x" * 4000 + "</caption>")
     assert time.perf_counter() - t0 < 0.2
+
+
+LONG_ID = "a_very_long_marker_name_of_31ch"  # the longest id a model may write (31 characters)
+
+
+def test_svg_again_strips_its_own_stored_prefix_so_long_ids_survive():
+    """A drawing is stored as `dg<hex>-<id>`; cleaning it again (the book's `dg{i}-`) strips
+    that stored prefix first, so an id of up to 31 characters keeps its marker and its use."""
+    assert len(LONG_ID) == 31
+    raw = (f'<svg><defs><marker id="{LONG_ID}"/></defs>'
+           f'<line x1="0" y1="0" x2="1" y2="1" marker-end="url(#{LONG_ID})"/>'
+           f'<use href="#{LONG_ID[:30]}g"/><g id="{LONG_ID[:30]}g"><rect width="1" height="1"/></g>'
+           '<text>a</text><text>b</text><text>c</text></svg>')
+    stored = clean_svg(raw, prefix="dg1a2b3c-")[0]
+    assert f'id="dg1a2b3c-{LONG_ID}"' in stored
+    root = ET.fromstring(clean_svg(stored, prefix="dg12-", again=True)[0])
+    assert root.find(f".//{NS}marker").get("id") == f"dg12-{LONG_ID}"
+    assert root.find(f"{NS}line").get("marker-end") == f"url(#dg12-{LONG_ID})"
+    assert root.find(f"{NS}use").get("href") == f"#dg12-{LONG_ID[:30]}g"
+    # an older drawing stored with the plain "dg-" prefix is stripped the same way
+    old = clean_svg(raw, prefix="dg-")[0]
+    again = clean_svg(old, prefix="dg3-", again=True)[0]
+    assert f'id="dg3-{LONG_ID}"' in again and "dg3-dg-" not in again

@@ -197,9 +197,22 @@ def normalise(date_text, model_guess=None) -> dict | None:
 
 
 # a date text the model's year may stand for: it has a digit, a century, decade or millennium
-# word, an era mark, or a regnal number ("the reign of Edward I")
+# word, an era mark, or a regnal number after a capitalised name ("the reign of Edward I",
+# "Louis XIV"). A lone "I" after the name is regnal ("Henry I", "Henry I, king of England",
+# "Edward I - Longshanks", "Henry I's reign", "Edward I.") unless it is the pronoun, that is,
+# unless it is followed by:
+#   - a contraction, straight or curly, in any case: I'm, I'd, I've, I'll, I're, I'M
+#     ("Unclear I'm afraid");
+#   - a space and a lower-case word carrying on a clause ("Unclear I think", "Unclear I am");
+#     "of", "and", "or", "the" and "to" are list and title words, so "Charles I of England",
+#     "Mary I and Elizabeth I", "Peter I the Great" and "from Henry I to Stephen" stay regnal;
+#   - ", too" ("Before I, too, checked").
+_LONE_I = (r"I\b(?!['’](?i:m|d|ve|ll|re)\b"
+           r"|\s+(?!(?:of|and|or|the|to)\b)[a-z]"
+           r"|\s*,\s*too\b)")
 _NAMES_A_DATE = re.compile(r"\d|\b(?i:centur(?:y|ies)|decades?|millenni(?:um|a))\b|\b(?:BCE?|AD|CE)\b"
-                           r"|\b[A-Z][a-z]+\s+[IVXL]+\b")
+                           r"|\b[A-Z][a-z]+\s+(?:[IVXL]{2,}|[VXL])\b"
+                           r"|\b[A-Z][a-z]+\s+" + _LONE_I)
 
 
 def _looks_dated(text: str) -> bool:

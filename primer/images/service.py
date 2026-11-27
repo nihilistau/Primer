@@ -15,6 +15,7 @@ import secrets
 import tempfile
 import threading
 import time
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
@@ -98,6 +99,79 @@ def _prefixed(prefix: str, prompt: str) -> str:
     return f"{prefix}, {prompt}"[:_PROMPT_CAP] if prefix else prompt
 
 
+_WORD = re.compile(r"[\w'-]+")
+NEAR_REPEAT = 0.8  # word-set overlap at which a phrase counts as a repeat of the look
+_CLAUSE_EDGE = re.compile(r"[,;.:!?]")
+_NEAR_MIN_WORDS = 4  # a shorter look is only removed when repeated exactly
+
+
+def _words(text: str) -> Counter:
+    """The lower-cased words of `text` and how often each occurs, a plural 's' dropped from the
+    longer ones."""
+    return Counter(w[:-1] if len(w) > 3 and w.endswith("s") else w
+                   for w in (m.group(0).lower().strip("'-") for m in _WORD.finditer(text)) if w)
+
+
+def look_overlap(a: str, b: str) -> float:
+    """How alike two phrases are as bags of words: |A and B| / |A or B| (Jaccard, counting a word
+    as often as it occurs), so word order doesn't matter, a phrase that only holds the look inside
+    it isn't a repeat of it, and extra copies of look words beside a repeat count against it."""
+    x, y = _words(a), _words(b)
+    union = sum((x | y).values())
+    return sum((x & y).values()) / union if union else 0.0
+
+
+def _without_near_repeats(look: str, text: str) -> str:
+    """`text` without each near-repeat of `look`, and nothing else. A run of words (the look's
+    length +/- 2) whose word set is NEAR_REPEAT or more like the look's is found, the best score
+    first and the shorter run on a tie. The run is trimmed to start and end on words of the look,
+    so a word beside the repeat is never taken; what is left is removed whole, including a reworded
+    word inside it. One word outside the trimmed run goes too, at each end, only when it stands
+    alone at a clause edge (after a comma or the text's start; before a comma or the text's end),
+    the run lacks a word of the look (so it can be that word reworded) and the run with it still
+    scores NEAR_REPEAT. Repeats are removed until none is left."""
+    size = len(_WORD.findall(look))  # windows are counted in words, repeats included
+    wanted = _words(look)
+    if len(wanted) < _NEAR_MIN_WORDS:
+        return text
+
+    def in_look(m) -> bool:
+        return bool(_words(m.group(0)) & wanted)
+
+    def edge(words, i: int, before: bool) -> bool:
+        """Word `i` is the first (before) or last word of its clause."""
+        if before:
+            return i == 0 or bool(_CLAUSE_EDGE.search(text[words[i - 1].end():words[i].start()]))
+        return i == len(words) - 1 or bool(_CLAUSE_EDGE.search(text[words[i].end():words[i + 1].start()]))
+
+    while True:
+        words = list(_WORD.finditer(text))
+        best = None  # (overlap, -length, first, last)
+        for length in range(max(1, size - 2), size + 3):
+            for i in range(len(words) - length + 1):
+                score = look_overlap(look, text[words[i].start():words[i + length - 1].end()])
+                if score >= NEAR_REPEAT and (best is None or (score, -length) > best[:2]):
+                    best = (score, -length, i, i + length - 1)
+        if best is None:
+            return text
+        first, last = best[2], best[3]
+        while first < last and not in_look(words[first]):
+            first += 1
+        while last > first and not in_look(words[last]):
+            last -= 1
+
+        def span(f: int, l: int) -> str:
+            return text[words[f].start():words[l].end()]
+        if wanted - _words(span(first, last)):  # a look word is missing: a reworded edge word
+            if first > 0 and not in_look(words[first - 1]) and edge(words, first - 1, True) and look_overlap(
+                    look, span(first - 1, last)) >= NEAR_REPEAT:
+                first -= 1
+            if last < len(words) - 1 and not in_look(words[last + 1]) and edge(words, last + 1, False) and look_overlap(
+                    look, span(first, last + 1)) >= NEAR_REPEAT:
+                last += 1
+        text = text[:words[first].start()] + " " + text[words[last].end():]
+
+
 def _without_look(prefix: str, text: str) -> str:
     """The written prompt without the look it will be prefixed with: each entry of `prefix`
     ("Name: look; ...") and each look on its own, wherever the writer repeated it."""
@@ -112,6 +186,8 @@ def _without_look(prefix: str, text: str) -> str:
     for part in sorted({p.strip(" ,;") for p in parts}, key=len, reverse=True):
         if len(part) >= 12:
             out = re.sub(re.escape(part), "", out, flags=re.IGNORECASE)
+    for entry in prefix.split("; "):  # then a near-repeat: the look reordered or lightly reworded
+        out = _without_near_repeats(entry.split(": ", 1)[1] if ": " in entry else entry, out)
     out = re.sub(r"\s*([,;])(?:\s*[,;])+", r"\1", out)  # the separators left behind
     out = " ".join(out.split()).strip(" ,;")
     return out or text

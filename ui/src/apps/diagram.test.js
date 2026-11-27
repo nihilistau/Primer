@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ALLOWED_ELEMENTS, allowedAttribute, allowedElement, cleanSvgTree, diagramStatusLabel, labelHits,
          svgRoot, textLabel, SVG_NS } from './diagram.js'
+import { parseFragment, sanitize } from '../bound/sanitize.js'
+import references from '../../../tests/fixtures/svg_references.json'
 
 /* a stand-in DOM: just what the walk reads and the builder calls */
 const el = (localName, attrs = {}, children = [], ns = SVG_NS) => ({
@@ -20,9 +22,10 @@ describe('allowlists', () => {
   it('keeps only the drawing elements', () => {
     for (const n of ['svg', 'g', 'line', 'polyline', 'polygon', 'rect', 'circle', 'ellipse', 'path', 'text', 'tspan', 'title', 'defs', 'marker'])
       expect(allowedElement(n)).toBe(true)
-    for (const n of ['script', 'foreignObject', 'use', 'image', 'a', 'style', 'iframe', 'animate', 'set', 'SCRIPT', 'Text', 'svg ', '', null])
+    for (const n of ['script', 'foreignObject', 'image', 'a', 'style', 'iframe', 'animate', 'set', 'SCRIPT', 'Text', 'svg ', '', null])
       expect(allowedElement(n)).toBe(false)
-    expect(ALLOWED_ELEMENTS.size).toBe(14)
+    expect(allowedElement('use')).toBe(true)
+    expect(ALLOWED_ELEMENTS.size).toBe(15)
   })
   it('keeps each element\'s own attributes, as the server does', () => {
     const good = [['rect', 'x', '10'], ['rect', 'fill', '#eee'], ['line', 'x2', '3'], ['line', 'stroke-width', '2'],
@@ -31,7 +34,8 @@ describe('allowlists', () => {
                   ['text', 'text-anchor', 'middle'], ['tspan', 'dy', '1.2'], ['g', 'transform', 'translate(1,2)'],
                   ['g', 'dominant-baseline', 'middle'], ['marker', 'refX', '10'], ['marker', 'markerWidth', '8'],
                   ['marker', 'orient', 'auto'], ['marker', 'markerUnits', 'strokeWidth'], ['marker', 'viewBox', '0 0 10 10'],
-                  ['svg', 'viewBox', '0 0 1000 700'], ['circle', 'id', 'dg1a2b3c-hub'], ['marker', 'id', 'dg-arrow']]
+                  ['svg', 'viewBox', '0 0 1000 700'], ['circle', 'id', 'dg1a2b3c-hub'], ['marker', 'id', 'dg-arrow'],
+                  ['use', 'href', '#dg-arrow'], ['use', 'xlink:href', '#dg1a2b3c-hub'], ['use', 'x', '5']]
     for (const [e, k, v] of good) expect(allowedAttribute(e, k, v), `${e} ${k}`).toBe(true)
   })
   it('drops handlers, links, styles, unlisted names and outside references', () => {
@@ -42,17 +46,80 @@ describe('allowlists', () => {
                  ['line', 'marker-end', 'url(http://x/y)'], ['line', 'marker-end', 'url(#arrow)'], ['line', 'marker-end', 'url("#dg-a")'],
                  ['rect', 'marker-end', 'url(#dg-arrow)'], ['text', 'x', '1\\0'], ['path', 'd', 'javascript:alert(1)'],
                  ['rect', 'x2', '1'], ['circle', 'id', 'arrow'], ['circle', 'id', 'dgxyz-arrow'], ['rect', '', 'x'], ['rect', null, 'x'],
-                 ['script', 'x', '1'], ['title', 'x', '1']]
+                 ['script', 'x', '1'], ['title', 'x', '1'], ['use', 'href', '#arrow'], ['use', 'href', 'x.svg#dg-a'],
+                 ['use', 'href', 'http://x/#dg-a'], ['use', 'href', 'data:image/svg+xml,#dg-a'], ['use', 'href', '#dg-a#dg-a'],
+                 ['use', 'marker-end', 'url(#dg-a)'], ['line', 'xlink:href', '#dg-a']]
     for (const [e, k, v] of bad) expect(allowedAttribute(e, k, v), `${e} ${k}=${v}`).toBe(false)
   })
   it('a CSS-escaped url on fill, a class and an outside marker are dropped in the rebuild', () => {
-    const root = el('svg', {}, [el('rect', { fill: '\\75 rl(http://x)', class: 'evil', x: '1' }),
+    const root = el('svg', {}, [el('marker', { id: 'dg1a2b3c-arrow' }),
+                                el('rect', { fill: '\\75 rl(http://x)', class: 'evil', x: '1' }),
                                 el('line', { 'marker-end': 'url(#dg1a2b3c-arrow)' }),
                                 el('line', { 'marker-end': 'url(http://x/a)' })])
-    const out = cleanSvgTree(root, fakeDoc())
-    expect(out.kids[0].attrs).toEqual({ x: '1' })
-    expect(out.kids[1].attrs).toEqual({ 'marker-end': 'url(#dg1a2b3c-arrow)' })
-    expect(out.kids[2].attrs).toEqual({})
+    const out = cleanSvgTree(root, fakeDoc(), { idPrefix: 't-' })
+    expect(out.kids[1].attrs).toEqual({ x: '1' })
+    expect(out.kids[2].attrs).toEqual({ 'marker-end': 'url(#t-dg1a2b3c-arrow)' })
+    expect(out.kids[3].attrs).toEqual({})
+  })
+})
+
+/* the same cases as the server's cleaner (tests/test_diagrams_svg.py), on the server's ids */
+describe('references stay inside the drawing', () => {
+  const walk = (n, f) => { if (n && n.name) { f(n); n.kids.forEach((k) => walk(k, f)) } }
+  for (const c of references.cases) {
+    it(c.name, () => {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">' +
+                  c.svg.replaceAll('{p}', 'dg-') + '</svg>'
+      const out = cleanSvgTree(parseFragment(svg).childNodes[0], fakeDoc(), { idPrefix: 't-' })
+      const uses = [], markers = []
+      walk(out, (n) => {
+        if (n.name === 'use') uses.push(n.attrs.href)
+        for (const [k, v] of Object.entries(n.attrs)) if (k.startsWith('marker-')) markers.push(`${k}=${v.slice('url(#t-dg-'.length, -1)}`)
+        expect(n.attrs).not.toHaveProperty('xlink:href')
+      })
+      expect(uses).toEqual(c.uses.map((i) => `#t-dg-${i}`))
+      expect(markers).toEqual(c.markers)
+    })
+  }
+  it('a use keeps nothing inside it, and never chains however deep', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><g id="dg-a"><rect width="1" height="1"/></g>' +
+                '<g id="dg-b"><use href="#dg-a"/><use href="#dg-a"/></g><g id="dg-c"><use href="#dg-b"/><use href="#dg-b"/></g>' +
+                '<use href="#dg-a"><rect width="9" height="9"/></use></svg>'
+    const out = cleanSvgTree(parseFragment(svg).childNodes[0], fakeDoc(), { idPrefix: 't-' })
+    const uses = []
+    walk(out, (n) => { if (n.name === 'use') uses.push(n) })
+    expect(uses.map((u) => u.attrs.href)).toEqual(['#t-dg-a', '#t-dg-a', '#t-dg-a'])
+    expect(uses[2].kids).toEqual([])
+  })
+})
+
+/* inline SVG ids are document-wide: two books (or windows) showing chapter 1's diagram both carry
+ * dg1- ids, so every rebuild gets its own prefix and a reference resolves only in its own copy */
+describe('ids are unique to each rebuilt drawing', () => {
+  const block = '<figure class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700">' +
+    '<defs><marker id="dg1-arrow"><path d="M0 0 L1 1"/></marker><g id="dg1-weight"><rect width="4" height="4"/></g></defs>' +
+    '<line x1="0" y1="0" x2="9" y2="9" marker-end="url(#dg1-arrow)"/><use href="#dg1-weight" x="5"/>' +
+    '<text x="1" y="1">Arm</text></svg></figure>'
+  const ids = (html) => [...html.matchAll(/ id="([^"]+)"/g)].map((m) => m[1])
+  const refs = (html) => [...html.matchAll(/(?:href="#|url\(#)([^")]+)/g)].map((m) => m[1])
+  it('two books with the same diagram ids, inserted in one document, never share an id', () => {
+    const a = sanitize(block, { kind: 'diagram' }), b = sanitize(block, { kind: 'diagram' })
+    expect(ids(a).length).toBe(2)
+    expect(ids(a).filter((i) => ids(b).includes(i))).toEqual([])
+    for (const html of [a, b]) {
+      expect(refs(html).length).toBe(2)
+      for (const r of refs(html)) expect(ids(html)).toContain(r)   // each reference names its own copy
+      expect(html).not.toContain('"dg1-')
+    }
+  })
+  it('a prefix is a fresh token per rebuild unless one is given, and must look like one', () => {
+    const svg = () => parseFragment('<svg xmlns="http://www.w3.org/2000/svg"><g id="dg-a"/><use href="#dg-a"/></svg>').childNodes[0]
+    const one = cleanSvgTree(svg(), fakeDoc()), two = cleanSvgTree(svg(), fakeDoc())
+    expect(one.kids[0].attrs.id).toMatch(/^u\d+-dg-a$/)
+    expect(one.kids[0].attrs.id).not.toBe(two.kids[0].attrs.id)
+    expect(one.kids[1].attrs.href).toBe('#' + one.kids[0].attrs.id)
+    expect(() => cleanSvgTree(svg(), fakeDoc(), { idPrefix: '' })).toThrow()
+    expect(() => cleanSvgTree(svg(), fakeDoc(), { idPrefix: '"><script>' })).toThrow()
   })
 })
 
@@ -63,11 +130,11 @@ describe('cleanSvgTree', () => {
       el('line', { x1: '1', y1: '2', x2: '3', y2: '4', 'marker-end': 'url(#dg1-arrow)' }),
       el('text', { x: '10', y: '20' }, [txt('the arm'), el('tspan', {}, [txt(' (long)')])]),
     ])
-    const out = cleanSvgTree(root, fakeDoc())
+    const out = cleanSvgTree(root, fakeDoc(), { idPrefix: 't-' })
     expect(out.name).toBe('svg')
     expect(out.ns).toBe(SVG_NS)
     expect(names(out)).toEqual(['svg', 'defs', 'marker', 'path', 'line', 'text', 'tspan'])
-    expect(out.kids[1].attrs['marker-end']).toBe('url(#dg1-arrow)')
+    expect(out.kids[1].attrs['marker-end']).toBe('url(#t-dg1-arrow)')
     expect(out.kids[2].kids[0]).toEqual({ text: 'the arm' })
   })
   it('drops scripts, foreign content and handlers with their subtrees', () => {

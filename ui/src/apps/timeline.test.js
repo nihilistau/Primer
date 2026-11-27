@@ -130,6 +130,48 @@ describe('axis', () => {
     sane(ax, 900)
     expect(ax.ticks[1].year - ax.ticks[0].year).toBeGreaterThanOrEqual(500)
   })
+  it('a date known only to the 1st millennium CE does not squash the events dated within it', () => {
+    // its band runs 0..1000: fitted to that, events a few decades apart can't be told apart
+    const events = [ev(500, { precision: 'millennium', label: 'hillfort in use' }), ev(410), ev(449), ev(597), ev(793)]
+    const ax = axis(events, 800)
+    sane(ax, 800)
+    expect(ax.max - ax.min).toBeLessThan(600)          // fitted to the dated events...
+    expect(ax.min).toBeLessThan(410)
+    expect(ax.max).toBeGreaterThan(793)
+    expect(ax.ticks[1].year - ax.ticks[0].year).toBeLessThanOrEqual(100)   // ...at century resolution
+    expect(xOf(ax, 449) - xOf(ax, 410)).toBeGreaterThan(40)
+    // the millennium is still drawn: its pin and label in view, its band clipped to the stage
+    const p = layout(events, ax).flat().find(q => q.index === 0)
+    expect(p).toBeTruthy()
+    expect(p.x).toBeGreaterThan(0)
+    expect(p.x).toBeLessThan(800)
+    expect(p.span.kind).toBe('approx')
+    expect(p.occL).toBe(0)
+    // on its own, it gets the whole millennium
+    const alone = axis([events[0]], 800)
+    expect(alone.min).toBeLessThanOrEqual(0)
+    expect(alone.max).toBeGreaterThanOrEqual(1000)
+  })
+  it('a millennium-only date outside the finer events does not stretch the axis: it sits at the edge', () => {
+    const events = [ev(-1500, { precision: 'millennium', label: 'bronze age farms' }), ev(1066), ev(1283),
+                    ev(2050, { precision: 'millennium', label: 'far off' })]
+    const ax = axis(events, 800)
+    sane(ax, 800)
+    expect(ax.min).toBeGreaterThan(1000)                      // not -1666
+    expect(ax.max).toBeLessThan(1400)
+    expect(ax.ticks[1].year - ax.ticks[0].year).toBeLessThanOrEqual(100)
+    // fitted: each is shown at its edge, with no band; zoomed or panned, off-view events are not drawn
+    const placed = layout(events, ax, { edge: true }).flat()
+    const early = placed.find(q => q.index === 0), late = placed.find(q => q.index === 3)
+    expect(early.edge).toBe('left')
+    expect(early.x).toBe(0)
+    expect(early.span).toBeNull()
+    expect(late.edge).toBe('right')
+    expect(late.x).toBe(800)
+    expect(late.flip).toBe(true)
+    expect(placed.find(q => q.index === 1).edge).toBeFalsy()
+    expect(layout(events, ax).flat().map(q => q.index).sort()).toEqual([1, 2])
+  })
   it('makes room for a span, not just its point', () => {
     const ax = axis([ev(1150, { precision: 'century' }), ev(1300)], 800)
     expect(ax.min).toBeLessThanOrEqual(1100)

@@ -32,6 +32,9 @@ BUSY = "A book is being made; wait for it to finish"
 SHUT_DOWN = "Primer shut down"
 FAILED = "The book couldn't be made"
 FAILED_WRITE = "The book couldn't be made: a file couldn't be written"
+STATUS_UNREAD = "The book couldn't be made: its status couldn't be read"
+STOPPED = "The book couldn't be made: it was stopped"
+RETRY_UNREAD = 30.0  # seconds between tries to tidy the files of a book whose status couldn't be read
 EMPTY = "Nothing to put in the book: no pages read in that part of the trail"
 BOOK_ID = re.compile(r"[0-9a-f]{16}")
 FORMATS = ("epub", "html")
@@ -93,7 +96,9 @@ class BookService:
         self._closed = False
         self._busy: str | None = None  # "" while a request is being checked, else the job's id
         self._plans: dict[str, object] = {}
-        self._dropped: set[str] = set()  # deleted while queued or making
+        self._dropped: set[str] = set()  # deleted while queued or making (asked: the job stops)
+        self._deleted: set[str] = set()  # ...and the delete went through (the row is gone)
+        self._unread: set[str] = set()  # jobs whose last status read failed: files to tidy later
         self._sweep()
         self._worker = threading.Thread(target=self._run, name="primer-books", daemon=True)
         self._worker.start()
@@ -208,9 +213,13 @@ class BookService:
         if self.get(book_id) is None:
             return False
         with self._lock:
-            if self._busy == book_id:
+            busy = self._busy == book_id
+            if busy:
                 self._dropped.add(book_id)
-        gone = self.graph.delete_book(book_id)
+        gone = self.graph.delete_book(book_id)  # may raise: then the book is not taken as deleted
+        if busy:
+            with self._lock:
+                self._deleted.add(book_id)
         self._remove_files(book_id)
         return gone
 
@@ -297,23 +306,52 @@ class BookService:
                 if book is None or book["status"] != "done":
                     self._unlink(path)
 
-    def _fail(self, book_id: str, error: str) -> None:
+    def _fail(self, book_id: str, error: str) -> bool:
+        """Mark the book failed with `error`; False when that couldn't be written."""
         try:
             self.graph.update_book(book_id, status="failed", error=error)
         except ValueError:  # deleted meanwhile
             pass
         except Exception:
             log.exception("could not mark book %s failed", book_id)
+            return False
+        return True
 
     def _stopped(self, book_id: str) -> bool:
         with self._lock:
             return self._closed or book_id in self._dropped
 
+    def _tidy_unread(self) -> None:
+        """Retry the clean-up of jobs whose last status read failed: once a book reads again,
+        its files go unless it is done. A book that still can't be read waits for the next try;
+        the job being made is never touched."""
+        with self._lock:
+            waiting = [b for b in self._unread if b != self._busy]
+        for book_id in waiting:
+            try:
+                book = self.graph.get_book(book_id)
+            except Exception:
+                continue
+            if book is None or book["status"] != "done":
+                self._remove_files(book_id)
+            if book is not None and book["status"] not in ("done", "failed"):
+                # never left "making" with no files: if this can't be written, try again later
+                if not self._fail(book_id, STATUS_UNREAD):
+                    continue
+            with self._lock:
+                self._unread.discard(book_id)
+
     def _run(self) -> None:
         while True:
-            book_id = self._queue.get()
+            if self._unread:
+                self._tidy_unread()
+            try:
+                book_id = self._queue.get(timeout=RETRY_UNREAD if self._unread else None)
+            except queue.Empty:
+                continue
             if book_id is None:
                 return
+            failed = False  # already marked failed, with its reason
             try:
                 if not self._stopped(book_id):
                     self._job(book_id)
@@ -322,18 +360,42 @@ class BookService:
             except Exception as e:  # a job never kills the worker; the detail goes to the log only
                 log.exception("book job %s failed", book_id)
                 self._fail(book_id, FAILED_WRITE if isinstance(e, OSError) else FAILED)
+                failed = True
             finally:
-                # failed, deleted or shut down at any point (even after the last rename): no files
+                # failed, deleted or shut down at any point (even after the last rename): no files.
+                # A status that can't be read is not "not done": a deleted book's files go (its
+                # delete went through, so it is gone, whatever the read says); any other's stay
+                # (a delete that failed included) and the book is marked
+                # failed, with a reason (a done book stays done: the graph won't un-finish one).
+                # Its files are tidied once a read works again (_tidy_unread), with no restart.
                 try:
                     book = self.graph.get_book(book_id)
                 except Exception:
                     log.exception("could not read book %s", book_id)
-                    book = None
-                if book is None or book["status"] != "done":
-                    self._remove_files(book_id)
+                    with self._lock:
+                        deleted = book_id in self._deleted
+                    if deleted:
+                        self._remove_files(book_id)
+                    else:
+                        if not failed:
+                            self._fail(book_id, STATUS_UNREAD)
+                        with self._lock:
+                            self._unread.add(book_id)
+                else:
+                    if book is None or book["status"] != "done":
+                        self._remove_files(book_id)
+                    with self._lock:
+                        closing = self._closed  # a shutdown marks its own book failed
+                    if book is not None and book["status"] not in ("done", "failed") and not closing:
+                        # stopped (a delete that failed, say): failed with a reason, never
+                        # left "making" with no files; if that can't be written, retried later
+                        if not self._fail(book_id, STOPPED):
+                            with self._lock:
+                                self._unread.add(book_id)
                 with self._lock:
                     self._plans.pop(book_id, None)
                     self._dropped.discard(book_id)
+                    self._deleted.discard(book_id)
                     if self._busy == book_id:
                         self._busy = None
 

@@ -515,6 +515,57 @@ def test_parse_events_takes_the_final_list_over_a_draft():
     assert [e["label"] for e in parse_events(reply)] == ["Rhuddlan begun", "Welsh revolt"]
 
 
+def test_parse_events_fuller_list_rule():
+    """The final list is the last one the model gave, unless its labels are a strict subset of an
+    earlier, fuller list; then the fuller one wins (a longer draft no longer beats a shorter
+    corrected final list)."""
+    def ev(label, year):
+        return {"label": label, "date": str(year), "year": year}
+
+    draft = json.dumps([ev("Rhuddlan begun", 1277), ev("Conwy begun", 1238), ev("Welsh revolt", 1282)])
+    corrected = json.dumps([ev("Rhuddlan begun", 1277), ev("Conwy Castle begun", 1283)])
+    got = parse_events("Draft: " + draft + " Wait, Conwy is wrong and the revolt isn't dated. Final: " + corrected)
+    assert [e["label"] for e in got] == ["Rhuddlan begun", "Conwy Castle begun"]
+    # the same labels with a corrected date: the last list still wins
+    same = json.dumps([ev("Rhuddlan begun", 1277), ev("Conwy begun", 1283), ev("Welsh revolt", 1282)])
+    got = parse_events(draft + " Fix: " + same)
+    assert [(e["label"], e["year"]) for e in got] == [
+        ("Rhuddlan begun", 1277), ("Welsh revolt", 1282), ("Conwy begun", 1283)]
+    # a last list whose labels are a strict subset of an earlier, fuller one: the fuller wins
+    got = parse_events(draft + ' Checking [{"label": "conwy begun", "date": "1238"}, '
+                       '{"label": "Welsh revolt", "date": "1282"}] yes.')
+    assert [e["label"] for e in got] == ["Conwy begun", "Rhuddlan begun", "Welsh revolt"]
+    # the repairing reader follows the same rule (a trailing comma sends both lists there)
+    from primer.timelines.events import read_event_list
+    reply = ("Draft: [{'label': 'A', 'date': '1201'}, {'label': 'B', 'date': '1202'}, "
+             "{'label': 'C', 'date': '1203'},] Final: [{'label': 'A', 'date': '1201'}, "
+             "{'label': 'D', 'date': '1204'},]")
+    assert [x["label"] for x in read_event_list(reply)] == ["A", "D"]
+    subset = ("Draft: [{'label': 'A', 'date': '1201'}, {'label': 'B', 'date': '1202'},] "
+              "Again: [{'label': 'B', 'date': '1202'},]")
+    assert [x["label"] for x in read_event_list(subset)] == ["A", "B"]
+
+
+def test_parse_events_a_quoted_event_never_brings_back_a_draft():
+    """The last list wins, unless its labels are a strict subset of an earlier list's; then the
+    nearest such earlier list. A single event quoted after the correction is a subset of the
+    correction, so the correction (not the fuller draft) wins; a one-event final list that is
+    no subset wins over a longer draft."""
+    def lst(*names):
+        return json.dumps([{"label": n, "date": str(1200 + i), "year": 1200 + i} for i, n in enumerate(names)])
+
+    got = parse_events("Draft " + lst("A", "B", "C") + " Fixed " + lst("A", "D") + " so " + lst("A") + " stays.")
+    assert [e["label"] for e in got] == ["A", "D"]
+    # a two-event quote that is a strict subset: the nearest fuller list, the correction
+    got = parse_events(lst("A", "B", "C", "D") + " no: " + lst("A", "B", "E") + " see " + lst("A", "B"))
+    assert [e["label"] for e in got] == ["A", "B", "E"]
+    # only single-event lists: the last one, as before
+    assert [e["label"] for e in parse_events(lst("A") + " then " + lst("B"))] == ["B"]
+    # a one-event final list that is not a subset of anything is the answer, however long the draft
+    assert [e["label"] for e in parse_events("Draft " + lst("A", "B", "C") + " ... Final " + lst("D"))] == ["D"]
+    assert [e["label"] for e in parse_events(lst("A", "B") + " answer " + lst("C"))] == ["C"]
+
+
 def test_parse_events_drops_labels_with_no_letter_or_digit():
     reply = json.dumps([{"label": "...", "date": "1277", "year": 1277},
                         {"label": " - ", "date": "1280"},

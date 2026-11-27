@@ -113,6 +113,38 @@ def test_render_indented_title_and_headings():
     assert [el.tag for el in root] == ["p", "h2", "p"] and root[1].text == "Part"
 
 
+def test_render_a_line_indented_four_spaces_is_code():
+    md = ("Intro.\n\n"
+          "    # not a heading\n"
+          "    - not a list\n"
+          "\tx = [1]  # a tab counts as four\n\n"
+          "## Real\n"
+          "    ### also code\n\n"
+          "End.")
+    f = render(md, anchor="c1", n_sources=1)
+    root = parse(f)
+    assert [el.tag for el in root] == ["p", "p", "h2", "p", "p"]
+    assert "".join(root[1].itertext()) == "# not a heading- not a listx = [1]  # a tab counts as four"
+    assert len(root[1].findall("br")) == 2 and root[1].find("sup") is None  # shown as written
+    assert root[3].text == "### also code"
+    assert "<h1>" not in f and "<h3>" not in f and "<ul>" not in f
+    # three spaces is still a heading; an indented first line is code, not the dropped title
+    assert "<h2>Part</h2>" in render("   ## Part", anchor="c1", n_sources=0)
+    assert "# Title" in "".join(parse(render("    # Title\n\nBody.", anchor="c1", n_sources=0)).itertext())
+    # inside a paragraph or a list item, an indented line continues it
+    assert render("A line\n    # more", anchor="c1", n_sources=0) == "<p>A line # more</p>"
+    assert render("- item\n    more", anchor="c1", n_sources=0) == "<ul><li>item more</li></ul>"
+    assert render("- a\n    - b", anchor="c1", n_sources=0) == "<ul><li>a</li><li>b</li></ul>"
+
+
+def test_render_a_blank_line_inside_indented_code_keeps_one_block():
+    assert render("    a\n\n    b", anchor="c1", n_sources=0) == "<p>a<br/><br/>b</p>"
+    assert render("    a\n\n\n    b\n", anchor="c1", n_sources=0) == "<p>a<br/><br/><br/>b</p>"
+    # blank lines before the next ordinary line end the block; trailing blanks are not kept
+    assert render("    a\n\nText.\n\n", anchor="c1", n_sources=0) == "<p>a</p>\n<p>Text.</p>"
+    assert render("    a\n   \n", anchor="c1", n_sources=0) == "<p>a</p>"
+
+
 def test_safe_url_refuses_disguised_and_local_hosts():
     from primer.book.markdown import safe_url
     for bad in ("http://127.1/", "http://0x7f.1/", "http://2130706433/", "http://0x7f000001/",

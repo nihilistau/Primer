@@ -158,3 +158,18 @@ def test_chapter_pages_index(g, tmp_path):
     again = Graph(path)
     assert [s["id"] for s in again.stories_for(p2)] == [old_sid]
     assert [p["node_id"] for p in again.chapter_page_titles(old_tid)[1]] == [p1, p2]
+
+
+def test_chapter_one_skips_pages_another_tale_used_that_day(g):
+    day = 24 * 3600
+    other = _tale(g, 9 * day + 100)
+    mine = _tale(g, 10 * day)
+    shared, fresh, old_use = _page(g, "Shared"), _page(g, "Fresh"), _page(g, "Old use")
+    for nid in (shared, fresh, old_use):
+        g.add_reader_event(10 * day - 3600, "open", nid, "start")
+    g.add_tale_chapter(other, "s1", [shared], "", at=10 * day - 1800)  # that day
+    g.add_tale_chapter(other, "s0", [old_use], "", at=8 * day)  # long before the window
+    assert [p["node_id"] for p in pick_material(g, mine)] == sorted([fresh, old_use])
+    assert waiting_count(g, mine) == 2
+    # the other tale's own pages are still its own business
+    assert shared in {p["node_id"] for p in pick_material(g, mine, chosen=[shared])}

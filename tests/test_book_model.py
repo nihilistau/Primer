@@ -234,6 +234,29 @@ def test_collect_lenses_and_stories(g):
     assert collect(g, {"kind": "branch", "node_id": a.id}, {}).chapters[0].diagram is None
 
 
+def test_collect_keeps_only_the_latest_map_per_phrase(g):
+    """Warwick Castle mapped five times gets one plate: the latest finished map for each phrase."""
+    a = page(g, "Warwick Castle")
+    edge(g, None, a, T0)
+    v = g.latest_version(a.id)
+    made = []
+    for i in range(5):
+        m = g.add_map(a.id, v.n, "Warwick Castle")
+        g.set_map_places(m, [Place(f"Tower {i}", "", 52.28, -1.58)])
+        g.update_map(m, status="done")
+        made.append(m)
+        time.sleep(0.01)
+    other = g.add_map(a.id, v.n, "the river")
+    g.set_map_places(other, [Place("Avon", "", 52.2, -1.6)])
+    g.update_map(other, status="done")
+    time.sleep(0.01)
+    newer_failed = g.add_map(a.id, v.n, "Warwick Castle")
+    g.update_map(newer_failed, status="failed")
+    (ch,) = collect(g, ALL, {}).chapters
+    assert [mp.map_id for mp in ch.maps] == [made[-1], other]  # oldest first, one per phrase
+    assert ch.maps[0].places[0]["name"] == "Tower 4"
+
+
 def test_collect_missing_media_counted(g, tmp_path):
     a = page(g, "A")
     edge(g, None, a, T0)
@@ -359,3 +382,22 @@ def test_light_collect_counts_what_the_full_one_does(g, tmp_path):
     # diagrams take the chapter's number as their prefix, so two never share ids
     assert 'id="dg1-arm"' in full.chapters[0].diagram["svg"]
     assert 'id="dg2-arm"' in full.chapters[1].diagram["svg"]
+
+
+def test_a_stored_drawings_long_ids_survive_the_books_second_clean(g):
+    """Stored drawings carry `dg<hex>-<id>`; the book re-prefixes them `dg{i}-<id>`, so an id of
+    up to 31 characters keeps its marker and its use (the Diagram window and the book agree)."""
+    from primer.diagrams.svg import clean_svg
+    long_id = "a_very_long_marker_name_of_31ch"
+    raw = (f'<svg><defs><marker id="{long_id}"/></defs>'
+           f'<line x1="0" y1="0" x2="1" y2="1" marker-end="url(#{long_id})"/>'
+           f'<use href="#{long_id[:29]}gg"/><g id="{long_id[:29]}gg"><rect width="1" height="1"/></g>'
+           '<text>Counterweight</text><text>Pivot</text><text>Sling</text></svg>')
+    a = page(g, "Trebuchet")
+    d = g.add_diagram(a.id, 1, "")
+    stored = clean_svg(raw, prefix=f"dg{d[:6]}-")[0]  # as primer.diagrams.service stores it
+    g.update_diagram(d, status="done", svg=stored, caption="arm")
+    (ch,) = collect(g, ALL, {}).chapters
+    svg = ch.diagram["svg"]
+    assert f'id="dg1-{long_id}"' in svg and f'marker-end="url(#dg1-{long_id})"' in svg
+    assert f'href="#dg1-{long_id[:29]}gg"' in svg and f'id="dg1-{long_id[:29]}gg"' in svg

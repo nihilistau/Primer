@@ -528,13 +528,40 @@ See [USING.md](USING.md#live-pages).
 - **Request checking:**
   - Every request a live page makes is paused through the DevTools `Fetch` domain. It is refused
     if its host is, or resolves to, a non-public address (loopback, private, link-local, IPv4
-    inside IPv6), a local name (`localhost`, `*.localhost`, `*.local`) or a single-label name.
-    Lookups time out after 3 s and then refuse.
+    inside IPv6), a local name (`localhost`, `*.localhost`, `*.local`) or a single-label name,
+    or if its port is not one the proxy allows (80, 443, 8080–8443; one shared list). Lookups
+    time out after 3 s and then refuse.
   - **Only some schemes go through:** http and https are checked as above; data:, blob: and
     about:blank are allowed; everything else, including file:, is refused.
-  - **Also blocked:** WebSocket, WebTransport and WebRTC are blocked in every page, frame and
-    worker; downloads and every permission prompt are denied; link prediction and preconnect are
-    off; Document Picture-in-Picture is off. `window.open` navigates the same tab.
+  - **Also blocked:** WebTransport and WebRTC are blocked in every page, frame and worker;
+    service-worker registration is refused (in the page, and any script request carrying a
+    `Service-Worker` header is failed), and service workers left in Primer's profile are cleared
+    before each start (sign-ins stay); downloads and every permission prompt are denied; link
+    prediction and preconnect are off; Document Picture-in-Picture is off. `window.open`
+    navigates the same tab. WebSocket and WebSocketStream are allowed, through the proxy below.
+- **The guarding proxy** (`primer/live/proxy.py`) is the layer that enforces the address rule.
+  - It listens on `127.0.0.1` at a port the system picks, and the browser is started with
+    `--proxy-server=http://127.0.0.1:<port>`, `--proxy-bypass-list=<-loopback>` (loopback names
+    go through it too) and `--disable-quic` (nothing goes over UDP around it).
+  - It takes `CONNECT host:port` (https, wss) and absolute-form http (http, ws) only. It resolves
+    the host **once** (3 s limit), refuses unless every address is public by the same rules as
+    above, and connects to **that checked address**. Chrome never resolves names for proxied
+    traffic, so DNS rebinding can't reach it.
+  - Ports 80, 443 and 8080–8443 only. Limits: 256 connections (then 503), a 10 s connect
+    timeout, a 16 KB cap for the request head (then 400), a 10 s deadline for it (then the
+    connection is closed without an answer), and 120 s idle.
+    Refusals are a plain 403; an upstream that can't be reached is 502. Plain-http requests are
+    one per connection.
+  - **It proves it is in the path.** Right after the browser starts, before page checking is
+    switched on, a tab with scripts off and every response failed asks for a random `.invalid`
+    name that only the proxy will see. If the proxy doesn't see it within 5 s (a Chrome or Edge
+    proxy policy can override the flags), the browser and proxy are stopped and live pages
+    answer 503 saying a browser proxy policy may be overriding Primer's. Chrome applies a proxy
+    policy change while it runs, so the check runs again, with a fresh name, before each new live
+    window opens and at most once a minute while live windows are open; a miss stops the browser
+    and proxy the same way (open windows end) and the new window gets the same 503.
+  - It starts before the browser and stops after it, on every path; a restart gets a fresh
+    proxy.
 - **Presses.** Before an allowed press, one step in Primer's own script world scrolls the control
   into view, checks that it and every element around it are shown (not hidden, not nearly
   transparent, not zero-sized), and checks that the control is what sits at the point to be
@@ -545,12 +572,13 @@ See [USING.md](USING.md#live-pages).
   hover move first, so the page gets no signal that a click is coming. A page that moves
   something over the control by chance in that one round trip is not caught. Labels and the model's typed text lose invisible and direction-changing characters
   before they're shown in the question, and the text typed is the text shown.
-- **Known gap.** A host whose DNS answers differently to Primer's check and to Chrome (DNS
-  rebinding) is narrowed, not closed. The local-network-access permission is denied as a
-  backstop.
+- **DNS rebinding is closed.** The Fetch check stays as a first layer with a clear page error,
+  and the proxy enforces: it connects only to the address it checked. The
+  local-network-access permission is still denied as a backstop.
 - **Routes** (localhost-guarded; POSTs are same-origin JSON):
   - `POST /v1/live/open {window, url, width, height}` answers 403 (off), 409 (4 open), 400 (an
-    address that can't be opened live) or 503 (no browser).
+    address that can't be opened live, an off-list port included) or 503 (no browser, or a
+    browser whose proxy check failed).
   - `GET /v1/live/<window>/frames` is SSE (`frame`, `nav`, `note`, `gone`) and needs `X-Primer:
     1`.
   - `POST /v1/live/<window>/input`: at most 4 KB, else 413.
@@ -622,17 +650,20 @@ with the reason when the tier has none). The fast model lists the page's dated e
 20-second budget for re-reading them); Primer normalises each date itself (day, month, year,
 decade, century or millennium; years −10000 to 2100; at most 40 events, labels 120 characters)
 and orders them. A small fast model often thinks aloud before its answer: Primer skips citation
-marks like `[1]` in the chatter and reads the list (or run of one-event lists) with the most
-events, the last of equally full ones, so a quoted format line or example, a shorter draft
-before the answer, or one event quoted again after it, doesn't replace it (a longer draft
-does, keeping any event the model then took back). Placeholder labels such as `...`
+marks like `[1]` in the chatter and takes the **last** list the model gave, unless its labels
+are a strict subset of an earlier list's; then the nearest such earlier, fuller list wins. So
+one event quoted again after the answer doesn't replace it, while a real correction does. A
+lone "I" counts as a regnal number only after a name and not as the pronoun ("Henry I",
+"Charles I of England"; not "Unclear I think" or "I'm"). Placeholder labels such as `...`
 and the prompt's own example events are dropped, and the model's year for a date is used only
 when the date text names one. An answer it can't read is asked once more of the writing model,
 inside a GPU page turn. Only an answer that is just `[]` means nothing is dated.
 
 **Diagrams** use the writing model at the GPU gate (max 4000 tokens, one retry if the drawing
 can't be used). The SVG is rebuilt from an allowlist: plain shapes, paths, text, groups and
-arrow markers; no scripts, styles, images, links, `use`, `foreignObject` or outside `url()`;
+arrow markers. `use` and marker references are kept only when they point at an element kept in
+the same drawing (`href="#id"`, `url(#id)`), never at another `use`; no scripts, styles, images,
+links, `foreignObject`, outside or data: references;
 numbers −2000 to 3000; at most 80 elements and 60 KB; a 1000 × 700 view box; ids prefixed per
 diagram. It needs at least 3 labels (60 characters each) and a caption of up to 200. The
 Diagram window checks the drawing again in the browser with the same element and attribute

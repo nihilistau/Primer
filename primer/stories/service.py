@@ -92,11 +92,14 @@ class StoryService:
         return self._enqueue(node_id, version.n, kind)
 
     def create_chapter(self, node_id: str, n: int, title: str, scenes: list[dict],
-                       picture_prefix: str | Callable[[str], str] | list[str] = "") -> str:
+                       picture_prefix: str | Callable[[str], str] | list[str] = "",
+                       tale: dict | None = None) -> str | tuple[str, int]:
         """A Tale's chapter told from the given scenes ({title, text}) about the page `node_id`
         (version `n`): stored at once, then highlighted, illustrated and narrated like a story.
         `picture_prefix` starts each scene's picture prompt: one string for all, a callable of
-        the scene's title and text, or one string per scene."""
+        the scene's title and text, or one string per scene. `tale` ({tale_id, pages, at}) has the
+        story and the Tale's chapter row written together, so a crash leaves both or neither; the
+        result is then (story id, chapter number) instead of the story id."""
         if not isinstance(node_id, str) or self.graph.get_node(node_id) is None:
             raise ValueError("unknown page")
         scenes = [{"title": str(s.get("title") or title), "text": str(s.get("text") or "")}
@@ -110,7 +113,8 @@ class StoryService:
             prefixes += [""] * (len(scenes) - len(prefixes))
         else:
             prefixes = [str(picture_prefix or "")] * len(scenes)
-        return self._enqueue(node_id, n, CHAPTER, scenes=scenes, title=title, prefixes=prefixes)
+        return self._enqueue(node_id, n, CHAPTER, scenes=scenes, title=title, prefixes=prefixes,
+                             tale=tale)
 
     def again(self, story_id: str) -> str:
         """Tell a story again. A chapter is told again from its stored scenes, its pictures
@@ -151,10 +155,21 @@ class StoryService:
     # internals
     def _enqueue(self, node_id: str, n: int, kind: str, scenes: list[dict] | None = None,
                  title: str = "", prefixes: list[str] | None = None,
-                 replaces: str | None = None) -> str:
+                 replaces: str | None = None, tale: dict | None = None) -> str | tuple[str, int]:
         with self._lock:
             if self._closed:
                 raise ValueError(SHUT_DOWN)
+            if tale is not None and scenes is None:
+                raise ValueError("a chapter needs scenes")
+            if tale is not None:
+                sid, number = self.graph.add_chapter_story(
+                    node_id, n, self.voice_name, title,
+                    [{**s, "spoken": speakable(s["text"])} for s in scenes],
+                    tale["tale_id"], tale["pages"], at=tale.get("at"))
+                self._prefixes[sid] = list(prefixes or [])
+                self._pending.add(sid)
+                self._queue.put(sid)
+                return sid, number
             sid = self.graph.add_story(node_id, n, kind, self.voice_name)
             if scenes is not None:  # a chapter: its scenes are kept from the start (Again reads them)
                 self.graph.set_scenes(sid, [{**s, "spoken": speakable(s["text"])} for s in scenes])
